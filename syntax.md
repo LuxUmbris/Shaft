@@ -31,6 +31,7 @@ T* // Raw pointer
 &T       // Read-only reference (multiple allowed)
 &mut T   // Writer reference (strict single writer xor multiple readers rule)
 mut T    // Mutable variable declaration
+?T       // May have a 1-byte validity tracker
 
 // Arrays
 T[]      // Dynamically-sized array
@@ -55,7 +56,7 @@ var1 = ref var2;
 ```
 
 ### Validity Check
-To handle branched or conditional invalidation, validity can be queried explicitly. If static compiler analysis cannot guarantee validity at compile time, a **1-byte flag** is attached to the variable at runtime.
+To handle branched or conditional invalidation, validity can be queried explicitly. If static compiler analysis cannot guarantee validity at compile time, it has to be a ?T and a 1-byte validity flag is attached to the variable at runtime. If it cannot guaranteed be valid and is not a ?T, that is a compile-time error.
 
 ```Shaft
 valid IDENT

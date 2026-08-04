@@ -67,7 +67,14 @@ else
     // Executed if IDENT has been invalidated or moved
 }
 ```
-
+### Raw strings
+```
+raw -> My_Custom_Delimitter
+Here could be some code, or
+everything else. Everything gets
+baked into the string until I write:
+My_Custom_Delimitter
+```
 ---
 
 ## 2. Data Structures & Readability
@@ -185,7 +192,7 @@ def name(params)<T> -> T foo, ?-> i32 bar
 | **Control Flow** | `if`, `else`, `match`, `case`, `while`, `for`, `foreach` |
 | **Declarations** | `def`, `dec`, `cdef`, `cdec`, `struct`, `namespace`, `using`, `import`, `export` |
 | **Functions** | `tunnel`, `inline` |
-| **Memory & Types** | `mut`, `move`, `ref`, `valid` |
+| **Memory & Types** | `mut`, `move`, `ref`, `valid`, `raw` |
 | **Primitive Types** | `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64` |
 
 ---
@@ -212,4 +219,12 @@ using target_alias -> replacement_type_or_expr;
 
 // Example:
 using int64 -> i64;
+```
+or for strings (but still does not cut tokens in half, must end with a '!'):
+```Shaft
+using "my_macro!" -> raw MACRO_END
+def add(i32 x, i32 y) -> i32 result
+{
+    tunnel x + y -> i32 result;
+}
 ```

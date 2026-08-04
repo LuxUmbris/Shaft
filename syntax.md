@@ -162,7 +162,7 @@ foreach (type name : container)
 ## 4. Functions & Tunnels
 
 * Functions use **tunnels** (`tunnel expr -> slot;`) to return values.
-* Tunnels **do not end function execution** automatically; multiple tunnels can be executed before exiting.
+* Tunnels **do not end function execution** automatically; multiple tunnels can be executed before exiting. Also, they do not return anything, they just transfer the ownership to the callee or write into the callee‘s memory if no variable was instantiated.
 * Prefix modifiers include `inline`, `extern`, `export`, `cdef` (defines C-ABI function), and `cdec` (declares C-ABI function).
 * Use `import "path"` to load external modules.
 

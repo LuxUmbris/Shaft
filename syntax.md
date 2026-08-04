@@ -51,9 +51,11 @@ var1 = expr;
 // Ownership transfer: var1 gains ownership, var2 becomes invalid
 var1 = move var2;
 
-// Immutable reference binding: var1 gets reference, var2 becomes read-only
+// var1 gets ownerhsip, var2 becomes read-only reference
 var1 = ref var2;
 ```
+> Moving on a borrowed variable is a compile-time error.
+> Borrowing a ?T is a compile-time error, except if the borrower by itself is a ?&T.
 
 ### Validity Check
 To handle branched or conditional invalidation, validity can be queried explicitly. If static compiler analysis cannot guarantee validity at compile time, it has to be a ?T and a 1-byte validity flag is attached to the variable at runtime. If it cannot guaranteed be valid and is not a ?T, that is a compile-time error.
@@ -162,7 +164,7 @@ foreach (type name : container)
 ## 4. Functions & Tunnels
 
 * Functions use **tunnels** (`tunnel expr -> slot;`) to return values.
-* Tunnels **do not end function execution** automatically; multiple tunnels can be executed before exiting. Also, they do not return anything, they just transfer the ownership to the callee or write into the callee‘s memory if no variable was instantiated.
+* Tunnels **do not end function execution** automatically; multiple tunnels can be executed before exiting. Also, they do not return anything, they just transfer the ownership to the callee or write into the callee‘s memory if no variable was instantiated. A tunnel slot can only be used once per function. Optional tunnels can only be reserved using an optional type.
 * Prefix modifiers include `inline`, `extern`, `export`, `cdef` (defines C-ABI function), and `cdec` (declares C-ABI function).
 * Use `import "path"` to load external modules.
 
@@ -182,6 +184,17 @@ def name(params)<T> -> T foo, ?-> i32 bar
         tunnel 5 -> i32 bar; // Conditionally populate optional return slot
     }
 }
+
+// tunnel reservation
+reserve type var;
+// var is unvalid here
+func(); // <- tunnels type var
+
+// inline
+reserve type var = func();
+
+// reserve the tunnel but name the tunneld variable differently
+reserve type var <- tunnel_name; // works inline too
 ```
 
 ---
@@ -192,7 +205,7 @@ def name(params)<T> -> T foo, ?-> i32 bar
 | :--- | :--- |
 | **Control Flow** | `if`, `else`, `match`, `case`, `default`, `while`, `for`, `foreach` |
 | **Declarations** | `def`, `dec`, `cdef`, `cdec`, `struct`, `namespace`, `using`, `import`, `export` |
-| **Functions** | `tunnel`, `inline` |
+| **Functions** | `tunnel`, `inline`, `reserve` |
 | **Memory & Types** | `mut`, `move`, `ref`, `valid`, `raw` |
 | **Primitive Types** | `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64` |
 
@@ -203,10 +216,10 @@ def name(params)<T> -> T foo, ?-> i32 bar
 ```
 Assignment / Arithmetic :  =   +=   -=   *=   /=   %=
 Bitwise / Shift         :  &   |    ^    <<   >>   <<=  >>=
-Comparison              :  <   >    <=   >=
-Access / Scope          :  ::  .    ->
+Comparison              :  <   >    <=   >=   ||   && 
+Access / Scope          :  ::  .    ->   <-
 Grouping / Delimiters   :  ( ) [ ]  { }  :    ;    ,
-Other                   :  ... ?    "    '    +    -    * /    %
+Other                   :  ... ?    "    '    +    -    * /    %    !
 ```
 
 ---
@@ -228,4 +241,7 @@ def add(i32 x, i32 y) -> i32 result
 {
     tunnel x + y -> i32 result;
 }
+
+// parameters:
+using (params) // ...
 ```

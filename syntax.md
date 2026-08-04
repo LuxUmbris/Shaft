@@ -99,7 +99,7 @@ enum Fruit : u8
 Fruit my_fruit = Fruit::BANANA;
 
 // Structures
-struct Vector2
+export struct Vector2 // this struct is visible to other modules
 {
     f32 x;
     f32 y;
@@ -115,7 +115,7 @@ struct<T> some_struct
 mut Vector2 point = {0, 0};
 point.x = 5;
 ```
-
+To make a struct or enum visible to other modules, you can use the `export` prefix.
 ---
 
 ## 3. Control Flow
@@ -190,7 +190,7 @@ def name(params)<T> -> T foo, ?-> i32 bar
 
 | Category | Keywords |
 | :--- | :--- |
-| **Control Flow** | `if`, `else`, `match`, `case`, `while`, `for`, `foreach` |
+| **Control Flow** | `if`, `else`, `match`, `case`, `default`, `while`, `for`, `foreach` |
 | **Declarations** | `def`, `dec`, `cdef`, `cdec`, `struct`, `namespace`, `using`, `import`, `export` |
 | **Functions** | `tunnel`, `inline` |
 | **Memory & Types** | `mut`, `move`, `ref`, `valid`, `raw` |

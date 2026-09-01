@@ -1,0 +1,9 @@
+cdef duplicate_c_definition() -> i32
+{
+    return 42;
+}
+
+cdef duplicate_c_definition() -> i32
+{
+    return 1;
+}

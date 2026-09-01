@@ -1,0 +1,47 @@
+// Collections are implemented in Shaft and use namespace-qualified APIs.
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    Collections::HashMap<u64, u64> map;
+    Collections::hash_map_u64_init(&map, 2);
+
+    if (!Collections::hash_map_u64_insert(&map, 7, 11))
+    {
+        return 1;
+    }
+    if (!Collections::hash_map_u64_insert(&map, 7, 42))
+    {
+        return 2;
+    }
+    if (Collections::hash_map_u64_len(&map) != 1)
+    {
+        return 3;
+    }
+    if (!Collections::hash_map_u64_contains(&map, 7))
+    {
+        return 4;
+    }
+    if (Collections::hash_map_u64_get(&map, 7) != 42)
+    {
+        return 5;
+    }
+
+    Collections::HashSet<u64> set;
+    Collections::hash_set_u64_init(&set, 2);
+    if (!Collections::hash_set_u64_insert(&set, 42))
+    {
+        return 6;
+    }
+    if (Collections::hash_set_u64_insert(&set, 42))
+    {
+        return 7;
+    }
+    if (!Collections::hash_set_u64_contains(&set, 42))
+    {
+        return 8;
+    }
+    if (Collections::hash_set_u64_len(&set) == 1)
+    {
+        return 42;
+    }
+    return 9;
+}

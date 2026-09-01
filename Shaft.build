@@ -1,0 +1,11 @@
+# Build the descriptor-driven example with: build/shaftc --build
+[package]
+name = "shaft-interactive-quiz"
+version = "0.1.0"
+
+[build]
+entry = "examples/interactive-quiz.shaft"
+output = "build/interactive-quiz"
+emit = "binary"
+optimization = "O2"
+no_std = false

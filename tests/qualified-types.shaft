@@ -1,0 +1,26 @@
+// Qualified type names must keep their namespace; Left::Token and Right::Token
+// have incompatible layouts and must never collapse to one bare Token type.
+namespace Left
+{
+    class Token
+    {
+        mut u64 left;
+    }
+}
+
+namespace Right
+{
+    class Token
+    {
+        mut u64 right;
+    }
+}
+
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    mut Left::Token left;
+    mut Right::Token right;
+    left.left = 19;
+    right.right = 23;
+    return left.left + right.right;
+}

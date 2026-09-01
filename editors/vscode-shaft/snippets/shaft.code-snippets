@@ -1,0 +1,50 @@
+{
+  "Shaft entry point": {
+    "prefix": "shaft-entry",
+    "description": "Freestanding Shaft program entry point",
+    "body": [
+      "cdef __shaft_entry(i32 argc, *i8 argv) -> i32",
+      "{",
+      "    ${1:return 0;}",
+      "}"
+    ]
+  },
+  "Shaft function with tunnel": {
+    "prefix": "shaft-def",
+    "description": "Shaft function with a required tunnel result",
+    "body": [
+      "def ${1:name}(${2}) -> ${3:u64} result",
+      "{",
+      "    tunnel ${4:value} -> ${3:u64} result;",
+      "}"
+    ]
+  },
+  "Shaft namespace": {
+    "prefix": "shaft-namespace",
+    "description": "Shaft namespace declaration",
+    "body": ["namespace ${1:Name}", "{", "    ${0}", "}"]
+  },
+  "Shaft class": {
+    "prefix": "shaft-class",
+    "description": "Shaft class declaration",
+    "body": ["class${1:<T>} ${2:Name}", "{", "    ${0}", "}"]
+  },
+  "Shaft HashMap": {
+    "prefix": "shaft-hashmap",
+    "description": "Initialize a Collections::HashMap<u64, u64>",
+    "body": [
+      "Collections::HashMap<u64, u64> ${1:map};",
+      "Collections::hash_map_u64_init(&${1:map}, ${2:8});",
+      "${0}"
+    ]
+  },
+  "Shaft HashSet": {
+    "prefix": "shaft-hashset",
+    "description": "Initialize a Collections::HashSet<u64>",
+    "body": [
+      "Collections::HashSet<u64> ${1:set};",
+      "Collections::hash_set_u64_init(&${1:set}, ${2:8});",
+      "${0}"
+    ]
+  }
+}

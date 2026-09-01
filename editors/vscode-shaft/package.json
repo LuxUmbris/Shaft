@@ -1,0 +1,67 @@
+{
+  "name": "shaft",
+  "displayName": "Shaft",
+  "description": "Language intelligence, compiler diagnostics, formatting, and editing support for Shaft.",
+  "version": "0.1.0",
+  "publisher": "shaft-lang",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Formatters", "Linters"],
+  "keywords": ["shaft", "systems", "llvm", "language-server"],
+  "main": "./extension.cjs",
+  "activationEvents": ["onLanguage:shaft", "onCommand:shaft.restartLanguageServer", "onCommand:shaft.checkFile"],
+  "contributes": {
+    "languages": [{
+      "id": "shaft",
+      "aliases": ["Shaft", "shaft"],
+      "extensions": [".shaft"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "shaft",
+      "scopeName": "source.shaft",
+      "path": "./syntaxes/shaft.tmLanguage.json"
+    }],
+    "snippets": [{ "language": "shaft", "path": "./snippets/shaft.code-snippets" }],
+    "configuration": {
+      "title": "Shaft",
+      "properties": {
+        "shaft.languageServer.compilerPath": {
+          "type": "string", "default": "", "scope": "resource",
+          "description": "Optional compiler executable. When empty, Shaft uses the compiler registered by install.py, then shaftc on PATH."
+        },
+        "shaft.languageServer.diagnostics": {
+          "type": "string", "enum": ["onSave", "onChange", "off"], "default": "onChange", "scope": "resource",
+          "description": "When Shaft compiler diagnostics run. Structural diagnostics always update while typing."
+        },
+        "shaft.languageServer.stdlibPath": {
+          "type": "string", "default": "", "scope": "resource",
+          "description": "Optional path to std.shaft passed to shaftc with --std."
+        },
+        "shaft.languageServer.resourcePath": {
+          "type": "string", "default": "", "scope": "resource",
+          "description": "Optional Shaft resource directory passed to shaftc with --resources."
+        },
+        "shaft.languageServer.maxProblems": {
+          "type": "number", "default": 100, "minimum": 1, "maximum": 1000, "scope": "resource",
+          "description": "Maximum Shaft diagnostics reported for one document."
+        },
+        "shaft.format.insertFinalNewline": {
+          "type": "boolean", "default": true, "scope": "resource",
+          "description": "Append a trailing newline when formatting Shaft documents."
+        }
+      }
+    },
+    "commands": [
+      { "command": "shaft.restartLanguageServer", "title": "Shaft: Restart Language Server" },
+      { "command": "shaft.checkFile", "title": "Shaft: Check Active File" },
+      { "command": "shaft.openSyntaxSpecification", "title": "Shaft: Open Syntax Specification" }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "check": "node --check extension.cjs && node --check server/shaft-lsp.cjs && node --check server/lib/shaft-language.cjs && node --test test/*.test.cjs",
+    "package": "node scripts/package-vsix.cjs"
+  }
+}

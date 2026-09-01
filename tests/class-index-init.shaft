@@ -1,0 +1,6 @@
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    mut Vector<i64> values = {40, 0};
+    values[1] = 2;
+    return values[0] + values[1];
+}

@@ -1,0 +1,12 @@
+// A using macro must become active only after its declaration.
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    return later_answer();
+}
+
+using later_answer -> answer;
+
+cdef answer() -> i32
+{
+    return 42;
+}

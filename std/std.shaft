@@ -1,0 +1,1971 @@
+// Shaft std
+struct cstr
+{
+    *i8 data;
+}
+
+class str
+{
+    mut *u8 data;
+    mut u64 length;
+    def is_empty(&self) -> bool result
+    {
+        tunnel self.length == 0 -> bool result;
+    }
+
+    def find(&self, str needle) -> bool contains, ?-> u64 position
+    {
+        mut bool found = false;
+        mut u64 foundPosition = 0;
+        if (needle.length == 0)
+        {
+            found = true;
+        }
+        else
+        {
+            if (needle.length <= self.length)
+            {
+                mut u64 first = 0;
+                while (first + needle.length <= self.length)
+                {
+                    mut u64 offset = 0;
+                    mut bool matches = true;
+                    while (offset < needle.length)
+                    {
+                        if (self.data[first + offset] != needle.data[offset])
+                        {
+                            matches = false;
+                            break;
+                        }
+                        offset = offset + 1;
+                    }
+                    if (matches)
+                    {
+                        found = true;
+                        foundPosition = first;
+                        break;
+                    }
+                    first = first + 1;
+                }
+            }
+        }
+        tunnel found -> bool contains;
+        if (found)
+        {
+            tunnel foundPosition -> u64 position;
+        }
+    }
+}
+
+class Math
+{
+    def round(f64 value) -> f64 result
+    {
+        mut f64 rounded = 0.0;
+        mut f64 remainder = value;
+        if (value >= 0.0)
+        {
+            while (remainder >= 1.0)
+            {
+                rounded = rounded + 1.0;
+                remainder = remainder - 1.0;
+            }
+            if (remainder >= 0.5)
+            {
+                rounded = rounded + 1.0;
+            }
+        }
+        else
+        {
+            while (remainder <= -1.0)
+            {
+                rounded = rounded - 1.0;
+                remainder = remainder + 1.0;
+            }
+            if (remainder <= -0.5)
+            {
+                rounded = rounded - 1.0;
+            }
+        }
+        tunnel rounded -> f64 result;
+    }
+
+    def square(f64 value) -> f64 result
+    {
+        tunnel value * value -> f64 result;
+    }
+
+    def sqrt(f64 value) -> f64 result
+    {
+        mut f64 estimate = 0.0;
+        if (value > 0.0)
+        {
+            estimate = value;
+            if (value < 1.0)
+            {
+                estimate = 1.0;
+            }
+            mut u64 iteration = 0;
+            while (iteration < 16)
+            {
+                estimate = (estimate + value / estimate) / 2.0;
+                iteration = iteration + 1;
+            }
+        }
+        tunnel estimate -> f64 result;
+    }
+
+    def root(f64 value, u64 degree) -> f64 result
+    {
+        mut f64 estimate = 0.0;
+        if (value > 0.0)
+        {
+            if (degree == 1)
+            {
+                estimate = value;
+            }
+            else
+            {
+                if (degree > 1)
+                {
+                    estimate = value;
+                    if (value < 1.0)
+                    {
+                        estimate = 1.0;
+                    }
+                    mut f64 degreeValue = 0.0;
+                    mut u64 count = 0;
+                    while (count < degree)
+                    {
+                        degreeValue = degreeValue + 1.0;
+                        count = count + 1;
+                    }
+                    mut u64 iteration = 0;
+                    while (iteration < 24)
+                    {
+                        mut f64 priorPower = 1.0;
+                        count = 0;
+                        while (count < degree - 1)
+                        {
+                            priorPower = priorPower * estimate;
+                            count = count + 1;
+                        }
+                        estimate = ((degreeValue - 1.0) * estimate + value / priorPower) / degreeValue;
+                        iteration = iteration + 1;
+                    }
+                }
+            }
+        }
+        tunnel estimate -> f64 result;
+    }
+
+    def cos(f64 radians) -> f64 result
+    {
+        mut f64 angle = radians;
+        while (angle > 3.141592653589793)
+        {
+            angle = angle - 6.283185307179586;
+        }
+        while (angle < -3.141592653589793)
+        {
+            angle = angle + 6.283185307179586;
+        }
+        mut f64 term = 1.0;
+        mut f64 sum = 1.0;
+        mut f64 odd = 1.0;
+        mut f64 even = 2.0;
+        mut u64 iteration = 0;
+        while (iteration < 10)
+        {
+            term = term * (0.0 - angle * angle) / (odd * even);
+            sum = sum + term;
+            odd = odd + 2.0;
+            even = even + 2.0;
+            iteration = iteration + 1;
+        }
+        tunnel sum -> f64 result;
+    }
+
+    def fcos(f64 radians) -> f64 result
+    {
+        tunnel Math::cos(radians) -> f64 result;
+    }
+
+    def cin(f64 radians) -> f64 result
+    {
+        tunnel Math::cos(radians - 1.5707963267948966) -> f64 result;
+    }
+
+    def fcin(f64 radians) -> f64 result
+    {
+        tunnel Math::cin(radians) -> f64 result;
+    }
+}
+
+class String
+{
+    mut *u8 data;
+    mut u64 length;
+    mut u64 capacity;
+
+    def len(&self) -> u64 result
+    {
+        tunnel self.length -> u64 result;
+    }
+
+    def is_empty(&self) -> bool result
+    {
+        tunnel self.length == 0 -> bool result;
+    }
+
+    def find(&self, str needle) -> bool contains, ?-> u64 position
+    {
+        mut bool found = false;
+        mut u64 foundPosition = 0;
+        if (needle.length == 0)
+        {
+            found = true;
+        }
+        else
+        {
+            if (needle.length <= self.length)
+            {
+                mut u64 first = 0;
+                while (first + needle.length <= self.length)
+                {
+                    mut u64 offset = 0;
+                    mut bool matches = true;
+                    while (offset < needle.length)
+                    {
+                        if (self.data[first + offset] != needle.data[offset])
+                        {
+                            matches = false;
+                            break;
+                        }
+                        offset = offset + 1;
+                    }
+                    if (matches)
+                    {
+                        found = true;
+                        foundPosition = first;
+                        break;
+                    }
+                    first = first + 1;
+                }
+            }
+        }
+        tunnel found -> bool contains;
+        if (found)
+        {
+            tunnel foundPosition -> u64 position;
+        }
+    }
+
+    def compare(&self, str other) -> i32 result
+    {
+        mut i32 comparison = 0;
+        mut u64 offset = 0;
+        mut u64 sharedLength = self.length;
+        if (other.length < sharedLength)
+        {
+            sharedLength = other.length;
+        }
+        while (offset < sharedLength)
+        {
+            if (self.data[offset] < other.data[offset])
+            {
+                comparison = -1;
+                break;
+            }
+            if (self.data[offset] > other.data[offset])
+            {
+                comparison = 1;
+                break;
+            }
+            offset = offset + 1;
+        }
+        if (comparison == 0)
+        {
+            if (self.length < other.length)
+            {
+                comparison = -1;
+            }
+            if (self.length > other.length)
+            {
+                comparison = 1;
+            }
+        }
+        tunnel comparison -> i32 result;
+    }
+
+    def equals(&self, str other) -> bool result
+    {
+        mut bool equal = self.length == other.length;
+        mut u64 offset = 0;
+        while (equal && offset < self.length)
+        {
+            if (self.data[offset] != other.data[offset])
+            {
+                equal = false;
+                break;
+            }
+            offset = offset + 1;
+        }
+        tunnel equal -> bool result;
+    }
+
+    def hash(&self) -> u64 result
+    {
+        mut u64 value = 14695981039346656037;
+        mut u64 offset = 0;
+        while (offset < self.length)
+        {
+            value = value ^ self.data[offset];
+            value = value * 1099511628211;
+            offset = offset + 1;
+        }
+        tunnel value -> u64 result;
+    }
+
+    def reverse(&self) -> String result
+    {
+        reserve mut String reversed;
+        reversed.data = __shaft_alloc_or_exit(self.length + 1);
+        reversed.length = 0;
+        reversed.capacity = self.length;
+        mut u64 offset = 0;
+        while (offset < self.length)
+        {
+            reversed.data[offset] = self.data[self.length - offset - 1];
+            offset = offset + 1;
+        }
+        reversed.length = self.length;
+        reversed.data[reversed.length] = 0;
+        tunnel reversed -> String result;
+    }
+
+    def capacity(&self) -> u64 result
+    {
+        tunnel self.capacity -> u64 result;
+    }
+
+    def with_capacity(u64 requested) -> String result
+    {
+        reserve mut String value;
+        value.data = __shaft_alloc(requested + 1);
+        value.length = 0;
+        value.capacity = requested;
+        tunnel value -> String result;
+    }
+
+    def from_int(i64 value) -> String result
+    {
+        reserve mut String resultValue;
+        resultValue.data = __shaft_alloc_or_exit(32);
+        resultValue.capacity = 31;
+        resultValue.length = __sys_int_to_string(
+            value,
+            resultValue.data,
+            resultValue.capacity
+        );
+        resultValue.data[resultValue.length] = 0;
+        tunnel resultValue -> String result;
+    }
+
+    def from_float(f64 value) -> String result
+    {
+        reserve mut String resultValue;
+        resultValue.data = __shaft_alloc_or_exit(64);
+        resultValue.capacity = 63;
+        resultValue.length = __sys_float_to_string(
+            value,
+            resultValue.data,
+            resultValue.capacity
+        );
+        resultValue.data[resultValue.length] = 0;
+        tunnel resultValue -> String result;
+    }
+
+    def from_u64(u64 value) -> String result
+    {
+        reserve mut String resultValue;
+        resultValue.data = __shaft_alloc_or_exit(32);
+        resultValue.capacity = 31;
+        resultValue.length = __sys_uint_to_string(value, resultValue.data, resultValue.capacity);
+        resultValue.data[resultValue.length] = 0;
+        tunnel resultValue -> String result;
+    }
+
+    def from_i8(i8 value) -> String result { tunnel String::from_int(value) -> String result; }
+    def from_u8(u8 value) -> String result { tunnel String::from_u64(value) -> String result; }
+    def from_i16(i16 value) -> String result { tunnel String::from_int(value) -> String result; }
+    def from_u16(u16 value) -> String result { tunnel String::from_u64(value) -> String result; }
+    def from_i32(i32 value) -> String result { tunnel String::from_int(value) -> String result; }
+    def from_u32(u32 value) -> String result { tunnel String::from_u64(value) -> String result; }
+    def from_i64(i64 value) -> String result { tunnel String::from_int(value) -> String result; }
+
+    def from_usize(usize value) -> String result { tunnel String::from_u64(value) -> String result; }
+    def from_f32(f32 value) -> String result { tunnel String::from_float(value) -> String result; }
+    def from_f64(f64 value) -> String result { tunnel String::from_float(value) -> String result; }
+
+    def from_bool(bool value) -> String result
+    {
+        reserve mut String resultValue;
+        if (value)
+        {
+            resultValue.data = __shaft_alloc_or_exit(5); resultValue.capacity = 4; resultValue.length = 4;
+            resultValue.data[0] = 116; resultValue.data[1] = 114; resultValue.data[2] = 117; resultValue.data[3] = 101;
+        }
+        else
+        {
+            resultValue.data = __shaft_alloc_or_exit(6); resultValue.capacity = 5; resultValue.length = 5;
+            resultValue.data[0] = 102; resultValue.data[1] = 97; resultValue.data[2] = 108; resultValue.data[3] = 115; resultValue.data[4] = 101;
+        }
+        resultValue.data[resultValue.length] = 0;
+        tunnel resultValue -> String result;
+    }
+
+    def from_char(char value) -> String result
+    {
+        reserve mut String resultValue;
+        resultValue.data = __shaft_alloc_or_exit(2); resultValue.capacity = 1; resultValue.length = 1;
+        resultValue.data[0] = value; resultValue.data[1] = 0;
+        tunnel resultValue -> String result;
+    }
+
+    def from_str(str value) -> String result
+    {
+        reserve mut String resultValue;
+        resultValue.data = __shaft_alloc_or_exit(value.length + 1);
+        resultValue.capacity = value.length;
+        memcpy(resultValue.data, value.data, value.length);
+        resultValue.length = value.length;
+        resultValue.data[resultValue.length] = 0;
+        tunnel resultValue -> String result;
+    }
+
+    def parse_u64(&self) -> bool parsed, ?-> u64 value
+    {
+        mut bool success = self.length > 0;
+        mut u64 offset = 0;
+        mut u64 resultValue = 0;
+        while (success && offset < self.length)
+        {
+            mut u8 byte = self.data[offset];
+            if (byte < 48 || byte > 57)
+            {
+                success = false;
+            }
+            else
+            {
+                mut u64 digit = byte - 48;
+                if (resultValue > 1844674407370955161 ||
+                    (resultValue == 1844674407370955161 && digit > 5))
+                {
+                    success = false;
+                }
+                else
+                {
+                    resultValue = resultValue * 10 + digit;
+                }
+            }
+            offset = offset + 1;
+        }
+        tunnel success -> bool parsed;
+        if (success)
+        {
+            tunnel resultValue -> u64 value;
+        }
+    }
+
+    def parse_i64(&self) -> bool parsed, ?-> i64 value
+    {
+        mut u64 offset = 0;
+        mut bool negative = false;
+        if (self.length > 0 && self.data[0] == 45)
+        {
+            negative = true;
+            offset = 1;
+        }
+        mut bool success = offset < self.length;
+        mut u64 magnitude = 0;
+        mut u64 limit = 9223372036854775807;
+        if (negative)
+        {
+            limit = 9223372036854775808;
+        }
+        while (success && offset < self.length)
+        {
+            mut u8 byte = self.data[offset];
+            if (byte < 48 || byte > 57)
+            {
+                success = false;
+            }
+            else
+            {
+                mut u64 digit = byte - 48;
+                if (magnitude > limit / 10 || (magnitude == limit / 10 && digit > limit % 10))
+                {
+                    success = false;
+                }
+                else
+                {
+                    magnitude = magnitude * 10 + digit;
+                }
+            }
+            offset = offset + 1;
+        }
+        tunnel success -> bool parsed;
+        if (success)
+        {
+            if (negative)
+            {
+                tunnel 0 - magnitude -> i64 value;
+            }
+            else
+            {
+                tunnel magnitude -> i64 value;
+            }
+        }
+    }
+
+    def parse_f64(&self) -> bool parsed, ?-> f64 value
+    {
+        mut u64 offset = 0;
+        mut bool negative = false;
+        if (self.length > 0 && self.data[0] == 45)
+        {
+            negative = true;
+            offset = 1;
+        }
+        mut bool success = offset < self.length;
+        mut bool decimal = false;
+        mut bool digits = false;
+        mut bool fractionDigits = false;
+        mut f64 resultValue = 0.0;
+        mut f64 divisor = 1.0;
+        while (success && offset < self.length)
+        {
+            mut u8 byte = self.data[offset];
+            if (byte == 46)
+            {
+                if (decimal || !digits)
+                {
+                    success = false;
+                }
+                else
+                {
+                    decimal = true;
+                }
+            }
+            else
+            {
+                if (byte < 48 || byte > 57)
+                {
+                    success = false;
+                }
+                else
+                {
+                    mut f64 digit = byte - 48;
+                    digits = true;
+                    if (decimal)
+                    {
+                        fractionDigits = true;
+                        divisor = divisor * 10.0;
+                        resultValue = resultValue + digit / divisor;
+                    }
+                    else
+                    {
+                        resultValue = resultValue * 10.0 + digit;
+                    }
+                }
+            }
+            offset = offset + 1;
+        }
+        if (decimal && !fractionDigits)
+        {
+            success = false;
+        }
+        tunnel success -> bool parsed;
+        if (success)
+        {
+            if (negative)
+            {
+                tunnel 0.0 - resultValue -> f64 value;
+            }
+            else
+            {
+                tunnel resultValue -> f64 value;
+            }
+        }
+    }
+
+}
+
+class<T> Vector
+{
+    mut *T data;
+    mut u64 length;
+    mut u64 capacity;
+    mut u64 element_size;
+
+    index data;
+    init data;
+
+    def len(&self) -> u64 result
+    {
+        tunnel self.length -> u64 result;
+    }
+
+    def capacity(&self) -> u64 result
+    {
+        tunnel self.capacity -> u64 result;
+    }
+
+    def is_empty(&self) -> bool result
+    {
+        tunnel self.length == 0 -> bool result;
+    }
+
+    def push(&mut self, T value)<T> -> bool result
+    {
+        tunnel vector_push::<T>(self, value) -> bool result;
+    }
+
+    def pop(&mut self)<T> -> bool popped, ?-> T value
+    {
+        reserve bool popped;
+        reserve ?T value;
+        vector_pop::<T>(self);
+        tunnel popped -> bool popped;
+        valid value
+        {
+            tunnel value -> T value;
+        }
+    }
+}
+
+def vector_init(*Vector<T> vector, u64 requested)<T> -> bool result
+{
+    vector.capacity = 8;
+    while (vector.capacity < requested)
+    {
+        vector.capacity = vector.capacity * 2;
+    }
+    vector.element_size = sizeof(T);
+    vector.data = __shaft_alloc_or_exit(vector.capacity * vector.element_size);
+    vector.length = 0;
+    tunnel true -> bool result;
+}
+
+def vector_push(*Vector<T> vector, T value)<T> -> bool result
+{
+    if (vector.length == vector.capacity)
+    {
+        mut u64 newCapacity = vector.capacity;
+        if (newCapacity == 0)
+        {
+            newCapacity = 8;
+        }
+        else
+        {
+            newCapacity = newCapacity * 2;
+        }
+        mut *T newData = __shaft_alloc_or_exit(newCapacity * vector.element_size);
+        mut u64 offset = 0;
+        while (offset < vector.length)
+        {
+            newData[offset] = vector.data[offset];
+            offset = offset + 1;
+        }
+        __shaft_free(vector.data);
+        vector.data = newData;
+        vector.capacity = newCapacity;
+    }
+    vector.data[vector.length] = value;
+    vector.length = vector.length + 1;
+    tunnel true -> bool result;
+}
+
+def vector_pop(*Vector<T> vector)<T> -> bool popped, ?-> T value
+{
+    mut bool hasValue = vector.length > 0;
+    tunnel hasValue -> bool popped;
+    if (hasValue)
+    {
+        vector.length = vector.length - 1;
+        tunnel vector.data[vector.length] -> T value;
+    }
+}
+
+def vector_reserve(*Vector<T> vector, u64 requested)<T> -> bool result
+{
+    mut bool reserved = true;
+    if (requested > vector.capacity)
+    {
+        mut u64 newCapacity = vector.capacity;
+        if (newCapacity == 0)
+        {
+            newCapacity = 8;
+        }
+        while (newCapacity < requested)
+        {
+            newCapacity = newCapacity * 2;
+        }
+        mut *T newData = __shaft_alloc_or_exit(newCapacity * vector.element_size);
+        mut u64 offset = 0;
+        while (offset < vector.length)
+        {
+            newData[offset] = vector.data[offset];
+            offset = offset + 1;
+        }
+        __shaft_free(vector.data);
+        vector.data = newData;
+        vector.capacity = newCapacity;
+    }
+    tunnel reserved -> bool result;
+}
+
+namespace Collections
+{
+    class<K, V> Pair
+    {
+        mut K key;
+        mut V value;
+    }
+
+    class<K, V> HashMap
+    {
+        mut *K keys;
+        mut *V values;
+        mut u8[] occupied;
+        mut u64 length;
+        mut u64 capacity;
+        mut u64 key_size;
+        mut u64 value_size;
+    }
+
+    class<T> HashSet
+    {
+        mut *T values;
+        mut u8[] occupied;
+        mut u64 length;
+        mut u64 capacity;
+        mut u64 value_size;
+    }
+
+    def hash_u64(mut u64 value) -> u64 result
+    {
+        value = value ^ (value >> 30);
+        value = value * 13787848793156543929;
+        value = value ^ (value >> 27);
+        value = value * 10723151780598845931;
+        tunnel value ^ (value >> 31) -> u64 result;
+    }
+
+    def hash_str(str value) -> u64 result
+    {
+        mut u64 hashValue = 14695981039346656037;
+        mut u64 offset = 0;
+        while (offset < value.length)
+        {
+            hashValue = hashValue ^ value.data[offset];
+            hashValue = hashValue * 1099511628211;
+            offset = offset + 1;
+        }
+        tunnel hashValue -> u64 result;
+    }
+
+    def hash(T value)<T> -> u64 result
+    {
+        tunnel Collections::hash_u64(value) -> u64 result;
+    }
+
+    def hash_map_u64_init(*Collections::HashMap<u64, u64> map, u64 requested) -> bool result
+    {
+        map.capacity = 8;
+        while (map.capacity < requested * 2)
+        {
+            map.capacity = map.capacity * 2;
+        }
+        map.key_size = 8;
+        map.value_size = 8;
+        map.keys = __shaft_alloc_or_exit(map.capacity * 8);
+        map.values = __shaft_alloc_or_exit(map.capacity * 8);
+        map.occupied = __shaft_alloc_or_exit(map.capacity);
+        map.length = 0;
+        mut u64 slot = 0;
+        while (slot < map.capacity)
+        {
+            map.occupied[slot] = 0;
+            slot = slot + 1;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_map_u64_reserve(*Collections::HashMap<u64, u64> map, u64 requested) -> bool result
+    {
+        if (requested * 2 > map.capacity)
+        {
+            mut u64 newCapacity = map.capacity;
+            if (newCapacity < 8) { newCapacity = 8; }
+            while (newCapacity < requested * 2) { newCapacity = newCapacity * 2; }
+            mut *u64 newKeys = __shaft_alloc_or_exit(newCapacity * 8);
+            mut *u64 newValues = __shaft_alloc_or_exit(newCapacity * 8);
+            mut *u8 newOccupied = __shaft_alloc_or_exit(newCapacity);
+            mut u64 slot = 0;
+            while (slot < newCapacity) { newOccupied[slot] = 0; slot = slot + 1; }
+            mut u64 oldSlot = 0;
+            while (oldSlot < map.capacity)
+            {
+                if (map.occupied[oldSlot] != 0)
+                {
+                    slot = Collections::hash_u64(map.keys[oldSlot]) & (newCapacity - 1);
+                    while (newOccupied[slot] != 0) { slot = (slot + 1) & (newCapacity - 1); }
+                    newOccupied[slot] = 1;
+                    newKeys[slot] = map.keys[oldSlot];
+                    newValues[slot] = map.values[oldSlot];
+                }
+                oldSlot = oldSlot + 1;
+            }
+            __shaft_free(map.keys); __shaft_free(map.values); __shaft_free(map.occupied);
+            map.keys = newKeys; map.values = newValues; map.occupied = newOccupied; map.capacity = newCapacity;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_map_u64_insert(*Collections::HashMap<u64, u64> map, u64 key, u64 value) -> bool result
+    {
+        if (map.capacity != 0 && map.length + 1 > map.capacity / 2)
+        {
+            reserve bool grown = Collections::hash_map_u64_reserve(map, map.length + 1);
+        }
+        mut bool inserted = false;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_u64(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    map.occupied[slot] = 1;
+                    map.keys[slot] = key;
+                    map.values[slot] = value;
+                    map.length = map.length + 1;
+                    inserted = true;
+                    break;
+                }
+                if (map.keys[slot] == key)
+                {
+                    map.values[slot] = value;
+                    inserted = true;
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel inserted -> bool result;
+    }
+
+    def hash_map_u64_contains(*Collections::HashMap<u64, u64> map, u64 key) -> bool result
+    {
+        mut bool found = false;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_u64(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    break;
+                }
+                if (map.keys[slot] == key)
+                {
+                    found = true;
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel found -> bool result;
+    }
+
+    def hash_map_u64_get(*Collections::HashMap<u64, u64> map, u64 key) -> u64 result
+    {
+        mut u64 value = 0;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_u64(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    break;
+                }
+                if (map.keys[slot] == key)
+                {
+                    value = map.values[slot];
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel value -> u64 result;
+    }
+
+    def hash_map_u64_len(*Collections::HashMap<u64, u64> map) -> u64 result
+    {
+        tunnel map.length -> u64 result;
+    }
+
+    def hash_map_init(*Collections::HashMap<K, V> map, u64 requested)<K, V> -> bool result
+    {
+        map.capacity = 8;
+        while (map.capacity < requested * 2)
+        {
+            map.capacity = map.capacity * 2;
+        }
+        map.key_size = sizeof(K);
+        map.value_size = sizeof(V);
+        map.keys = __shaft_alloc_or_exit(map.capacity * map.key_size);
+        map.values = __shaft_alloc_or_exit(map.capacity * map.value_size);
+        map.occupied = __shaft_alloc_or_exit(map.capacity);
+        map.length = 0;
+        mut u64 slot = 0;
+        while (slot < map.capacity)
+        {
+            map.occupied[slot] = 0;
+            slot = slot + 1;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_map_reserve(*Collections::HashMap<K, V> map, u64 requested)<K, V> -> bool result
+    {
+        if (requested * 2 > map.capacity)
+        {
+            mut u64 newCapacity = map.capacity;
+            if (newCapacity < 8)
+            {
+                newCapacity = 8;
+            }
+            while (newCapacity < requested * 2)
+            {
+                newCapacity = newCapacity * 2;
+            }
+            mut *K newKeys = __shaft_alloc_or_exit(newCapacity * map.key_size);
+            mut *V newValues = __shaft_alloc_or_exit(newCapacity * map.value_size);
+            mut *u8 newOccupied = __shaft_alloc_or_exit(newCapacity);
+            mut u64 newSlot = 0;
+            while (newSlot < newCapacity)
+            {
+                newOccupied[newSlot] = 0;
+                newSlot = newSlot + 1;
+            }
+            mut u64 oldSlot = 0;
+            while (oldSlot < map.capacity)
+            {
+                if (map.occupied[oldSlot] != 0)
+                {
+                    newSlot = Collections::hash::<K>(map.keys[oldSlot]) & (newCapacity - 1);
+                    while (newOccupied[newSlot] != 0)
+                    {
+                        newSlot = (newSlot + 1) & (newCapacity - 1);
+                    }
+                    newOccupied[newSlot] = 1;
+                    newKeys[newSlot] = map.keys[oldSlot];
+                    newValues[newSlot] = map.values[oldSlot];
+                }
+                oldSlot = oldSlot + 1;
+            }
+            __shaft_free(map.keys);
+            __shaft_free(map.values);
+            __shaft_free(map.occupied);
+            map.keys = newKeys;
+            map.values = newValues;
+            map.occupied = newOccupied;
+            map.capacity = newCapacity;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_map_insert(*Collections::HashMap<K, V> map, K key, V value)<K, V> -> bool result
+    {
+        if (map.capacity != 0 && map.length + 1 > map.capacity / 2)
+        {
+            reserve bool grown = Collections::hash_map_reserve::<K, V>(map, map.length + 1);
+        }
+        mut bool inserted = false;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash::<K>(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    map.occupied[slot] = 1;
+                    map.keys[slot] = key;
+                    map.values[slot] = value;
+                    map.length = map.length + 1;
+                    inserted = true;
+                    break;
+                }
+                if (map.keys[slot] == key)
+                {
+                    map.values[slot] = value;
+                    inserted = true;
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel inserted -> bool result;
+    }
+
+    def hash_map_contains(*Collections::HashMap<K, V> map, K key)<K, V> -> bool result
+    {
+        mut bool found = false;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash::<K>(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    break;
+                }
+                if (map.keys[slot] == key)
+                {
+                    found = true;
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel found -> bool result;
+    }
+
+    def hash_map_get(*Collections::HashMap<K, V> map, K key)<K, V> -> bool found, ?-> V value
+    {
+        mut bool hasValue = false;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash::<K>(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    break;
+                }
+                if (map.keys[slot] == key)
+                {
+                    hasValue = true;
+                    tunnel map.values[slot] -> V value;
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel hasValue -> bool found;
+    }
+
+    def hash_map_get_or(*Collections::HashMap<K, V> map, K key, V fallback)<K, V> -> V result
+    {
+        mut V value = fallback;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash::<K>(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    break;
+                }
+                if (map.keys[slot] == key)
+                {
+                    value = map.values[slot];
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel value -> V result;
+    }
+
+    def hash_map_len(*Collections::HashMap<K, V> map)<K, V> -> u64 result
+    {
+        tunnel map.length -> u64 result;
+    }
+
+    def str_equal(str left, str right) -> bool result
+    {
+        mut bool equal = left.length == right.length;
+        mut u64 offset = 0;
+        while (equal && offset < left.length)
+        {
+            if (left.data[offset] != right.data[offset])
+            {
+                equal = false;
+                break;
+            }
+            offset = offset + 1;
+        }
+        tunnel equal -> bool result;
+    }
+
+    def hash_map_str_reserve(*Collections::HashMap<str, V> map, u64 requested)<V> -> bool result
+    {
+        if (requested * 2 > map.capacity)
+        {
+            mut u64 newCapacity = map.capacity;
+            if (newCapacity < 8)
+            {
+                newCapacity = 8;
+            }
+            while (newCapacity < requested * 2)
+            {
+                newCapacity = newCapacity * 2;
+            }
+            mut *str newKeys = __shaft_alloc_or_exit(newCapacity * map.key_size);
+            mut *V newValues = __shaft_alloc_or_exit(newCapacity * map.value_size);
+            mut *u8 newOccupied = __shaft_alloc_or_exit(newCapacity);
+            mut u64 newSlot = 0;
+            while (newSlot < newCapacity)
+            {
+                newOccupied[newSlot] = 0;
+                newSlot = newSlot + 1;
+            }
+            mut u64 oldSlot = 0;
+            while (oldSlot < map.capacity)
+            {
+                if (map.occupied[oldSlot] != 0)
+                {
+                    newSlot = Collections::hash_str(map.keys[oldSlot]) & (newCapacity - 1);
+                    while (newOccupied[newSlot] != 0)
+                    {
+                        newSlot = (newSlot + 1) & (newCapacity - 1);
+                    }
+                    newOccupied[newSlot] = 1;
+                    newKeys[newSlot] = map.keys[oldSlot];
+                    newValues[newSlot] = map.values[oldSlot];
+                }
+                oldSlot = oldSlot + 1;
+            }
+            __shaft_free(map.keys);
+            __shaft_free(map.values);
+            __shaft_free(map.occupied);
+            map.keys = newKeys;
+            map.values = newValues;
+            map.occupied = newOccupied;
+            map.capacity = newCapacity;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_map_str_insert(*Collections::HashMap<str, V> map, str key, V value)<V> -> bool result
+    {
+        if (map.capacity != 0 && map.length + 1 > map.capacity / 2)
+        {
+            reserve bool grown = Collections::hash_map_str_reserve::<V>(map, map.length + 1);
+        }
+        mut bool inserted = false;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_str(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    map.occupied[slot] = 1;
+                    map.keys[slot] = key;
+                    map.values[slot] = value;
+                    map.length = map.length + 1;
+                    inserted = true;
+                    break;
+                }
+                reserve bool equal = Collections::str_equal(map.keys[slot], key);
+                if (equal)
+                {
+                    map.values[slot] = value;
+                    inserted = true;
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel inserted -> bool result;
+    }
+
+    def hash_map_str_contains(*Collections::HashMap<str, V> map, str key)<V> -> bool result
+    {
+        mut bool found = false;
+        if (map.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_str(key) & (map.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < map.capacity)
+            {
+                if (map.occupied[slot] == 0)
+                {
+                    break;
+                }
+                reserve bool equal = Collections::str_equal(map.keys[slot], key);
+                if (equal)
+                {
+                    found = true;
+                    break;
+                }
+                slot = (slot + 1) & (map.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel found -> bool result;
+    }
+
+    def hash_set_u64_init(*Collections::HashSet<u64> set, u64 requested) -> bool result
+    {
+        set.capacity = 8;
+        while (set.capacity < requested * 2)
+        {
+            set.capacity = set.capacity * 2;
+        }
+        set.value_size = 8;
+        set.values = __shaft_alloc_or_exit(set.capacity * 8);
+        set.occupied = __shaft_alloc_or_exit(set.capacity);
+        set.length = 0;
+        mut u64 slot = 0;
+        while (slot < set.capacity)
+        {
+            set.occupied[slot] = 0;
+            slot = slot + 1;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_set_u64_reserve(*Collections::HashSet<u64> set, u64 requested) -> bool result
+    {
+        if (requested * 2 > set.capacity)
+        {
+            mut u64 newCapacity = set.capacity;
+            if (newCapacity < 8) { newCapacity = 8; }
+            while (newCapacity < requested * 2) { newCapacity = newCapacity * 2; }
+            mut *u64 newValues = __shaft_alloc_or_exit(newCapacity * 8);
+            mut *u8 newOccupied = __shaft_alloc_or_exit(newCapacity);
+            mut u64 slot = 0;
+            while (slot < newCapacity) { newOccupied[slot] = 0; slot = slot + 1; }
+            mut u64 oldSlot = 0;
+            while (oldSlot < set.capacity)
+            {
+                if (set.occupied[oldSlot] != 0)
+                {
+                    slot = Collections::hash_u64(set.values[oldSlot]) & (newCapacity - 1);
+                    while (newOccupied[slot] != 0) { slot = (slot + 1) & (newCapacity - 1); }
+                    newOccupied[slot] = 1;
+                    newValues[slot] = set.values[oldSlot];
+                }
+                oldSlot = oldSlot + 1;
+            }
+            __shaft_free(set.values); __shaft_free(set.occupied);
+            set.values = newValues; set.occupied = newOccupied; set.capacity = newCapacity;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_set_u64_insert(*Collections::HashSet<u64> set, u64 value) -> bool result
+    {
+        if (set.capacity != 0 && set.length + 1 > set.capacity / 2)
+        {
+            reserve bool grown = Collections::hash_set_u64_reserve(set, set.length + 1);
+        }
+        mut bool inserted = false;
+        if (set.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_u64(value) & (set.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < set.capacity)
+            {
+                if (set.occupied[slot] == 0)
+                {
+                    set.occupied[slot] = 1;
+                    set.values[slot] = value;
+                    set.length = set.length + 1;
+                    inserted = true;
+                    break;
+                }
+                if (set.values[slot] == value)
+                {
+                    break;
+                }
+                slot = (slot + 1) & (set.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel inserted -> bool result;
+    }
+
+    def hash_set_u64_contains(*Collections::HashSet<u64> set, u64 value) -> bool result
+    {
+        mut bool found = false;
+        if (set.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_u64(value) & (set.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < set.capacity)
+            {
+                if (set.occupied[slot] == 0)
+                {
+                    break;
+                }
+                if (set.values[slot] == value)
+                {
+                    found = true;
+                    break;
+                }
+                slot = (slot + 1) & (set.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel found -> bool result;
+    }
+
+    def hash_set_u64_len(*Collections::HashSet<u64> set) -> u64 result
+    {
+        tunnel set.length -> u64 result;
+    }
+
+    def hash_set_init(*Collections::HashSet<T> set, u64 requested)<T> -> bool result
+    {
+        set.capacity = 8;
+        while (set.capacity < requested * 2)
+        {
+            set.capacity = set.capacity * 2;
+        }
+        set.value_size = sizeof(T);
+        set.values = __shaft_alloc_or_exit(set.capacity * set.value_size);
+        set.occupied = __shaft_alloc_or_exit(set.capacity);
+        set.length = 0;
+        mut u64 slot = 0;
+        while (slot < set.capacity)
+        {
+            set.occupied[slot] = 0;
+            slot = slot + 1;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_set_reserve(*Collections::HashSet<T> set, u64 requested)<T> -> bool result
+    {
+        if (requested * 2 > set.capacity)
+        {
+            mut u64 newCapacity = set.capacity;
+            if (newCapacity < 8)
+            {
+                newCapacity = 8;
+            }
+            while (newCapacity < requested * 2)
+            {
+                newCapacity = newCapacity * 2;
+            }
+            mut *T newValues = __shaft_alloc_or_exit(newCapacity * set.value_size);
+            mut *u8 newOccupied = __shaft_alloc_or_exit(newCapacity);
+            mut u64 newSlot = 0;
+            while (newSlot < newCapacity)
+            {
+                newOccupied[newSlot] = 0;
+                newSlot = newSlot + 1;
+            }
+            mut u64 oldSlot = 0;
+            while (oldSlot < set.capacity)
+            {
+                if (set.occupied[oldSlot] != 0)
+                {
+                    newSlot = Collections::hash::<T>(set.values[oldSlot]) & (newCapacity - 1);
+                    while (newOccupied[newSlot] != 0)
+                    {
+                        newSlot = (newSlot + 1) & (newCapacity - 1);
+                    }
+                    newOccupied[newSlot] = 1;
+                    newValues[newSlot] = set.values[oldSlot];
+                }
+                oldSlot = oldSlot + 1;
+            }
+            __shaft_free(set.values);
+            __shaft_free(set.occupied);
+            set.values = newValues;
+            set.occupied = newOccupied;
+            set.capacity = newCapacity;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_set_insert(*Collections::HashSet<T> set, T value)<T> -> bool result
+    {
+        if (set.capacity != 0 && set.length + 1 > set.capacity / 2)
+        {
+            reserve bool grown = Collections::hash_set_reserve::<T>(set, set.length + 1);
+        }
+        mut bool inserted = false;
+        if (set.capacity != 0)
+        {
+            mut u64 slot = Collections::hash::<T>(value) & (set.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < set.capacity)
+            {
+                if (set.occupied[slot] == 0)
+                {
+                    set.occupied[slot] = 1;
+                    set.values[slot] = value;
+                    set.length = set.length + 1;
+                    inserted = true;
+                    break;
+                }
+                if (set.values[slot] == value)
+                {
+                    break;
+                }
+                slot = (slot + 1) & (set.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel inserted -> bool result;
+    }
+
+    def hash_set_contains(*Collections::HashSet<T> set, T value)<T> -> bool result
+    {
+        mut bool found = false;
+        if (set.capacity != 0)
+        {
+            mut u64 slot = Collections::hash::<T>(value) & (set.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < set.capacity)
+            {
+                if (set.occupied[slot] == 0)
+                {
+                    break;
+                }
+                if (set.values[slot] == value)
+                {
+                    found = true;
+                    break;
+                }
+                slot = (slot + 1) & (set.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel found -> bool result;
+    }
+
+    def hash_set_len(*Collections::HashSet<T> set)<T> -> u64 result
+    {
+        tunnel set.length -> u64 result;
+    }
+
+    def hash_set_str_reserve(*Collections::HashSet<str> set, u64 requested) -> bool result
+    {
+        if (requested * 2 > set.capacity)
+        {
+            mut u64 newCapacity = set.capacity;
+            if (newCapacity < 8)
+            {
+                newCapacity = 8;
+            }
+            while (newCapacity < requested * 2)
+            {
+                newCapacity = newCapacity * 2;
+            }
+            mut *str newValues = __shaft_alloc_or_exit(newCapacity * set.value_size);
+            mut *u8 newOccupied = __shaft_alloc_or_exit(newCapacity);
+            mut u64 newSlot = 0;
+            while (newSlot < newCapacity)
+            {
+                newOccupied[newSlot] = 0;
+                newSlot = newSlot + 1;
+            }
+            mut u64 oldSlot = 0;
+            while (oldSlot < set.capacity)
+            {
+                if (set.occupied[oldSlot] != 0)
+                {
+                    newSlot = Collections::hash_str(set.values[oldSlot]) & (newCapacity - 1);
+                    while (newOccupied[newSlot] != 0)
+                    {
+                        newSlot = (newSlot + 1) & (newCapacity - 1);
+                    }
+                    newOccupied[newSlot] = 1;
+                    newValues[newSlot] = set.values[oldSlot];
+                }
+                oldSlot = oldSlot + 1;
+            }
+            __shaft_free(set.values);
+            __shaft_free(set.occupied);
+            set.values = newValues;
+            set.occupied = newOccupied;
+            set.capacity = newCapacity;
+        }
+        tunnel true -> bool result;
+    }
+
+    def hash_set_str_insert(*Collections::HashSet<str> set, str value) -> bool result
+    {
+        if (set.capacity != 0 && set.length + 1 > set.capacity / 2)
+        {
+            reserve bool grown = Collections::hash_set_str_reserve(set, set.length + 1);
+        }
+        mut bool inserted = false;
+        if (set.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_str(value) & (set.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < set.capacity)
+            {
+                if (set.occupied[slot] == 0)
+                {
+                    set.occupied[slot] = 1;
+                    set.values[slot] = value;
+                    set.length = set.length + 1;
+                    inserted = true;
+                    break;
+                }
+                reserve bool equal = Collections::str_equal(set.values[slot], value);
+                if (equal)
+                {
+                    break;
+                }
+                slot = (slot + 1) & (set.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel inserted -> bool result;
+    }
+
+    def hash_set_str_contains(*Collections::HashSet<str> set, str value) -> bool result
+    {
+        mut bool found = false;
+        if (set.capacity != 0)
+        {
+            mut u64 slot = Collections::hash_str(value) & (set.capacity - 1);
+            mut u64 probes = 0;
+            while (probes < set.capacity)
+            {
+                if (set.occupied[slot] == 0)
+                {
+                    break;
+                }
+                reserve bool equal = Collections::str_equal(set.values[slot], value);
+                if (equal)
+                {
+                    found = true;
+                    break;
+                }
+                slot = (slot + 1) & (set.capacity - 1);
+                probes = probes + 1;
+            }
+        }
+        tunnel found -> bool result;
+    }
+}
+
+struct TimePoint
+{
+    i64 seconds;
+    i64 nanoseconds;
+}
+
+class File
+{
+    i64 descriptor;
+}
+
+class Channel
+{
+    *u8 state;
+    u64 element_size;
+}
+
+// unsafe
+namespace Memory
+{
+    cdec memcpy(*u8 destination, *u8 source, u64 count) -> *u8;
+    cdec memmove(*u8 destination, *u8 source, u64 count) -> *u8;
+    cdec memset(*u8 destination, i32 value, u64 count) -> *u8;
+    cdec memcmp(*u8 left, *u8 right, u64 count) -> i32;
+}
+
+namespace Math
+{
+    def min(u64 left, u64 right) -> u64 result
+    {
+        if (left < right)
+        {
+            tunnel left -> u64 result;
+        }
+        else
+        {
+            tunnel right -> u64 result;
+        }
+    }
+
+    def max(u64 left, u64 right) -> u64 result
+    {
+        if (left > right)
+        {
+            tunnel left -> u64 result;
+        }
+        else
+        {
+            tunnel right -> u64 result;
+        }
+    }
+
+    def clamp(u64 value, u64 lower, u64 upper) -> u64 result
+    {
+        if (value < lower)
+        {
+            tunnel lower -> u64 result;
+        }
+        else if (value > upper)
+        {
+            tunnel upper -> u64 result;
+        }
+        else
+        {
+            tunnel value -> u64 result;
+        }
+    }
+}
+
+namespace Time
+{
+    def now() -> TimePoint result
+    {
+        reserve TimePoint value;
+        __sys_gettime_parts(&value.seconds, &value.nanoseconds);
+        tunnel value -> TimePoint result;
+    }
+
+    def unix_seconds() -> i64 result
+    {
+        reserve TimePoint value = Time::now();
+        tunnel value.seconds -> i64 result;
+    }
+}
+
+def write(i32 descriptor, str content) -> i64 result
+{
+    tunnel __sys_write(descriptor, content.data, content.length) -> i64 result;
+}
+
+def print(str content) -> i64 result
+{
+    tunnel write(1, content) -> i64 result;
+}
+
+def println(str content) -> i64 result
+{
+    reserve i64 ignored = write(1, content);
+    tunnel __sys_write(1, "\n", 1) -> i64 result;
+}
+
+def eprint(str content) -> i64 result
+{
+    tunnel write(2, content) -> i64 result;
+}
+
+def eprintln(str content) -> i64 result
+{
+    reserve i64 ignored = write(2, content);
+    tunnel __sys_write(2, "\n", 1) -> i64 result;
+}
+
+using global print!(content) -> print(content);
+using global println!(content) -> println(content);
+
+cdec __sys_write(i64 fd, *i8 buffer, u64 count) -> i64;
+cdec __shaft_alloc(u64 count) -> *u8;
+cdec __shaft_alloc_or_exit(u64 count) -> *u8;
+cdec __shaft_free(*u8 pointer);
+cdec __sys_int_to_string(i64 value, *u8 buffer, u64 capacity) -> u64;
+cdec __sys_uint_to_string(u64 value, *u8 buffer, u64 capacity) -> u64;
+cdec __sys_float_to_string(f64 value, *u8 buffer, u64 capacity) -> u64;
+cdec __sys_exit(i32 status);
+cdec exit(i32 status);
+cdec __sys_gettime_parts(*i64 seconds, *i64 nanoseconds) -> i32;
+cdec __cstr_strlen(*i8 text) -> u64;
+cdec __main(String[] args);
+
+cdef __shaft_entry(i32 argc, **i8 argv) -> i32
+{
+    mut String[] args = __shaft_alloc_or_exit(argc * 24);
+    mut u64 argumentIndex = 0;
+    while (argumentIndex < argc)
+    {
+        *i8 text = argv[argumentIndex];
+        u64 length = __cstr_strlen(text);
+        args[argumentIndex].data = __shaft_alloc_or_exit(length + 1);
+        args[argumentIndex].length = length;
+        args[argumentIndex].capacity = length;
+        memcpy(args[argumentIndex].data, text, length);
+        argumentIndex = argumentIndex + 1;
+    }
+    __main(args);
+    return 0;
+}
+
+cdec __sys_open(*i8 pathname, i32 mode) -> i64;
+cdec __sys_read(i64 descriptor, *i8 buffer, u64 count) -> i64;
+cdec __sys_readline(*u8 buffer, u64 capacity) -> i64;
+cdec __sys_close(i64 descriptor) -> i64;
+cdec __sys_file_size(i64 descriptor) -> i64;
+
+def readline() -> String result
+{
+    reserve mut String line = String::with_capacity(65536);
+    reserve i64 length = __sys_readline(line.data, line.capacity);
+    if (length < 0)
+    {
+        line.length = 0;
+    }
+    else
+    {
+        line.length = length;
+    }
+    line.data[line.length] = 0;
+    tunnel line -> String result;
+}
+
+namespace File
+{
+    def read_into(str pathname, *u8 buffer, u64 capacity) -> i64 result
+    {
+        mut i64 received = 0;
+        reserve i64 descriptor = __sys_open(pathname.data, 0);
+        if (descriptor >= 0)
+        {
+            while (received < capacity)
+            {
+                reserve i64 count = __sys_read(descriptor, &buffer[received], capacity - received);
+                if (count <= 0)
+                {
+                    break;
+                }
+                received = received + count;
+            }
+            __sys_close(descriptor);
+        }
+        tunnel received -> i64 result;
+    }
+
+    def read(str pathname) -> String result
+    {
+        reserve mut String content;
+        reserve i64 descriptor = __sys_open(pathname.data, 0);
+        if (descriptor >= 0)
+        {
+            reserve i64 size = __sys_file_size(descriptor);
+            if (size >= 0)
+            {
+                content = String::with_capacity(size);
+                mut u64 received = 0;
+                while (received < size)
+                {
+                    reserve i64 count = __sys_read(descriptor, &content.data[received], size - received);
+                    if (count <= 0)
+                    {
+                        break;
+                    }
+                    received = received + count;
+                }
+                content.length = received;
+                content.data[received] = 0;
+            }
+            __sys_close(descriptor);
+        }
+        tunnel content -> String result;
+    }
+
+    def write_at_mode(str pathname, str content, i32 openMode) -> i64 result
+    {
+        mut i64 total = 0;
+        reserve i64 descriptor = __sys_open(pathname.data, openMode);
+        if (descriptor >= 0)
+        {
+            while (total < content.length)
+            {
+                reserve i64 count = __sys_write(descriptor, &content.data[total], content.length - total);
+                if (count <= 0)
+                {
+                    break;
+                }
+                total = total + count;
+            }
+            __sys_close(descriptor);
+        }
+        tunnel total -> i64 result;
+    }
+
+    def write(str pathname, str content) -> i64 result
+    {
+        tunnel File::write_at_mode(pathname, content, 1) -> i64 result;
+    }
+
+    def append(str pathname, str content) -> i64 result
+    {
+        tunnel File::write_at_mode(pathname, content, 3) -> i64 result;
+    }
+}
+
+namespace Network
+{
+    class Socket
+    {
+        mut i64 descriptor;
+    }
+
+    cdec __sys_socket(i32 domain, i32 type, i32 protocol) -> i64;
+    cdec __sys_connect(i64 descriptor, *u8 address, u32 addressLength) -> i64;
+    cdec __sys_bind(i64 descriptor, *u8 address, u32 addressLength) -> i64;
+    cdec __sys_listen(i64 descriptor, i32 backlog) -> i64;
+    cdec __sys_accept(i64 descriptor, *u8 address, *u32 addressLength) -> i64;
+    cdec __sys_send(i64 descriptor, *u8 buffer, u64 length, i32 flags) -> i64;
+    cdec __sys_recv(i64 descriptor, *u8 buffer, u64 length, i32 flags) -> i64;
+    cdec __sys_sendto(i64 descriptor, *u8 buffer, u64 length, i32 flags, *u8 destination, u32 destinationLength) -> i64;
+    cdec __sys_recvfrom(i64 descriptor, *u8 buffer, u64 length, i32 flags, *u8 source, *u32 sourceLength) -> i64;
+    cdec __sys_shutdown(i64 descriptor, i32 how) -> i64;
+    cdec __sys_socket_close(i64 descriptor) -> i64;
+    cdec __sys_tcp_socket() -> i64;
+    cdec __sys_udp_socket() -> i64;
+    cdec __sys_tcp_connect_ipv4(i64 descriptor, u32 address, u16 port) -> i64;
+    cdec __sys_tcp_listen_ipv4(u32 address, u16 port, i32 backlog) -> i64;
+    cdec __sys_socket_accept(i64 descriptor) -> i64;
+    cdec __sys_socket_set_nonblocking(i64 descriptor) -> i64;
+    cdec __sys_socket_try_accept(i64 descriptor) -> i64;
+    cdec __sys_socket_try_send(i64 descriptor, *u8 buffer, u64 length) -> i64;
+    cdec __sys_socket_try_recv(i64 descriptor, *u8 buffer, u64 length) -> i64;
+
+    def ipv4(u32 first, u32 second, u32 third, u32 fourth) -> u32 result
+    {
+        tunnel (first << 24) | (second << 16) | (third << 8) | fourth -> u32 result;
+    }
+
+    def tcp() -> Network::Socket result
+    {
+        reserve mut Network::Socket socket;
+        socket.descriptor = __sys_tcp_socket();
+        tunnel socket -> Network::Socket result;
+    }
+
+    def udp() -> Network::Socket result
+    {
+        reserve mut Network::Socket socket;
+        socket.descriptor = __sys_udp_socket();
+        tunnel socket -> Network::Socket result;
+    }
+
+    def tcp_connect_ipv4(u32 address, u16 port) -> Network::Socket result
+    {
+        reserve mut Network::Socket socket = Network::tcp();
+        if (socket.descriptor >= 0)
+        {
+            reserve i64 connected = __sys_tcp_connect_ipv4(socket.descriptor, address, port);
+            if (connected != 0)
+            {
+                __sys_socket_close(socket.descriptor);
+                socket.descriptor = -1;
+            }
+        }
+        tunnel socket -> Network::Socket result;
+    }
+
+    def tcp_listen_ipv4(u32 address, u16 port, i32 backlog) -> Network::Socket result
+    {
+        reserve mut Network::Socket socket;
+        socket.descriptor = __sys_tcp_listen_ipv4(address, port, backlog);
+        tunnel socket -> Network::Socket result;
+    }
+
+    def accept(*Network::Socket listener) -> Network::Socket result
+    {
+        reserve mut Network::Socket socket;
+        socket.descriptor = __sys_socket_accept(listener.descriptor);
+        tunnel socket -> Network::Socket result;
+    }
+
+    def set_nonblocking(*Network::Socket socket) -> i64 result
+    {
+        tunnel __sys_socket_set_nonblocking(socket.descriptor) -> i64 result;
+    }
+
+    def try_accept(*Network::Socket listener) -> Network::Socket result
+    {
+        reserve mut Network::Socket socket;
+        socket.descriptor = __sys_socket_try_accept(listener.descriptor);
+        tunnel socket -> Network::Socket result;
+    }
+
+    def try_send(*Network::Socket socket, str content) -> i64 result
+    {
+        tunnel __sys_socket_try_send(socket.descriptor, content.data, content.length) -> i64 result;
+    }
+
+    def try_receive(*Network::Socket socket, *u8 buffer, u64 capacity) -> i64 result
+    {
+        tunnel __sys_socket_try_recv(socket.descriptor, buffer, capacity) -> i64 result;
+    }
+
+    def send(*Network::Socket socket, str content) -> i64 result
+    {
+        mut i64 total = 0;
+        while (total < content.length)
+        {
+            reserve i64 written = __sys_send(
+                socket.descriptor,
+                &content.data[total],
+                content.length - total,
+                0
+            );
+            if (written <= 0)
+            {
+                break;
+            }
+            total = total + written;
+        }
+        tunnel total -> i64 result;
+    }
+
+    def receive(*Network::Socket socket, *u8 buffer, u64 capacity) -> i64 result
+    {
+        tunnel __sys_recv(socket.descriptor, buffer, capacity, 0) -> i64 result;
+    }
+
+    def shutdown(*Network::Socket socket, i32 how) -> i64 result
+    {
+        tunnel __sys_shutdown(socket.descriptor, how) -> i64 result;
+    }
+
+    def close(*Network::Socket socket) -> i64 result
+    {
+        mut i64 closed = 0;
+        if (socket.descriptor >= 0)
+        {
+            closed = __sys_socket_close(socket.descriptor);
+            socket.descriptor = -1;
+        }
+        tunnel closed -> i64 result;
+    }
+}

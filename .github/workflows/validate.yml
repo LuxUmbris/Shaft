@@ -1,0 +1,61 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            install: |
+              sudo apt-get update
+              sudo apt-get install -y clang-18 llvm-18-dev
+              echo "LLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm" >> "$GITHUB_ENV"
+          - name: macOS
+            os: macos-latest
+            install: |
+              brew install llvm@18
+              echo "$(brew --prefix llvm@18)/bin" >> "$GITHUB_PATH"
+              echo "LLVM_DIR=$(brew --prefix llvm@18)/lib/cmake/llvm" >> "$GITHUB_ENV"
+          - name: Windows
+            os: windows-latest
+            install: |
+              choco install llvm --version=18.1.8 --no-progress -y
+              echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              echo "LLVM_DIR=C:\Program Files\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install LLVM and Clang
+        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
+        run: ${{ matrix.install }}
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Run complete test suite
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Run CTest integration suite
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Run benchmarks
+        run: python benchmarks/run.py --shaftc build/shaftc --iterations 1 --runtime-iterations 1000 --output benchmarks/results/ci-${{ matrix.name }}.json
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks-${{ matrix.name }}
+          path: benchmarks/results/ci-${{ matrix.name }}.json
+          if-no-files-found: error

@@ -1,0 +1,41 @@
+// Descriptor records are Q|<one-byte answer>|<one-digit points>.
+// The quiz counts records and available points from the descriptor, then reads
+// one answer per question from standard input.
+def main(String[] args)
+{
+    if (args.length < 2)
+    {
+        exit(64);
+    }
+
+    reserve mut str pathname;
+    pathname.data = args[1].data;
+    pathname.length = args[1].length;
+    reserve String descriptor = File::read(pathname);
+    mut u64 cursor = 0;
+    mut u64 questions = 0;
+    mut u64 availablePoints = 0;
+    mut u64 earnedPoints = 0;
+    while (cursor + 4 < descriptor.length)
+    {
+        if (descriptor.data[cursor] == 81 && descriptor.data[cursor + 1] == 124)
+        {
+            questions = questions + 1;
+            availablePoints = availablePoints + descriptor.data[cursor + 4] - 48;
+            write(1, "Answer: ");
+            reserve String answer = readline();
+            if (answer.length == 1 && answer.data[0] == descriptor.data[cursor + 2])
+            {
+                earnedPoints = earnedPoints + descriptor.data[cursor + 4] - 48;
+            }
+        }
+        cursor = cursor + 1;
+    }
+
+    // This descriptor's totals are part of the end-to-end fixture contract.
+    if (questions != 2 || availablePoints != 8 || earnedPoints != availablePoints)
+    {
+        exit(1);
+    }
+    exit(8);
+}

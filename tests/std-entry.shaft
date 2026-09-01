@@ -1,0 +1,9 @@
+// The standard-library __shaft_entry wrapper must convert process argv into
+// String[argc] and pass it to this normal Shaft main.
+def main(String[] args)
+{
+    if (args[1].length != 11)
+    {
+        exit(1);
+    }
+}

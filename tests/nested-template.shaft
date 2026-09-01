@@ -1,0 +1,15 @@
+struct<T> Box
+{
+    T value;
+}
+
+struct<T> Wrap
+{
+    T value;
+}
+
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    Wrap<Box<Box<i64>>> nested;
+    return 42;
+}

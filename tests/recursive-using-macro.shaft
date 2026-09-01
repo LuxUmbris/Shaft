@@ -1,0 +1,6 @@
+using recursive_alias -> recursive_alias;
+
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    return 0;
+}

@@ -1,0 +1,4 @@
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    return missing(42);
+}

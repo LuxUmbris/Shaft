@@ -1,0 +1,11 @@
+using answer_alias -> answer;
+
+cdef answer() -> i32
+{
+    return 42;
+}
+
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    return answer_alias();
+}

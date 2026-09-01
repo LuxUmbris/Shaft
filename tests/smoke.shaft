@@ -1,0 +1,34 @@
+// Covers forward calls, floating-point literals/comparisons, compound assignment,
+// and a terminating loop body.
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    mut i32 value = 40;
+    value += 2;
+    value *= 1;
+
+    char marker = 'A';
+
+    u8 high = 255;
+    u8 divisor = 2;
+    if (high / divisor != 127)
+    {
+        return 1;
+    }
+
+    f64 threshold = 1.5;
+    if (threshold <= 1.5)
+    {
+        while (value > 41)
+        {
+            break;
+            value = 0;
+        }
+        return add(value, 0);
+    }
+    return 1;
+}
+
+cdef add(i32 lhs, i32 rhs) -> i32
+{
+    return lhs + rhs;
+}

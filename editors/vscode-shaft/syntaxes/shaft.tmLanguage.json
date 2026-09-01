@@ -1,0 +1,132 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Shaft",
+  "scopeName": "source.shaft",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#raw-strings" },
+    { "include": "#macros" },
+    { "include": "#declarations" },
+    { "include": "#booleans" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#customTypes" },
+    { "include": "#numbers" },
+    { "include": "#calls" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [{ "name": "comment.line.double-slash.shaft", "match": "//.*$" }]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.shaft",
+          "begin": "\\\"",
+          "end": "\\\"",
+          "patterns": [{ "name": "constant.character.escape.shaft", "match": "\\\\." }]
+        },
+        {
+          "name": "string.quoted.single.shaft",
+          "begin": "'",
+          "end": "'",
+          "patterns": [{ "name": "constant.character.escape.shaft", "match": "\\\\." }]
+        }
+      ]
+    },
+    "raw-strings": {
+      "name": "string.unquoted.raw.shaft",
+      "begin": "\\braw\\s*->\\s*([A-Za-z_]\\w*)",
+      "beginCaptures": {
+        "0": { "name": "keyword.control.raw.shaft" },
+        "1": { "name": "entity.name.tag.shaft" }
+      },
+      "end": "^\\1$"
+    },
+    "macros": {
+      "patterns": [
+        {
+          "match": "\\b(using)(\\s+global)?\\s+([A-Za-z_]\\w*)(?=\\s*!\\s*\\()",
+          "captures": {
+            "1": { "name": "keyword.other.macro.shaft" },
+            "2": { "name": "keyword.control.shaft" },
+            "3": { "name": "entity.name.function.preprocessor.shaft" }
+          }
+        },
+        {
+          "match": "\\b([A-Za-z_]\\w*)(!)(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.preprocessor.shaft" },
+            "2": { "name": "punctuation.definition.macro.shaft" }
+          }
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(namespace|class|struct|enum)\\s*(<[^>]*>)?\\s*([A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)*)",
+          "captures": {
+            "1": { "name": "storage.type.shaft" },
+            "2": { "name": "entity.name.type.parameter.shaft" },
+            "3": { "name": "entity.name.type.shaft" }
+          }
+        },
+        {
+          "match": "\\b(def|dec|cdef|cdec)\\s*(<[^>]*>)?\\s*(?:(async)\\s+)?([A-Za-z_]\\w*)",
+          "captures": {
+            "1": { "name": "storage.type.function.shaft" },
+            "2": { "name": "entity.name.type.parameter.shaft" },
+            "3": { "name": "keyword.control.shaft" },
+            "4": { "name": "entity.name.function.shaft" }
+          }
+        }
+      ]
+    },
+    "booleans": {
+      "name": "constant.language.boolean.shaft",
+      "match": "\\b(true|false)\\b"
+    },
+    "keywords": {
+      "name": "keyword.control.shaft",
+      "match": "\\b(if|else|match|case|default|while|for|foreach|break|continue|return|tunnel|reserve|valid|move|ref|mut|namespace|using|global|import|export|inline|align|index|init|async|await|start|self|sizeof)\\b"
+    },
+    "types": {
+      "name": "support.type.shaft",
+      "match": "\\b(bool|char|State|Thread|u8|u16|u32|u64|usize|i8|i16|i32|i64|f32|f64)\\b|\\b[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*\\b"
+    },
+    "customTypes": {
+      "patterns": [
+        {
+          "match": "\\b(reserve)\\s+(?:(mut|ref)\\s+)?(\\*?[A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)*(?:<[^>]+>)?)",
+          "captures": {
+            "1": { "name": "keyword.control.shaft" },
+            "2": { "name": "storage.modifier.shaft" },
+            "3": { "name": "entity.name.type.shaft" }
+          }
+        },
+        {
+          "match": "(->\\s*)(\\*?[A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)*(?:<[^>]+>)?)",
+          "captures": {
+            "1": { "name": "keyword.operator.shaft" },
+            "2": { "name": "entity.name.type.shaft" }
+          }
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.shaft",
+      "match": "\\b(?:0x[0-9A-Fa-f_]+|0b[01_]+|\\d+(?:_\\d+)*(?:\\.\\d+(?:_\\d+)*)?)\\b"
+    },
+    "calls": {
+      "name": "entity.name.function.call.shaft",
+      "match": "\\b[A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)*(?=\\s*\\()"
+    },
+    "operators": {
+      "name": "keyword.operator.shaft",
+      "match": "::|->|<-|<<=|>>=|<<|>>|<=|>=|==|!=|&&|\\|\\||[+\\-*/%=<>!&|^]"
+    }
+  }
+}

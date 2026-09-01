@@ -1,0 +1,18 @@
+// Build with: shaftc --no-std --hosted --link raylib -o raylib-window examples/raylib-window.shaft
+cdec InitWindow(i32 width, i32 height, *i8 title);
+cdec SetTargetFPS(i32 fps);
+cdec BeginDrawing();
+cdec EndDrawing();
+cdec WaitTime(f64 seconds);
+cdec CloseWindow();
+
+cdef main() -> i32
+{
+    InitWindow(640, 360, "Shaft + raylib");
+    SetTargetFPS(60);
+    BeginDrawing();
+    EndDrawing();
+    WaitTime(1.0);
+    CloseWindow();
+    return 0;
+}

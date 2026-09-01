@@ -1,0 +1,7 @@
+using duplicate_alias -> first;
+using duplicate_alias -> second;
+
+cdef __shaft_entry(i32 argc, *i8 argv) -> i32
+{
+    return 0;
+}

@@ -78,17 +78,14 @@ namespace Checker
         std::string name;
         Parser::ASTNode typeNode;
         VarOwnershipState state = VarOwnershipState::Valid;
-        // Paths are relative to this local (for example `items[0].name`).
-        // They track independently moved aggregate subobjects without invalidating siblings.
         std::unordered_map<std::string, VarOwnershipState> subobjectStates;
         size_t borrowCount = 0;
         bool has_writer = false;
         bool isOptional = false; // Is it ?T
         bool isFunction = false;
         std::vector<Type> paramTypes;
-        Type resultType;
+        Type resultType{TypeKind::Error};
         bool hasResultType = false;
-        // def/dec tunnel ABI slots in source declaration order.
         std::vector<Type> tunnelSlotTypes;
         std::vector<bool> tunnelSlotOptional;
         std::vector<std::string> tunnelSlotNames;

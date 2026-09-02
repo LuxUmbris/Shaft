@@ -1,0 +1,9 @@
+[package]
+name = "shaftls"
+version = "0.1.0"
+
+[build]
+entry = "src/main.shaft"
+output = "build/shaftls"
+hosted = true
+optimization = "O3"

@@ -1,0 +1,174 @@
+class StringBuilder
+{
+    mut *u8 data;
+    mut u64 length;
+    mut u64 capacity;
+
+    def initialize(u64 initial_capacity) -> StringBuilder result
+    {
+        reserve mut StringBuilder sb;
+
+        sb.data = __shaft_alloc_or_exit(initial_capacity + 1);
+        sb.capacity = initial_capacity;
+        sb.length = 0;
+        sb.data[0] = 0;
+
+        tunnel sb -> StringBuilder result;
+    }
+
+    def append_cstr(&mut self, *u8 s)
+    {
+        mut u64 i = 0;
+
+        while (s[i] != 0)
+        {
+            if (self.length >= self.capacity)
+            {
+                mut u64 new_capacity = self.capacity * 2 + 256;
+                mut *u8 new_data =
+                    __shaft_alloc_or_exit(new_capacity + 1);
+
+                memcpy(
+                    new_data,
+                    self.data,
+                    self.length
+                );
+
+                __shaft_free(self.data);
+
+                self.data = new_data;
+                self.capacity = new_capacity;
+            }
+
+            self.data[self.length] = s[i];
+            self.length = self.length + 1;
+            i = i + 1;
+        }
+
+        self.data[self.length] = 0;
+    }
+
+    def append_string(&mut self, String value)
+    {
+        mut u64 offset = 0;
+
+        while (offset < value.length)
+        {
+            if (self.length >= self.capacity)
+            {
+                mut u64 new_capacity = self.capacity * 2 + 256;
+                mut *u8 new_data =
+                    __shaft_alloc_or_exit(new_capacity + 1);
+
+                memcpy(
+                    new_data,
+                    self.data,
+                    self.length
+                );
+
+                __shaft_free(self.data);
+
+                self.data = new_data;
+                self.capacity = new_capacity;
+            }
+
+            self.data[self.length] = value.data[offset];
+            self.length = self.length + 1;
+            offset = offset + 1;
+        }
+
+        self.data[self.length] = 0;
+    }
+
+    def append_str(&mut self, str value)
+    {
+        mut u64 offset = 0;
+
+        while (offset < value.length)
+        {
+            if (self.length >= self.capacity)
+            {
+                mut u64 new_capacity = self.capacity * 2 + 256;
+                mut *u8 new_data =
+                    __shaft_alloc_or_exit(new_capacity + 1);
+
+                memcpy(
+                    new_data,
+                    self.data,
+                    self.length
+                );
+
+                __shaft_free(self.data);
+
+                self.data = new_data;
+                self.capacity = new_capacity;
+            }
+
+            self.data[self.length] = value.data[offset];
+            self.length = self.length + 1;
+            offset = offset + 1;
+        }
+
+        self.data[self.length] = 0;
+    }
+
+    def append_char(&mut self, u8 c)
+    {
+        if (self.length >= self.capacity)
+        {
+            mut u64 new_capacity = self.capacity * 2 + 256;
+            mut *u8 new_data =
+                __shaft_alloc_or_exit(new_capacity + 1);
+
+            memcpy(
+                new_data,
+                self.data,
+                self.length
+            );
+
+            __shaft_free(self.data);
+
+            self.data = new_data;
+            self.capacity = new_capacity;
+        }
+
+        self.data[self.length] = c;
+        self.length = self.length + 1;
+        self.data[self.length] = 0;
+    }
+}
+
+
+def main(String[] args)
+{
+    reserve mut StringBuilder response =
+        StringBuilder::initialize(2048);
+
+    response.append_cstr(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{}}}"
+    );
+
+    reserve mut StringBuilder header =
+        StringBuilder::initialize(64);
+
+    header.append_cstr(
+        "Content-Length: 53\r\n\r\n"
+    );
+
+    mut u64 offset = 0;
+
+    while (offset < response.length)
+    {
+        header.append_char(
+            response.data[offset]
+        );
+
+        offset = offset + 1;
+    }
+
+    reserve i64 written =
+        write(
+            1,
+            header.data
+        );
+}

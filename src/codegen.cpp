@@ -503,8 +503,6 @@ namespace Codegen
             }
             else
             {
-                // Named declarations can be encountered before their defining
-                // module is lowered; later declaration passes resolve the type.
                 cgType.llvmType = LLVMInt64TypeInContext(ctx.llvmCtx);
             }
             break;

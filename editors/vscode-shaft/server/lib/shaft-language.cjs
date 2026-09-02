@@ -168,17 +168,57 @@ function formatDocument(text, options = {}) {
 
 function parseCompilerDiagnostics(output) {
   const diagnostics = [];
-  for (const line of output.split(/\r?\n/)) {
+  const lines = output.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const bracketed = line.match(/^(Error|Warning)\s*\[(\d+):(\d+)\]:\s*(.+)$/);
     const textual = line.match(/^(Error|Warning)\s+at\s+line\s+(\d+):(\d+)\s+-\s+(.+)$/);
     const lexer = line.match(/^(.+?)\s+at\s+line\s+(\d+):(\d+)$/);
-    const match = bracketed || textual || lexer;
+    const newStyle = line.match(/^(?:error|warning):\s*(.+)$/i);
+    const match = bracketed || textual || lexer || newStyle;
     if (!match) continue;
-    const severity = lexer ? 1 : match[1] === 'Warning' ? 2 : 1;
-    const lineNumber = Number(lexer ? match[2] : match[2]);
-    const columnNumber = Number(lexer ? match[3] : match[3]);
-    const message = lexer ? match[1] : match[4];
-    diagnostics.push({ severity, message, range: range(lineNumber - 1, Math.max(0, columnNumber - 1), Math.max(1, columnNumber)), source: 'shaftc' });
+
+    let severity = 1;
+    let lineNumber = 0;
+    let columnNumber = 0;
+    let message = '';
+
+    if (bracketed) {
+      severity = match[1] === 'Warning' ? 2 : 1;
+      lineNumber = Number(match[2]);
+      columnNumber = Number(match[3]);
+      message = match[4];
+    } else if (textual) {
+      severity = match[1] === 'Warning' ? 2 : 1;
+      lineNumber = Number(match[2]);
+      columnNumber = Number(match[3]);
+      message = match[4];
+    } else if (lexer) {
+      severity = 1;
+      lineNumber = Number(match[2]);
+      columnNumber = Number(match[3]);
+      message = match[1];
+    } else {
+      severity = /^warning:/i.test(line) ? 2 : 1;
+      message = match[1];
+      const footer = lines[index + 1] || '';
+      const location = footer.match(/^-->\s*.*:(\d+):(\d+)\s*$/);
+      if (location) {
+        lineNumber = Number(location[1]);
+        columnNumber = Number(location[2]);
+        index += 1;
+      } else {
+        lineNumber = 1;
+        columnNumber = 1;
+      }
+    }
+
+    diagnostics.push({
+      severity,
+      message,
+      range: range(lineNumber - 1, Math.max(0, columnNumber - 1), Math.max(1, columnNumber)),
+      source: 'shaftc',
+    });
   }
   return diagnostics;
 }

@@ -97,10 +97,6 @@ function standardLibraryPath() {
   const projectLibrary = path.join(workspacePath(), 'std', 'std.shaft');
   return fs.existsSync(projectLibrary) ? projectLibrary : null;
 }
-function standardLibraryLineOffset() {
-  const candidate = standardLibraryPath();
-  try { return candidate ? fs.readFileSync(candidate, 'utf8').split(/\r?\n/).length : 0; } catch { return 0; }
-}
 function applyCompilerDiscovery() {
   const resolved = compilerDiscovery.resolveCompilerSettings(settings);
   settings = { ...settings, compilerPath: resolved.compilerPath, stdlibPath: resolved.stdlibPath, resourcePath: resolved.resourcePath };
@@ -123,15 +119,7 @@ function compilerDiagnostics(uri, text) {
     args.push(sourcePath);
     const result = childProcess.spawnSync(compiler, args, { cwd: workspacePath(), encoding: 'utf8', timeout: 10000, windowsHide: true });
     if (result.error) return [{ severity: 2, source: 'shaft-lsp', message: `Compiler unavailable: ${result.error.message}`, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }];
-    const diagnostics = language.parseCompilerDiagnostics(`${result.stdout || ''}\n${result.stderr || ''}`);
-    const offset = standardLibraryLineOffset();
-    return diagnostics.filter((diagnostic) => diagnostic.range.start.line >= offset).map((diagnostic) => ({
-      ...diagnostic,
-      range: {
-        start: { ...diagnostic.range.start, line: diagnostic.range.start.line - offset },
-        end: { ...diagnostic.range.end, line: diagnostic.range.end.line - offset },
-      },
-    }));
+    return language.parseCompilerDiagnostics(`${result.stdout || ''}\n${result.stderr || ''}`);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
 function fullDocumentRange(analysis) {

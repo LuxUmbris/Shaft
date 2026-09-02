@@ -92,3 +92,14 @@ test('maps compiler parser and lexer diagnostic formats to LSP ranges', () => {
   assert.equal(parsed[2].range.start.character, 8);
   assert.match(parsed[2].message, /Unknown token '@'/);
 });
+
+test('maps the new compiler error and warning format with module paths to LSP ranges', () => {
+  const parsed = language.parseCompilerDiagnostics("error: Unknown function 'missing'.\n--> /tmp/project/main.shaft:12:7\nwarning: Shadowed name.\n--> /tmp/project/other.shaft:5:3\n");
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0].range.start.line, 11);
+  assert.equal(parsed[0].range.start.character, 6);
+  assert.match(parsed[0].message, /Unknown function/);
+  assert.equal(parsed[1].range.start.line, 4);
+  assert.equal(parsed[1].range.start.character, 2);
+  assert.match(parsed[1].message, /Shadowed name/);
+});

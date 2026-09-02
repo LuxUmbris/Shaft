@@ -1250,8 +1250,8 @@ namespace
 int main(int argc, char **argv)
 {
     Codegen::Context context;
-    auto dispose_context = [&context]()
-    {
+
+    auto dispose_context = [&context]() {
         if (context.builder)
             LLVMDisposeBuilder(context.builder);
         if (context.module)
@@ -1260,87 +1260,122 @@ int main(int argc, char **argv)
             LLVMContextDispose(context.llvmCtx);
     };
 
-    const Options options = parse_options(argc, argv);
-    if (options.version)
+    try
     {
-        std::cout << "shaftc " << SHAFT_VERSION << '\n';
-        return 0;
-    }
-    if (!options.targetTriple.empty())
-        validate_target_triple(options.targetTriple);
-    verbose(options, "reading " + options.inputPath);
-    verbose(options, "target " + selected_target_triple(options));
-    const std::string inputSource = read_source(options.inputPath);
-    if (inputSource.empty())
-        throw std::runtime_error("shaftc: error: source file is empty");
-    const std::vector<ImportedSource> projectModules = load_project_modules(options.inputPath);
-    const std::vector<ImportedSource> sourceModules =
-        source_modules_with_stdlib(options, argv[0], projectModules);
+        const Options options = parse_options(argc, argv);
 
-    verbose(options, "lexing and parsing");
-    std::vector<Lexer::Module> raw_modules;
-    for (ImportedSource s : sourceModules)
-    {
-        raw_modules.push_back({s.path, s.source});
-    }
-    Parser::parse(Lexer::tokenize_modules(raw_modules));
-    verbose(options, "checking");
-    Checker::set_stdlib_enabled(!options.noStd);
-    Checker::run_checker();
-    if (options.checkOnly)
-    {
-        verbose(options, "check completed");
-        if (options.dump_ast) Parser::dump_ast(Parser::ast);
-        return 0;
-    }
-    
-    const std::filesystem::path outputParent = std::filesystem::path(options.outputPath).parent_path();
-    if (!outputParent.empty())
-    {
-        std::error_code error;
-        std::filesystem::create_directories(outputParent, error);
-        if (error)
+        if (options.version)
         {
-            throw std::runtime_error("shaftc: failed to create output directory '" + outputParent.string() + "': " +
-                                      error.message());
-            exit(1);
+            std::cout << "shaftc " << SHAFT_VERSION << '\n';
+            return 0;
         }
-    }
-    verbose(options, "generating LLVM IR...");
-    context = Codegen::create_context(options.inputPath.c_str());
-    context.stdlibEnabled = !options.noStd;
-    context.targetPointerWidthBits =
-        target_pointer_width_bits(context.llvmCtx, selected_target_triple(options), options);
-    LLVMModuleRef module = Codegen::generate_module(context, Parser::ast);
 
-    char *diagnostic = nullptr;
-    if (LLVMVerifyModule(module, LLVMReturnStatusAction, &diagnostic))
-    {
-        const std::string message = diagnostic ? diagnostic : "invalid LLVM IR";
-        LLVMDisposeMessage(diagnostic);
-        throw std::runtime_error("shaftc: code generation failed: " + message);
-    }
-    if (diagnostic)
-        LLVMDisposeMessage(diagnostic);
-    if (options.optimization != OptimizationLevel::O0)
-    {
-        verbose(options, "optimizing LLVM IR at -" + std::string(optimization_name(options.optimization)));
-        optimize_module(module, options);
-        diagnostic = nullptr;
+        if (!options.targetTriple.empty())
+            validate_target_triple(options.targetTriple);
+
+        verbose(options, "reading " + options.inputPath);
+        verbose(options, "target " + selected_target_triple(options));
+
+        const std::string inputSource = read_source(options.inputPath);
+        if (inputSource.empty())
+            throw std::runtime_error("source file is empty");
+
+        const std::vector<ImportedSource> projectModules = load_project_modules(options.inputPath);
+        const std::vector<ImportedSource> sourceModules =
+            source_modules_with_stdlib(options, argv[0], projectModules);
+
+        verbose(options, "lexing and parsing");
+        std::vector<Lexer::Module> raw_modules;
+        for (ImportedSource s : sourceModules)
+            raw_modules.push_back({s.path, s.source});
+
+        Parser::parse(Lexer::tokenize_modules(raw_modules));
+
+        verbose(options, "checking");
+        Checker::set_stdlib_enabled(!options.noStd);
+        Checker::run_checker();
+
+        if (options.checkOnly)
+        {
+            verbose(options, "check completed");
+            if (options.dump_ast) Parser::dump_ast(Parser::ast);
+            dispose_context();
+            return 0;
+        }
+
+        const std::filesystem::path outputParent =
+            std::filesystem::path(options.outputPath).parent_path();
+
+        if (!outputParent.empty())
+        {
+            std::error_code error;
+            std::filesystem::create_directories(outputParent, error);
+            if (error)
+                throw std::runtime_error(
+                    "failed to create output directory '" +
+                    outputParent.string() + "': " + error.message());
+        }
+
+        verbose(options, "generating LLVM IR...");
+        context = Codegen::create_context(options.inputPath.c_str());
+        context.stdlibEnabled = !options.noStd;
+        context.targetPointerWidthBits =
+            target_pointer_width_bits(context.llvmCtx, selected_target_triple(options), options);
+
+        LLVMModuleRef module = Codegen::generate_module(context, Parser::ast);
+
+        char *diagnostic = nullptr;
         if (LLVMVerifyModule(module, LLVMReturnStatusAction, &diagnostic))
         {
-            const std::string message = diagnostic ? diagnostic : "invalid optimized LLVM IR";
+            const std::string message = diagnostic ? diagnostic : "invalid LLVM IR";
             LLVMDisposeMessage(diagnostic);
-            throw std::runtime_error("shaftc: optimization produced invalid LLVM IR: " + message);
+            throw std::runtime_error("code generation failed: " + message);
         }
         if (diagnostic)
             LLVMDisposeMessage(diagnostic);
-        verbose(options, "emitting " + std::string(emit_name(options.emit)) + " to " + options.outputPath);
-        emit_artifact(module, options, argv[0]);
+
+        if (options.optimization != OptimizationLevel::O0)
+        {
+            verbose(options, "optimizing LLVM IR at -" +
+                             std::string(optimization_name(options.optimization)));
+
+            optimize_module(module, options);
+
+            diagnostic = nullptr;
+            if (LLVMVerifyModule(module, LLVMReturnStatusAction, &diagnostic))
+            {
+                const std::string message = diagnostic ? diagnostic : "invalid optimized LLVM IR";
+                LLVMDisposeMessage(diagnostic);
+                throw std::runtime_error(
+                    "optimization produced invalid LLVM IR: " + message);
+            }
+            if (diagnostic)
+                LLVMDisposeMessage(diagnostic);
+
+            verbose(options, "emitting " +
+                             std::string(emit_name(options.emit)) +
+                             " to " + options.outputPath);
+
+            emit_artifact(module, options, argv[0]);
+        }
+
+        if (options.dump_ast)
+            Parser::dump_ast(Parser::ast);
+
+        dispose_context();
+        return 0;
     }
-
-    if (options.dump_ast) Parser::dump_ast(Parser::ast);
-
-    dispose_context();
-    return 0;
+    catch (const std::exception &ex)
+    {
+        std::cerr << ex.what() << '\n';
+        dispose_context();
+        return 1;
+    }
+    catch (...)
+    {
+        std::cerr << "shaftc: unknown fatal error\n";
+        dispose_context();
+        return 1;
+    }
 }
+

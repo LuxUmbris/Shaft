@@ -58,3 +58,10 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# packages
+*.zip
+*.tar.gz
+*.tar.bz2
+*.7z
+*.rar

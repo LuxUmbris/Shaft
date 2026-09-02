@@ -75,6 +75,7 @@ namespace
         bool checkOnly = false;
         bool verbose = false;
         bool version = false;
+        bool dump_ast = false;
     };
 
     EmitKind parse_emit_kind(const std::string &value);
@@ -690,6 +691,11 @@ namespace
                 options.checkOnly = true;
                 continue;
             }
+            if (argument == "--dump-ast")
+            {
+                options.dump_ast = true;
+                continue;
+            }
             if (!argument.empty() && argument.rfind("-O", 0) == 0)
             {
                 options.optimization = parse_optimization_level(argument);
@@ -1284,6 +1290,7 @@ int main(int argc, char **argv)
     if (options.checkOnly)
     {
         verbose(options, "check completed");
+        if (options.dump_ast) Parser::dump_ast(Parser::ast);
         return 0;
     }
     
@@ -1293,9 +1300,11 @@ int main(int argc, char **argv)
         std::error_code error;
         std::filesystem::create_directories(outputParent, error);
         if (error)
+        {
             throw std::runtime_error("shaftc: failed to create output directory '" + outputParent.string() + "': " +
                                       error.message());
             exit(1);
+        }
     }
     verbose(options, "generating LLVM IR...");
     context = Codegen::create_context(options.inputPath.c_str());
@@ -1329,18 +1338,8 @@ int main(int argc, char **argv)
         verbose(options, "emitting " + std::string(emit_name(options.emit)) + " to " + options.outputPath);
         emit_artifact(module, options, argv[0]);
     }
-    bool dump_ast = false;
 
-    for (int i = 1; i < argc; i++) 
-    {
-        std::string arg = argv[i];
-        if (arg == "--dump-ast") 
-        {
-            dump_ast = true;
-        }
-    }
-
-    if (dump_ast) Parser::dump_ast(Parser::ast);
+    if (options.dump_ast) Parser::dump_ast(Parser::ast);
 
     dispose_context();
     return 0;

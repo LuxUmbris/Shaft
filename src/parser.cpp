@@ -1864,6 +1864,8 @@ namespace Parser
         ast.clear();
         for (Lexer::LexedModule mod : input_modules)
         {
+            pos = 0;
+            deferredGenericClosers = 0;
             tokens = std::move(mod.tokens);
             parse_module();
         }

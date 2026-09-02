@@ -1749,6 +1749,37 @@ def readline() -> String result
     tunnel line -> String result;
 }
 
+cdec __sys_read(i64 descriptor, *i8 buffer, u64 count) -> i64;
+
+def read_bytes(u64 requested) -> String result
+{
+    // allocate raw buffer
+    mut *i8 buffer = __shaft_alloc_or_exit(requested);
+
+    mut u64 total = 0;
+
+    while (total < requested)
+    {
+        i64 n = __sys_read(
+            0,
+            buffer + total,
+            requested - total
+        );
+
+        if (n <= 0)
+        {
+            break;
+        }
+
+        total = total + n;
+    }
+
+    str slice = { buffer, total };
+    reserve String s = String::from_str(slice);
+
+    tunnel s -> String result;
+}
+
 namespace File
 {
     def read_into(str pathname, *u8 buffer, u64 capacity) -> i64 result

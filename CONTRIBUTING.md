@@ -10,7 +10,7 @@ cd Shaft
 Before you create an issue, make sure there is no other one of the same kind.
 
 ### Atmosphere
-Follow the rules of your [Code of Conduct](CODE_OF_CONDUCT.md).
+Follow the rules of our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## AI Usage Policy
 

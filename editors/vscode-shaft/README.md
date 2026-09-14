@@ -1,18 +1,26 @@
 # Shaft for Visual Studio Code
 
-A dependency-free VS Code extension and stdio Language Server Protocol (LSP) server for Shaft.
+A dependency-free VS Code extension that starts the installed `shaftls` stdio Language Server Protocol server for Shaft.
 
 ## Features
 
 - `.shaft` language mode with bracket matching, comment toggling, auto-closing pairs, indentation rules, and TextMate syntax highlighting.
-- Semantic tokens for declarations, qualified names, primitive types, functions, literals, comments, and operators.
-- Structural diagnostics while typing for unmatched or unclosed braces. Strings and `//` comments are ignored when balancing delimiters.
-- Compiler diagnostics from `shaftc` while typing. All compiler errors and warnings that include a source location are translated into VS Code Problems entries and editor markers, including parser errors such as missing semicolons and semantic errors such as unknown functions.
-- Completion for keywords, `Collections` bootstrap APIs, and indexed workspace declarations.
-- Hover documentation for core Shaft concepts and resolved declarations.
-- Go to Definition for local and indexed workspace declarations, including qualified names such as `Collections::HashMap` and `Core::answer`.
-- Document outline, workspace symbols, folding ranges, and indentation formatting.
-- Snippets for entry points, tunnel functions, namespaces, classes, `HashMap`, and `HashSet`.
+- Semantic tokens from `shaftls` for `import`, import paths, and `@config`, `@asm`, and `@end` directives.
+- Structural diagnostics from `shaftls` for unmatched/unclosed braces; braces in strings and `//` comments are ignored.
+- Incremental live-document synchronization for open and edited `.shaft` buffers.
+- Shaft snippets and syntax highlighting for declarations, macros, imports, types, and meta-programming.
+
+`shaftls` does not yet advertise compiler-backed diagnostics, completion, definition, hover, formatting, or symbols; the extension intentionally does not register providers for those unsupported LSP methods.
+
+## Install
+
+Install the local extension through the Shaft installer:
+
+```sh
+python3 install.py --vscode
+```
+
+The command packages a temporary VSIX and invokes `code --install-extension … --force`; it requires `code`, `node`, and `zip` on `PATH`.
 
 ## Install for development
 
@@ -26,23 +34,18 @@ The extension uses Node supplied by VS Code. It has no `node_modules` directory 
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `shaft.languageServer.compilerPath` | empty | Optional compiler executable or absolute path. When empty, uses `install.py` registration, then `shaftc` on `PATH`. |
-| `shaft.languageServer.diagnostics` | `onChange` | `onSave`, `onChange`, or `off`. Compiler errors are marked as you type by default. |
-| `shaft.languageServer.stdlibPath` | empty | Optional `std.shaft` path passed with `--std`. |
-| `shaft.languageServer.resourcePath` | empty | Optional Shaft resource root passed with `--resources`. |
-| `shaft.languageServer.maxProblems` | `100` | Per-document diagnostics limit. |
+| `shaft.languageServer.serverPath` | empty | Absolute `shaftls` executable. When empty, uses `shaftls` on `PATH`. |
 
-When the workspace is the Shaft bootstrap repository, the server discovers `std/std.shaft` automatically for compiler diagnostics and corrects compiler ranges for the prepended standard-library source.
+The installer places both `shaftc` and `shaftls` in the prefix `bin` directory, so the default works after opening a new terminal/session.
 
 ## Commands
 
 - **Shaft: Restart Language Server**
-- **Shaft: Check Active File**
 - **Shaft: Open Syntax Specification**
 
 ## Quality boundary
 
-The LSP performs fast structural analysis itself and delegates compiler semantic diagnostics to `shaftc`. Its workspace index recognizes top-level `namespace`, `class`, `struct`, `enum`, and function declarations. Compiler-aware references, rename, type inference, code actions, and full AST formatting should be added when the bootstrap compiler exposes stable machine-readable diagnostics and symbol/type queries.
+`shaftls` is the production editor server for this extension. Its current source-based analysis deliberately covers only imports, meta-programming directives, and structural braces. Compiler-driven semantic diagnostics and navigation remain future Shaftls capabilities.
 
 ## Test
 
@@ -50,4 +53,4 @@ The LSP performs fast structural analysis itself and delegates compiler semantic
 npm run check
 ```
 
-This syntax-checks the extension and server, tests the language analysis core, and launches the real server over stdio to validate initialize, completion, definition, formatting, and semantic-token protocol behavior.
+This syntax-checks the extension assets, tests command selection and grammar behavior, and packages the VSIX. The Shaftls protocol suite is run from the repository root as documented in `shaftls/README.md`.

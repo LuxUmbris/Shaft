@@ -86,6 +86,8 @@ namespace Codegen
     {
         const Parser::ASTNode *call = nullptr;
         bool started = false;
+        bool isThread = false;
+        LLVMValueRef threadTid = nullptr;
     };
 
     struct CleanupValue
@@ -112,6 +114,7 @@ namespace Codegen
         std::string currentNamespaceName;
         bool isCFunction = false;
         bool stdlibEnabled = false;
+        const Parser::ASTNode *inlineAssemblyDiagnosticNode = nullptr;
         unsigned targetPointerWidthBits = 64;
         CGType currentReturnType;
 
@@ -130,6 +133,7 @@ namespace Codegen
         std::string functionSpecializationName;
         std::unordered_map<std::string, DeferredState> states;
         std::vector<std::vector<std::string>> scopedStateNames;
+        uint64_t nextThreadId = 0;
         std::vector<std::pair<LLVMBasicBlockRef, LLVMBasicBlockRef>> loopStack; // {continue, break}
         std::vector<size_t> loopCleanupDepths;
         // Storage whose optional wrapper is proven present in the active `valid` branch.

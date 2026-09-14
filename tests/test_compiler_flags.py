@@ -20,6 +20,175 @@ class CompilerFlagsTests(unittest.TestCase):
             check=False,
         )
 
+    def test_config_macro_deletes_nonmatching_source_before_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "config-false.shaft"
+            source.write_text(
+                "@config.build.target = \"definitely-not-the-current-target\"\n"
+                "this is deliberately not valid Shaft syntax @@@\n"
+                "@end\n"
+                "cdef __shaft_entry(i32 argc, *i8 argv) -> i32 { return 42; }\n",
+                encoding="utf-8",
+            )
+            result = self.run_compiler("--no-std", "--check-only", str(source))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_config_macro_deletes_nonmatching_source_before_import_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "config-false-import.shaft"
+            source.write_text(
+                "@config.build.target = \"definitely-not-the-current-target\"\n"
+                "import \"missing-module.shaft\";\n"
+                "@end\n"
+                "cdef __shaft_entry(i32 argc, *i8 argv) -> i32 { return 42; }\n",
+                encoding="utf-8",
+            )
+            result = self.run_compiler("--no-std", "--check-only", str(source))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_config_macro_keeps_matching_target_and_nested_inline_asm(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "config-target-asm.shaft"
+            binary = pathlib.Path(directory) / "config-target-asm"
+            source.write_text(
+                "cdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n"
+                "    @config.build.target = \"x86_64-unknown-linux-gnu\"\n"
+                "    @asm\n"
+                "        nop\n"
+                "    @end\n"
+                "    return 42;\n"
+                "    @end\n"
+                "    return 1;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            compilation = self.run_compiler(
+                "--no-std", "--target", "x86_64-unknown-linux-gnu", "-o", str(binary), str(source)
+            )
+            self.assertEqual(compilation.returncode, 0, compilation.stdout + compilation.stderr)
+            self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 42)
+
+    def test_config_macro_reads_package_fields_from_shaft_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / "main.shaft"
+            build = root / "Shaft.build"
+            source.write_text(
+                "@config.package.name = \"config-test\"\n"
+                "cdef __shaft_entry(i32 argc, *i8 argv) -> i32 { return 0; }\n"
+                "@end\n",
+                encoding="utf-8",
+            )
+            build.write_text(
+                "[package]\nname = \"config-test\"\nversion = \"0.1.0\"\n"
+                "[build]\nentry = \"main.shaft\"\nno_std = true\n",
+                encoding="utf-8",
+            )
+            result = self.run_compiler("--build", str(build), "--check-only")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_standard_binary_uses_a_shaft_runtime_resource_without_c_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / "resources"
+            runtime_directory = root / "std" / "runtime"
+            runtime_directory.mkdir(parents=True)
+            shutil.copy(REPOSITORY / "std" / "std.shaft", root / "std" / "std.shaft")
+            shutil.copy(REPOSITORY / "std" / "runtime" / "linux.shaft", runtime_directory / "linux.shaft")
+            source = pathlib.Path(directory) / "app.shaft"
+            binary = pathlib.Path(directory) / "app"
+            source.write_text("def main()\n{\n}\n")
+
+            result = self.run_compiler("--resources", str(root), "-o", str(binary), str(source))
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
+            self.assertEqual(output.returncode, 0, output.stderr)
+            self.assertEqual(output.stdout, "")
+
+    def test_inline_asm_diagnostics_use_the_source_module(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "invalid-inline-asm.shaft"
+            binary = pathlib.Path(directory) / "invalid-inline-asm"
+            source.write_text(
+                "cdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n"
+                "    @asm\n"
+                "        this_is_not_an_instruction\n"
+                "    @end\n"
+                "    return 0;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            result = self.run_compiler("--no-std", "--hosted", "-o", str(binary), str(source))
+            output = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"{source}:4:", output)
+            self.assertIn("this_is_not_an_instruction", output)
+            self.assertNotIn("<inline asm>", output)
+
+    def test_optimization_remarks_are_not_compiler_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "quiet-optimization.shaft"
+            binary = pathlib.Path(directory) / "quiet-optimization"
+            source.write_text("def main() { }\n", encoding="utf-8")
+            result = self.run_compiler("-o", str(binary), str(source))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout + result.stderr, "")
+
+    def test_top_level_inline_asm_defines_a_freestanding_runtime_symbol(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "runtime-asm.shaft"
+            binary = pathlib.Path(directory) / "runtime-asm"
+            source.write_text(
+                "@asm\n"
+                "    .globl shaft_runtime_asm_marker\n"
+                "shaft_runtime_asm_marker:\n"
+                "    mov $42, %eax\n"
+                "    ret\n"
+                "@end\n"
+                "cdec shaft_runtime_asm_marker() -> i32;\n"
+                "cdef main() -> i32 { return shaft_runtime_asm_marker(); }\n",
+                encoding="utf-8",
+            )
+            result = self.run_compiler(
+                "--no-std", "--hosted", "-o", str(binary), str(source)
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 42)
+
+    def test_top_level_runtime_buffer_is_mutable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "runtime-global-buffer.shaft"
+            binary = pathlib.Path(directory) / "runtime-global-buffer"
+            source.write_text(
+                "mut u8[8] runtime_buffer;\n"
+                "cdef main() -> i32\n"
+                "{\n"
+                "    runtime_buffer[3] = 42;\n"
+                "    return runtime_buffer[3];\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            result = self.run_compiler("--no-std", "--hosted", "-o", str(binary), str(source))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 42)
+
+    def test_top_level_runtime_state_is_mutable_and_persistent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "runtime-global.shaft"
+            binary = pathlib.Path(directory) / "runtime-global"
+            source.write_text(
+                "mut u64 runtime_counter = 7;\n"
+                "cdef main() -> i32\n"
+                "{\n"
+                "    runtime_counter = runtime_counter + 1;\n"
+                "    return runtime_counter;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            result = self.run_compiler("--no-std", "--hosted", "-o", str(binary), str(source))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 8)
+
     def test_check_only_rejects_backend_unsupported_binary_operations(self):
         with tempfile.TemporaryDirectory() as directory:
             source = pathlib.Path(directory) / "unsupported-binary.shaft"
@@ -156,6 +325,24 @@ class CompilerFlagsTests(unittest.TestCase):
             )
             result = self.run_compiler("--no-std", "-o", str(binary), str(source))
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 42)
+
+    def test_parenthesized_compound_types_preserve_array_and_member_mutability(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "parenthesized-types.shaft"
+            binary = pathlib.Path(directory) / "parenthesized-types"
+            source.write_text(
+                "cdef main() -> i32\n{\n"
+                "    mut (mut u8)[64] values;\n"
+                "    values[0] = 7;\n"
+                "    values[63] = 35;\n"
+                "    &(u8[64]) whole = ref values;\n"
+                "    return values[0] + values[63];\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            result = self.run_compiler("--no-std", "--hosted", "-o", str(binary), str(source))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 42)
 
     def test_fresh_allocation_tunnel_transfers_cleanup_to_caller(self):

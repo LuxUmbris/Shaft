@@ -27,6 +27,7 @@ namespace Codegen
         ctx.builder = LLVMCreateBuilderInContext(ctx.llvmCtx);
         ctx.currentFunction = nullptr;
         ctx.isCFunction = false;
+        ctx.push_scope(); // root scope holds source-language globals
         return ctx;
     }
 
@@ -54,6 +55,12 @@ namespace Codegen
 
         if (sourceKind == LLVMIntegerTypeKind && targetKind == LLVMIntegerTypeKind)
             return LLVMBuildIntCast2(builder, value, target, isSigned ? 1 : 0, name);
+        if (sourceKind == LLVMPointerTypeKind && targetKind == LLVMIntegerTypeKind)
+            return LLVMBuildPtrToInt(builder, value, target, name);
+        if (sourceKind == LLVMIntegerTypeKind && targetKind == LLVMPointerTypeKind)
+            return LLVMBuildIntToPtr(builder, value, target, name);
+        if (sourceKind == LLVMPointerTypeKind && targetKind == LLVMPointerTypeKind)
+            return LLVMBuildPointerCast(builder, value, target, name);
         if (sourceIsFloat && targetIsFloat)
             return LLVMBuildFPCast(builder, value, target, name);
         if (sourceKind == LLVMIntegerTypeKind && targetIsFloat)
@@ -594,7 +601,7 @@ namespace Codegen
 
     // Helper to resolve memory addresses for assignments and mutations
     LLVMValueRef get_lvalue(Context &ctx, const Parser::ASTNode &node,
-                            RuntimeArrayIndexCapture *runtimeIndex)
+                        RuntimeArrayIndexCapture *runtimeIndex)
     {
         if (node.type == Parser::NodeType::Identifier)
         {
@@ -607,7 +614,7 @@ namespace Codegen
                     ctx.validPayloadAddresses.end())
             {
                 return LLVMBuildStructGEP2(ctx.builder, var->type.llvmType, var->address, 1,
-                                           "optionalpayloadaddr");
+                                       "optionalpayloadaddr");
             }
             return var->address;
         }
@@ -615,34 +622,19 @@ namespace Codegen
         {
             if (node.children.empty() || !std::holds_alternative<std::string_view>(node.value))
                 throw std::runtime_error("malformed member access");
-            std::string structName = node.children[0].inferredTypeName;
-            LLVMValueRef baseAddr = nullptr;
-            if (node.children[0].type == Parser::NodeType::Identifier)
-            {
-                const std::string baseName =
-                    std::string(std::get<std::string_view>(node.children[0].value));
-                if (VarInfo *base = ctx.find_var(baseName))
-                {
-                    structName = base->type.structName;
-                    baseAddr = base->type.isPointerLike
-                                   ? LLVMBuildLoad2(ctx.builder, base->type.llvmType, base->address, "memberbase")
-                                   : base->address;
-                }
-            }
-            else if (node.children[0].type == Parser::NodeType::IndexExpr)
-            {
-                const CGType baseType = lvalue_type(ctx, node.children[0]);
-                structName = baseType.structName;
-                baseAddr = get_lvalue(ctx, node.children[0], runtimeIndex);
-            }
-            else
-            {
-                const CGType baseType = lvalue_type(ctx, node.children[0]);
-                structName = baseType.structName;
-                baseAddr = get_lvalue(ctx, node.children[0], runtimeIndex);
-            }
+
+            const CGType baseType = lvalue_type(ctx, node.children[0]);
+            std::string structName = baseType.structName;
+            LLVMValueRef baseAddr = get_lvalue(ctx, node.children[0], runtimeIndex);
+
             if (!baseAddr)
                 throw std::runtime_error("member access requires an addressable struct receiver");
+
+            if (baseType.isPointerLike)
+            {
+                baseAddr = LLVMBuildLoad2(ctx.builder, baseType.llvmType, baseAddr, "memberbase_load");
+            }
+
             std::string fieldName = std::string(std::get<std::string_view>(node.value));
 
             if (structTypes.count(structName))
@@ -671,52 +663,57 @@ namespace Codegen
                 LLVMValueRef zero = LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0);
                 LLVMValueRef indices[] = {zero, index};
                 return LLVMBuildGEP2(ctx.builder, receiverType.llvmType, receiver, indices, 2,
-                                     "static_elementptr");
-            }
-            if (receiverType.isArray && receiverType.pointeeType)
-            {
-                LLVMValueRef receiver = get_lvalue(ctx, node.children[0], runtimeIndex);
-                LLVMValueRef base = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "arraybase");
-                if (runtimeIndex && !runtimeIndex->node && !receiverType.runtimeArrayLengthName.empty())
-                {
-                    runtimeIndex->node = &node.children[1];
-                    runtimeIndex->value = index;
-                }
-                return LLVMBuildGEP2(ctx.builder, receiverType.pointeeType, base, &index, 1, "elementptr");
-            }
-            if (receiverType.isPointerLike && receiverType.pointeeType)
-            {
-                LLVMValueRef receiver = get_lvalue(ctx, node.children[0]);
-                LLVMValueRef base = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "pointerbase");
-                return LLVMBuildGEP2(ctx.builder, receiverType.pointeeType, base, &index, 1, "pointerelementptr");
+                                    "static_elementptr");
             }
 
-            const auto classInfo = structTypes.find(receiverType.structName);
-            if (classInfo == structTypes.end() || classInfo->second.indexedField.empty())
-                throw std::runtime_error("indexing requires a runtime-sized array or a class with an index field");
+        if (receiverType.isArray && receiverType.pointeeType)
+        {
+            LLVMValueRef receiver = get_lvalue(ctx, node.children[0], runtimeIndex);
+            LLVMValueRef base = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "arraybase");
+            if (runtimeIndex && !runtimeIndex->node && !receiverType.runtimeArrayLengthName.empty())
+            {
+                runtimeIndex->node = &node.children[1];
+                runtimeIndex->value = index;
+            }
+            return LLVMBuildGEP2(ctx.builder, receiverType.pointeeType, base, &index, 1, "elementptr");
+        }
+
+        if (receiverType.isPointerLike && receiverType.pointeeType)
+        {
+            LLVMValueRef receiver = get_lvalue(ctx, node.children[0]);
+            LLVMValueRef base = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "pointerbase");
+            return LLVMBuildGEP2(ctx.builder, receiverType.pointeeType, base, &index, 1, "pointerelementptr");
+        }
+
+        const auto classInfo = structTypes.find(receiverType.structName);
+        if (classInfo == structTypes.end() || classInfo->second.indexedField.empty())
+            throw std::runtime_error("indexing requires a runtime-sized array or a class with an index field");
+
             const auto field = std::find(classInfo->second.fieldNames.begin(),
                                          classInfo->second.fieldNames.end(),
                                          classInfo->second.indexedField);
             if (field == classInfo->second.fieldNames.end())
                 throw std::runtime_error("class index field is missing from its layout");
+
             const size_t fieldIndex = static_cast<size_t>(field - classInfo->second.fieldNames.begin());
             const CGType &backingType = classInfo->second.fieldTypes[fieldIndex];
             if (!backingType.isPointerLike || !backingType.pointeeType)
                 throw std::runtime_error("class index field must lower to a pointer");
+
             LLVMValueRef receiver = get_lvalue(ctx, node.children[0]);
             LLVMValueRef fieldAddress = LLVMBuildStructGEP2(ctx.builder, classInfo->second.llvmType,
-                                                             receiver, fieldIndex, "indexfield");
+                                                            receiver, fieldIndex, "indexfield");
             LLVMValueRef base = LLVMBuildLoad2(ctx.builder, backingType.llvmType, fieldAddress, "indexbase");
             return LLVMBuildGEP2(ctx.builder, backingType.pointeeType, base, &index, 1, "elementptr");
         }
         else if (node.type == Parser::NodeType::UnaryExpr)
         {
-            // Dereference: *ptr = value;
             Lexer::Operator op = std::get<Lexer::Operator>(node.value);
             if (op == Lexer::Operator::MULTIPLY)
             {
-                return generate_node(ctx,
-                                     node.children[0]);
+                const CGType ptrType = lvalue_type(ctx, node.children[0]);
+                LLVMValueRef ptrAddr = get_lvalue(ctx, node.children[0]);
+                return LLVMBuildLoad2(ctx.builder, ptrType.llvmType, ptrAddr, "deref_lvalue");
             }
         }
         return nullptr;
@@ -885,6 +882,7 @@ namespace Codegen
         rhs = cast_value(ctx.builder, rhs, LLVMTypeOf(lhs), isSigned, "binarycast");
         const LLVMTypeKind kind = LLVMGetTypeKind(LLVMTypeOf(lhs));
         const bool isFloat = kind == LLVMFloatTypeKind || kind == LLVMDoubleTypeKind;
+        const bool isPointer = kind == LLVMPointerTypeKind;
 
         if (isFloat)
         {
@@ -912,6 +910,20 @@ namespace Codegen
                 return LLVMBuildFCmp(ctx.builder, LLVMRealOGE, lhs, rhs, "fgetmp");
             default:
                 throw std::runtime_error("unsupported floating-point operator");
+            }
+        }
+
+        if (isPointer)
+        {
+            switch (op)
+            {
+            case Lexer::Operator::EQUAL: return LLVMBuildICmp(ctx.builder, LLVMIntEQ, lhs, rhs, "eqtmp");
+            case Lexer::Operator::NOT_EQUAL: return LLVMBuildICmp(ctx.builder, LLVMIntNE, lhs, rhs, "netmp");
+            case Lexer::Operator::LESS_THAN: return LLVMBuildICmp(ctx.builder, LLVMIntULT, lhs, rhs, "lttmp");
+            case Lexer::Operator::LESS_EQUAL: return LLVMBuildICmp(ctx.builder, LLVMIntULE, lhs, rhs, "letmp");
+            case Lexer::Operator::GREATER_THAN: return LLVMBuildICmp(ctx.builder, LLVMIntUGT, lhs, rhs, "gttmp");
+            case Lexer::Operator::GREATER_EQUAL: return LLVMBuildICmp(ctx.builder, LLVMIntUGE, lhs, rhs, "getmp");
+            default: throw std::runtime_error("unsupported pointer operator");
             }
         }
 
@@ -950,16 +962,16 @@ namespace Codegen
         case Lexer::Operator::NOT_EQUAL:
             return LLVMBuildICmp(ctx.builder, LLVMIntNE, lhs, rhs, "netmp");
         case Lexer::Operator::LESS_THAN:
-            return LLVMBuildICmp(ctx.builder, isSigned ? LLVMIntSLT : LLVMIntULT, lhs, rhs,
+            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSLT : LLVMIntULT, lhs, rhs,
                                  "lttmp");
         case Lexer::Operator::LESS_EQUAL:
-            return LLVMBuildICmp(ctx.builder, isSigned ? LLVMIntSLE : LLVMIntULE, lhs, rhs,
+            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSLE : LLVMIntULE, lhs, rhs,
                                  "letmp");
         case Lexer::Operator::GREATER_THAN:
-            return LLVMBuildICmp(ctx.builder, isSigned ? LLVMIntSGT : LLVMIntUGT, lhs, rhs,
+            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSGT : LLVMIntUGT, lhs, rhs,
                                  "gttmp");
         case Lexer::Operator::GREATER_EQUAL:
-            return LLVMBuildICmp(ctx.builder, isSigned ? LLVMIntSGE : LLVMIntUGE, lhs, rhs,
+            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSGE : LLVMIntUGE, lhs, rhs,
                                  "getmp");
         default:
             throw std::runtime_error("unsupported integer operator");
@@ -1373,8 +1385,19 @@ namespace Codegen
         LLVMPositionBuilderAtEnd(ctx.builder, continueBB);
     }
 
+    static void emit_thread_join(Context &ctx, DeferredState &state);
+
     static void emit_cleanup_scopes(Context &ctx, size_t retainedScopeCount)
     {
+        for (size_t scopeIndex = ctx.scopedStateNames.size(); scopeIndex-- > retainedScopeCount;)
+        {
+            for (const std::string &name : ctx.scopedStateNames[scopeIndex])
+            {
+                auto state = ctx.states.find(name);
+                if (state != ctx.states.end() && state->second.isThread && state->second.started)
+                    emit_thread_join(ctx, state->second);
+            }
+        }
         for (size_t scopeIndex = ctx.cleanupScopes.size(); scopeIndex-- > retainedScopeCount;)
         {
             const auto &values = ctx.cleanupScopes[scopeIndex];
@@ -1655,6 +1678,112 @@ namespace Codegen
         return total;
     }
 
+    static void emit_thread_start(Context &ctx, DeferredState &state)
+    {
+        if (!ctx.stdlibEnabled)
+            throw std::runtime_error("Thread requires the standard library runtime");
+        const Parser::ASTNode &call = *state.call;
+        if (call.children.empty() || call.children.front().type != Parser::NodeType::Identifier)
+            throw std::runtime_error("Thread currently requires a non-generic free-function call");
+        const std::string functionName = std::string(std::get<std::string_view>(call.children.front().value));
+        const auto signature = functions.find(functionName);
+        LLVMValueRef worker = LLVMGetNamedFunction(ctx.module, mangle_function_name(functionName).c_str());
+        LLVMValueRef allocate = LLVMGetNamedFunction(ctx.module, "__shaft_alloc_or_exit");
+        LLVMValueRef clone = LLVMGetNamedFunction(ctx.module, "__shaft_thread_clone");
+        LLVMValueRef exitThread = LLVMGetNamedFunction(ctx.module, "__sys_exit");
+        if (signature == functions.end() || !signature->second.tunnelSlotTypes.empty() || !worker || !allocate ||
+            !clone || !exitThread || !state.threadTid ||
+            LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(worker))) != LLVMVoidTypeKind)
+            throw std::runtime_error("Thread requires a void Shaft function without tunnel outputs");
+        if (call.children.size() - 1 != signature->second.paramTypes.size())
+            throw std::runtime_error("wrong argument count in Thread call");
+
+        std::vector<LLVMTypeRef> fieldTypes;
+        std::vector<LLVMValueRef> argumentValues;
+        for (size_t index = 0; index < signature->second.paramTypes.size(); ++index)
+        {
+            const CGType &parameter = signature->second.paramTypes[index];
+            fieldTypes.push_back(parameter.llvmType);
+            LLVMValueRef value = generate_node(ctx, call.children[index + 1]);
+            argumentValues.push_back(cast_value(ctx.builder, value, parameter.llvmType, parameter.isSigned,
+                                                "threadargcast"));
+        }
+        LLVMTypeRef captureType = LLVMStructTypeInContext(ctx.llvmCtx, fieldTypes.data(), fieldTypes.size(), 0);
+        const std::string suffix = std::to_string(ctx.nextThreadId++);
+        LLVMValueRef active = LLVMAddGlobal(ctx.module, LLVMInt1TypeInContext(ctx.llvmCtx),
+                                             ("__shaft_thread_active_" + suffix).c_str());
+        LLVMSetInitializer(active, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0));
+        LLVMSetLinkage(active, LLVMInternalLinkage);
+        LLVMValueRef alreadyActive = LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), active,
+                                                     "threadactive");
+        LLVMBasicBlockRef reject = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.reentrant");
+        LLVMBasicBlockRef captureStart = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.capture");
+        LLVMBuildCondBr(ctx.builder, alreadyActive, reject, captureStart);
+        LLVMPositionBuilderAtEnd(ctx.builder, reject);
+        LLVMValueRef reentrantStatus = LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), 72, 0);
+        LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(exitThread), exitThread, &reentrantStatus, 1, "");
+        LLVMBuildUnreachable(ctx.builder);
+        LLVMPositionBuilderAtEnd(ctx.builder, captureStart);
+        LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 1, 0), active);
+
+        LLVMValueRef capture = LLVMAddGlobal(ctx.module, captureType, ("__shaft_thread_capture_" + suffix).c_str());
+        LLVMSetInitializer(capture, LLVMConstNull(captureType));
+        LLVMSetLinkage(capture, LLVMInternalLinkage);
+        for (unsigned index = 0; index < argumentValues.size(); ++index)
+        {
+            LLVMValueRef slot = LLVMBuildStructGEP2(ctx.builder, captureType, capture, index, "threadcaptureslot");
+            LLVMBuildStore(ctx.builder, argumentValues[index], slot);
+        }
+
+        LLVMTypeRef entryType = LLVMFunctionType(LLVMVoidTypeInContext(ctx.llvmCtx), nullptr, 0, 0);
+        LLVMValueRef entry = LLVMAddFunction(ctx.module, ("__shaft_thread_entry_" + suffix).c_str(), entryType);
+        LLVMSetLinkage(entry, LLVMInternalLinkage);
+        LLVMBasicBlockRef entryBlock = LLVMAppendBasicBlockInContext(ctx.llvmCtx, entry, "entry");
+        LLVMValueRef parentFunction = ctx.currentFunction;
+        LLVMBasicBlockRef parentBlock = LLVMGetInsertBlock(ctx.builder);
+        LLVMPositionBuilderAtEnd(ctx.builder, entryBlock);
+        std::vector<LLVMValueRef> workerArguments;
+        for (unsigned index = 0; index < fieldTypes.size(); ++index)
+        {
+            LLVMValueRef slot = LLVMBuildStructGEP2(ctx.builder, captureType, capture, index, "threadcaptureload");
+            workerArguments.push_back(LLVMBuildLoad2(ctx.builder, fieldTypes[index], slot, "threadcapturevalue"));
+        }
+        LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(worker), worker, workerArguments.data(),
+                       workerArguments.size(), "");
+        LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0), active);
+        LLVMBuildRetVoid(ctx.builder);
+        ctx.currentFunction = parentFunction;
+        LLVMPositionBuilderAtEnd(ctx.builder, parentBlock);
+
+        LLVMValueRef stackBytes = LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 65536, 0);
+        LLVMValueRef stack = LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(allocate), allocate,
+                                            &stackBytes, 1, "threadstack");
+        LLVMValueRef cloneArguments[] = {stack, state.threadTid};
+        LLVMValueRef childId = LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(clone), clone,
+                                              cloneArguments, 2, "threadclone");
+        LLVMValueRef isChild = LLVMBuildICmp(ctx.builder, LLVMIntEQ, childId,
+                                             LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0),
+                                             "threadchild");
+        LLVMBasicBlockRef child = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.child");
+        LLVMBasicBlockRef parent = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.parent");
+        LLVMBuildCondBr(ctx.builder, isChild, child, parent);
+        LLVMPositionBuilderAtEnd(ctx.builder, child);
+        LLVMBuildCall2(ctx.builder, entryType, entry, nullptr, 0, "");
+        LLVMValueRef status = LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), 0, 0);
+        LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(exitThread), exitThread, &status, 1, "");
+        LLVMBuildUnreachable(ctx.builder);
+        LLVMPositionBuilderAtEnd(ctx.builder, parent);
+        state.started = true;
+    }
+
+    static void emit_thread_join(Context &ctx, DeferredState &state)
+    {
+        LLVMValueRef join = LLVMGetNamedFunction(ctx.module, "__sys_thread_join");
+        if (!join || !state.threadTid)
+            throw std::runtime_error("Thread runtime ABI is unavailable for this target");
+        LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(join), join, &state.threadTid, 1, "");
+    }
+
     LLVMValueRef generate_node(Context &ctx, const Parser::ASTNode &node)
     {
         switch (node.type)
@@ -1687,7 +1816,15 @@ namespace Codegen
                 generate_node(ctx, child);
             }
             if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(ctx.builder)))
+            {
+                for (const std::string &name : ctx.scopedStateNames.back())
+                {
+                    auto state = ctx.states.find(name);
+                    if (state != ctx.states.end() && state->second.isThread && state->second.started)
+                        emit_thread_join(ctx, state->second);
+                }
                 emit_current_scope_cleanup(ctx);
+            }
             ctx.pop_scope();
             return nullptr;
 
@@ -1849,6 +1986,21 @@ namespace Codegen
         {
             std::string name = std::string(std::get<std::string_view>(node.value));
             CGType cgType = resolve_type(ctx, node.children[0]);
+
+            if (!ctx.currentFunction)
+            {
+                LLVMValueRef global = LLVMAddGlobal(ctx.module, cgType.llvmType, name.c_str());
+                LLVMValueRef initializer = LLVMConstNull(cgType.llvmType);
+                if (node.children.size() > 1)
+                {
+                    initializer = generate_node(ctx, node.children[1]);
+                    if (!initializer || !LLVMIsConstant(initializer) || LLVMTypeOf(initializer) != cgType.llvmType)
+                        throw std::runtime_error("global initializer must be a constant with the declared type");
+                }
+                LLVMSetInitializer(global, initializer);
+                ctx.declare_var(name, global, cgType);
+                return nullptr;
+            }
 
             LLVMValueRef alloca = LLVMBuildAlloca(ctx.builder, cgType.llvmType, name.c_str());
             LLVMValueRef runtimeArrayCount = nullptr;
@@ -2235,6 +2387,21 @@ namespace Codegen
             if (!node.children.empty())
                 generate_node(ctx, node.children[0]);
             return nullptr;
+
+        case Parser::NodeType::InlineAsmStmt:
+        {
+            ctx.inlineAssemblyDiagnosticNode = &node;
+            const std::string_view assembly = std::get<std::string_view>(node.value);
+            if (!ctx.currentFunction)
+            {
+                LLVMAppendModuleInlineAsm(ctx.module, assembly.data(), assembly.size());
+                return nullptr;
+            }
+            LLVMTypeRef functionType = LLVMFunctionType(LLVMVoidTypeInContext(ctx.llvmCtx), nullptr, 0, 0);
+            LLVMValueRef inlineAssembly = LLVMGetInlineAsm(
+                functionType, assembly.data(), assembly.size(), "", 0, 1, 0, LLVMInlineAsmDialectATT, 0);
+            return LLVMBuildCall2(ctx.builder, functionType, inlineAssembly, nullptr, 0, "");
+        }
 
         case Parser::NodeType::IfStmt:
         {
@@ -2873,6 +3040,21 @@ namespace Codegen
                 throw std::runtime_error("return expression did not produce a value");
             value = cast_value(ctx.builder, value, returnType, ctx.currentReturnType.isSigned,
                                "returncast");
+            // Returning an owned local transfers its allocation to the caller.
+            // Do not release it while unwinding this function's cleanup scopes.
+            if (node.children[0].type == Parser::NodeType::Identifier)
+            {
+                const std::string name = std::string(std::get<std::string_view>(node.children[0].value));
+                if (VarInfo *variable = ctx.find_var(name))
+                {
+                    if (CleanupValue *cleanup = find_root_cleanup_value(ctx, variable->address);
+                        cleanup && cleanup->type.isPointerLike && !cleanup->type.isReference && cleanup->activeFlag)
+                    {
+                        LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0),
+                                       cleanup->activeFlag);
+                    }
+                }
+            }
             emit_cleanup_scopes(ctx, 0);
             return LLVMBuildRet(ctx.builder, value);
         }
@@ -3012,10 +3194,19 @@ namespace Codegen
                 if (receiver)
                 {
                     const CGType &receiverParameter = signature.paramTypes.front();
-                    LLVMValueRef receiverValue = receiverParameter.isPointerLike
-                                                    ? receiver
-                                                    : LLVMBuildLoad2(ctx.builder, receiverParameter.llvmType,
-                                                                     receiver, "value_self_receiver");
+                    LLVMValueRef receiverValue = receiver;
+                    if (receiverParameter.isPointerLike && receiverType.isPointerLike)
+                    {
+                        // A receiver such as `self` is stored in a local pointer slot.
+                        // Pass the pointee, not the address of that slot, to another method.
+                        receiverValue = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver,
+                                                       "pointer_self_receiver");
+                    }
+                    else if (!receiverParameter.isPointerLike)
+                    {
+                        receiverValue = LLVMBuildLoad2(ctx.builder, receiverParameter.llvmType,
+                                                       receiver, "value_self_receiver");
+                    }
                     args.push_back(receiverValue);
                 }
                 for (size_t i = 1 + genericCount; i < node.children.size(); ++i)
@@ -3166,10 +3357,17 @@ namespace Codegen
                 if (normalFunction == functions.end() || normalFunction->second.paramTypes.empty())
                     throw std::runtime_error("method receiver has no declared parameter type");
                 const CGType &receiverParameter = normalFunction->second.paramTypes.front();
-                LLVMValueRef receiverValue = receiverParameter.isPointerLike
-                                                ? receiver
-                                                : LLVMBuildLoad2(ctx.builder, receiverParameter.llvmType,
-                                                                 receiver, "value_self_receiver");
+                LLVMValueRef receiverValue = receiver;
+                if (receiverParameter.isPointerLike && receiverType.isPointerLike)
+                {
+                    receiverValue = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver,
+                                                   "pointer_self_receiver");
+                }
+                else if (!receiverParameter.isPointerLike)
+                {
+                    receiverValue = LLVMBuildLoad2(ctx.builder, receiverParameter.llvmType,
+                                                   receiver, "value_self_receiver");
+                }
                 args.push_back(receiverValue);
             }
             const auto cstrInfo = structTypes.find("cstr");
@@ -3454,7 +3652,14 @@ namespace Codegen
             const std::string name = std::string(std::get<std::string_view>(node.value));
             if (ctx.states.find(name) != ctx.states.end())
                 throw std::runtime_error("duplicate State binding '" + name + "'");
-            ctx.states.emplace(name, DeferredState{&node.children.front(), false});
+            const bool isThread = node.type == Parser::NodeType::ThreadBindingDecl;
+            LLVMValueRef threadTid = nullptr;
+            if (isThread)
+            {
+                threadTid = LLVMBuildAlloca(ctx.builder, LLVMInt32TypeInContext(ctx.llvmCtx), "threadtid");
+                LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), 0, 0), threadTid);
+            }
+            ctx.states.emplace(name, DeferredState{&node.children.front(), false, isThread, threadTid});
             ctx.scopedStateNames.back().push_back(name);
             return nullptr;
         }
@@ -3467,8 +3672,13 @@ namespace Codegen
                 throw std::runtime_error("start references unknown State '" + name + "'");
             if (!state->second.started)
             {
-                generate_node(ctx, *state->second.call);
-                state->second.started = true;
+                if (state->second.isThread)
+                    emit_thread_start(ctx, state->second);
+                else
+                {
+                    generate_node(ctx, *state->second.call);
+                    state->second.started = true;
+                }
             }
             return nullptr;
         }
@@ -3485,9 +3695,16 @@ namespace Codegen
                     throw std::runtime_error("await references unknown State '" + name + "'");
                 if (!state->second.started)
                 {
-                    generate_node(ctx, *state->second.call);
-                    state->second.started = true;
+                    if (state->second.isThread)
+                        emit_thread_start(ctx, state->second);
+                    else
+                    {
+                        generate_node(ctx, *state->second.call);
+                        state->second.started = true;
+                    }
                 }
+                if (state->second.isThread)
+                    emit_thread_join(ctx, state->second);
                 return LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0);
             }
             return generate_node(ctx, node.children.front());

@@ -1,174 +1,699 @@
-class StringBuilder
+// A dependency-free, hosted LSP transport implemented in Shaft.
+// stdin/stdout are reserved exclusively for JSON-RPC framing.
+
+cdec __sys_read(i64 descriptor, *u8 buffer, u64 count) -> i64;
+
+
+def read_byte(*u8 result) -> bool available
 {
-    mut *u8 data;
-    mut u64 length;
-    mut u64 capacity;
+    tunnel __sys_read(0, result, 1) == 1 -> bool available;
+}
 
-    def initialize(u64 initial_capacity) -> StringBuilder result
+
+def read_message() -> String result
+{
+    reserve mut String contentLength = String::from_str("Content-Length");
+    mut u64 nameOffset = 0;
+    mut bool foundLength = false;
+    mut bool readingLength = false;
+    mut u64 length = 0;
+    mut u64 lineEnding = 0;
+    mut bool complete = false;
+    mut bool inputOpen = true;
+
+    while (inputOpen && !complete)
     {
-        reserve mut StringBuilder sb;
-
-        sb.data = __shaft_alloc_or_exit(initial_capacity + 1);
-        sb.capacity = initial_capacity;
-        sb.length = 0;
-        sb.data[0] = 0;
-
-        tunnel sb -> StringBuilder result;
-    }
-
-    def append_cstr(&mut self, *u8 s)
-    {
-        mut u64 i = 0;
-
-        while (s[i] != 0)
+        mut u8 byte = 0;
+        inputOpen = read_byte(&byte);
+        if (inputOpen)
         {
-            if (self.length >= self.capacity)
+            if (!foundLength)
             {
-                mut u64 new_capacity = self.capacity * 2 + 256;
-                mut *u8 new_data =
-                    __shaft_alloc_or_exit(new_capacity + 1);
-
-                memcpy(
-                    new_data,
-                    self.data,
-                    self.length
-                );
-
-                __shaft_free(self.data);
-
-                self.data = new_data;
-                self.capacity = new_capacity;
+                if (byte == contentLength.data[nameOffset])
+                {
+                    nameOffset = nameOffset + 1;
+                    if (nameOffset == contentLength.length)
+                    {
+                        foundLength = true;
+                    }
+                }
+                else
+                {
+                    nameOffset = 0;
+                    if (byte == contentLength.data[0])
+                    {
+                        nameOffset = 1;
+                    }
+                }
+            }
+            else if (!readingLength)
+            {
+                if (byte == 58)
+                {
+                    readingLength = true;
+                }
+            }
+            else if (byte >= 48 && byte <= 57)
+            {
+                length = length * 10 + byte - 48;
             }
 
-            self.data[self.length] = s[i];
-            self.length = self.length + 1;
-            i = i + 1;
+            if (lineEnding == 0 && byte == 13)
+            {
+                lineEnding = 1;
+            }
+            else if (lineEnding == 1 && byte == 10)
+            {
+                lineEnding = 2;
+            }
+            else if (lineEnding == 2 && byte == 13)
+            {
+                lineEnding = 3;
+            }
+            else if (lineEnding == 3 && byte == 10)
+            {
+                complete = true;
+            }
+            else
+            {
+                lineEnding = 0;
+            }
         }
-
-        self.data[self.length] = 0;
     }
 
-    def append_string(&mut self, String value)
+    reserve mut String message = String::with_capacity(length);
+    mut u64 offset = 0;
+    while (inputOpen && offset < length)
     {
-        mut u64 offset = 0;
-
-        while (offset < value.length)
+        inputOpen = read_byte(&message.data[offset]);
+        if (inputOpen)
         {
-            if (self.length >= self.capacity)
-            {
-                mut u64 new_capacity = self.capacity * 2 + 256;
-                mut *u8 new_data =
-                    __shaft_alloc_or_exit(new_capacity + 1);
-
-                memcpy(
-                    new_data,
-                    self.data,
-                    self.length
-                );
-
-                __shaft_free(self.data);
-
-                self.data = new_data;
-                self.capacity = new_capacity;
-            }
-
-            self.data[self.length] = value.data[offset];
-            self.length = self.length + 1;
             offset = offset + 1;
         }
-
-        self.data[self.length] = 0;
     }
+    message.length = offset;
+    message.data[offset] = 0;
+    tunnel message -> String result;
+}
 
-    def append_str(&mut self, str value)
+
+def contains(*String message, *String needle) -> bool found
+{
+    mut bool present = false;
+    if (needle.length == 0)
+    {
+        present = true;
+    }
+    else
     {
         mut u64 offset = 0;
-
-        while (offset < value.length)
+        while (offset + needle.length <= message.length)
         {
-            if (self.length >= self.capacity)
+            mut u64 needleOffset = 0;
+            mut bool equal = true;
+            while (needleOffset < needle.length)
             {
-                mut u64 new_capacity = self.capacity * 2 + 256;
-                mut *u8 new_data =
-                    __shaft_alloc_or_exit(new_capacity + 1);
-
-                memcpy(
-                    new_data,
-                    self.data,
-                    self.length
-                );
-
-                __shaft_free(self.data);
-
-                self.data = new_data;
-                self.capacity = new_capacity;
+                if (message.data[offset + needleOffset] != needle.data[needleOffset])
+                {
+                    equal = false;
+                    break;
+                }
+                needleOffset = needleOffset + 1;
             }
-
-            self.data[self.length] = value.data[offset];
-            self.length = self.length + 1;
+            if (equal)
+            {
+                present = true;
+                break;
+            }
             offset = offset + 1;
         }
+    }
+    tunnel present -> bool found;
+}
 
-        self.data[self.length] = 0;
+
+def matches_at(*String text, u64 offset, *String expected) -> bool matches
+{
+    mut bool equal = offset + expected.length <= text.length;
+    mut u64 characterOffset = 0;
+    while (equal && characterOffset < expected.length)
+    {
+        if (text.data[offset + characterOffset] != expected.data[characterOffset])
+        {
+            equal = false;
+        }
+        characterOffset = characterOffset + 1;
+    }
+    tunnel equal -> bool matches;
+}
+
+
+// Decode a JSON string after its exact key prefix. The stored text is therefore
+// the document content, not an LSP request body or a precomputed token stream.
+def json_string(*String message, *String marker) -> String result
+{
+    reserve mut String value = String::with_capacity(message.length);
+    mut u64 markerStart = 0;
+    mut bool found = false;
+    while (!found && markerStart + marker.length <= message.length)
+    {
+        if (matches_at(message, markerStart, marker))
+        {
+            found = true;
+        }
+        else
+        {
+            markerStart = markerStart + 1;
+        }
     }
 
-    def append_char(&mut self, u8 c)
+    if (found)
     {
-        if (self.length >= self.capacity)
+        mut u64 input = markerStart + marker.length;
+        mut bool complete = false;
+        while (input < message.length && !complete)
         {
-            mut u64 new_capacity = self.capacity * 2 + 256;
-            mut *u8 new_data =
-                __shaft_alloc_or_exit(new_capacity + 1);
+            mut u8 byte = message.data[input];
+            if (byte == 34)
+            {
+                complete = true;
+            }
+            else if (byte == 92 && input + 1 < message.length)
+            {
+                input = input + 1;
+                byte = message.data[input];
+                if (byte == 110) { value.data[value.length] = 10; }
+                else if (byte == 114) { value.data[value.length] = 13; }
+                else if (byte == 116) { value.data[value.length] = 9; }
+                else { value.data[value.length] = byte; }
+                value.length = value.length + 1;
+            }
+            else
+            {
+                value.data[value.length] = byte;
+                value.length = value.length + 1;
+            }
+            input = input + 1;
+        }
+    }
+    value.data[value.length] = 0;
+    tunnel value -> String result;
+}
 
-            memcpy(
-                new_data,
-                self.data,
-                self.length
-            );
 
-            __shaft_free(self.data);
+// Extract a numeric JSON field by occurrence. Ranged didChange payloads have
+// two `character` fields, hence the explicit occurrence parameter.
+def json_number(*String message, *String marker, u64 occurrence) -> u64 result
+{
+    mut u64 search = 0;
+    mut u64 seen = 0;
+    mut bool found = false;
+    while (!found && search + marker.length <= message.length)
+    {
+        if (matches_at(message, search, marker))
+        {
+            if (seen == occurrence)
+            {
+                found = true;
+            }
+            else
+            {
+                seen = seen + 1;
+                search = search + marker.length;
+            }
+        }
+        else
+        {
+            search = search + 1;
+        }
+    }
+    mut u64 value = 0;
+    if (found)
+    {
+        mut u64 input = search + marker.length;
+        while (input < message.length && message.data[input] >= 48 && message.data[input] <= 57)
+        {
+            value = value * 10 + message.data[input] - 48;
+            input = input + 1;
+        }
+    }
+    tunnel value -> u64 result;
+}
 
-            self.data = new_data;
-            self.capacity = new_capacity;
+
+def document_offset(*String text, u64 wantedLine, u64 wantedColumn) -> u64 result
+{
+    mut u64 offset = 0;
+    mut u64 line = 0;
+    while (offset < text.length && line < wantedLine)
+    {
+        if (text.data[offset] == 10)
+        {
+            line = line + 1;
+        }
+        offset = offset + 1;
+    }
+    mut u64 column = 0;
+    while (offset < text.length && column < wantedColumn && text.data[offset] != 10)
+    {
+        offset = offset + 1;
+        column = column + 1;
+    }
+    tunnel offset -> u64 result;
+}
+
+
+def replace_document_range(*String source, u64 rangeStart, u64 rangeEnd, *String replacement) -> String result
+{
+    reserve mut String value = String::with_capacity(source.length + replacement.length);
+    mut u64 offset = 0;
+    while (offset < rangeStart && offset < source.length)
+    {
+        value.data[value.length] = source.data[offset];
+        value.length = value.length + 1;
+        offset = offset + 1;
+    }
+    offset = 0;
+    while (offset < replacement.length)
+    {
+        value.data[value.length] = replacement.data[offset];
+        value.length = value.length + 1;
+        offset = offset + 1;
+    }
+    offset = rangeEnd;
+    while (offset < source.length)
+    {
+        value.data[value.length] = source.data[offset];
+        value.length = value.length + 1;
+        offset = offset + 1;
+    }
+    value.data[value.length] = 0;
+    tunnel value -> String result;
+}
+
+
+def request_id(*String message) -> u64 result
+{
+    reserve String marker = String::from_str("\"id\":");
+    mut u64 identifier = 0;
+    mut u64 markerOffset = 0;
+    mut bool reading = false;
+    mut u64 offset = 0;
+    while (offset < message.length)
+    {
+        mut u8 byte = message.data[offset];
+        if (!reading)
+        {
+            if (byte == marker.data[markerOffset])
+            {
+                markerOffset = markerOffset + 1;
+                if (markerOffset == marker.length)
+                {
+                    reading = true;
+                }
+            }
+            else
+            {
+                markerOffset = 0;
+                if (byte == marker.data[0])
+                {
+                    markerOffset = 1;
+                }
+            }
+        }
+        else if (byte >= 48 && byte <= 57)
+        {
+            identifier = identifier * 10 + byte - 48;
+        }
+        else
+        {
+            break;
+        }
+        offset = offset + 1;
+    }
+    tunnel identifier -> u64 result;
+}
+
+
+def send_body(*String body)
+{
+    reserve mut String frame = String::from_str("Content-Length: ");
+    reserve String sizeText = String::from_u64(body.length);
+    frame.append(sizeText.get_view());
+    frame.append("\r\n\r\n");
+    frame.append(body.get_view());
+    print(frame.get_view());
+}
+
+
+def send_response(u64 identifier, *String result)
+{
+    reserve mut String body = String::from_str("{\"jsonrpc\":\"2.0\",\"id\":");
+    reserve String idText = String::from_u64(identifier);
+    body.append(idText.get_view());
+    body.append(",\"result\":");
+    body.append(result.get_view());
+    body.append("}");
+    send_body(&body);
+}
+
+
+def send_notification(*String method, *String params)
+{
+    reserve mut String body = String::from_str("{\"jsonrpc\":\"2.0\",\"method\":\"");
+    body.append(method.get_view());
+    body.append("\",\"params\":");
+    body.append(params.get_view());
+    body.append("}");
+    send_body(&body);
+}
+
+
+def append_number(*String output, u64 value)
+{
+    reserve String text = String::from_u64(value);
+    output.append(text.get_view());
+}
+
+
+def append_token(*String output, u64 line, u64 column, u64 tokenLength, u64 kind, *u64 previousLine, *u64 previousStart, *bool first)
+{
+    if (!first[0])
+    {
+        output.append(",");
+    }
+    append_number(output, line - previousLine[0]);
+    output.append(",");
+    if (line == previousLine[0])
+    {
+        append_number(output, column - previousStart[0]);
+    }
+    else
+    {
+        append_number(output, column);
+    }
+    output.append(",");
+    append_number(output, tokenLength);
+    output.append(",");
+    append_number(output, kind);
+    output.append(",0");
+    previousLine[0] = line;
+    previousStart[0] = column;
+    first[0] = false;
+}
+
+
+def is_space(u8 byte) -> bool result
+{
+    tunnel byte == 32 || byte == 9 || byte == 13 -> bool result;
+}
+
+
+// Highlight declaration syntax from actual source lines. Meta directives are
+// treated as keyword tokens so they use the editor's standard keyword color.
+def semantic_tokens(*String text) -> String result
+{
+    reserve String importWord = String::from_str("import");
+    reserve String configWord = String::from_str("@config");
+    reserve String asmWord = String::from_str("@asm");
+    reserve String endWord = String::from_str("@end");
+    reserve mut String output = String::with_capacity(text.length * 4 + 32);
+    output.append("{\"data\":[");
+    mut u64 previousLine = 0;
+    mut u64 previousStart = 0;
+    mut bool first = true;
+    mut u64 line = 0;
+    mut u64 offset = 0;
+
+    while (offset < text.length)
+    {
+        mut u64 lineEnd = offset;
+        while (lineEnd < text.length && text.data[lineEnd] != 10)
+        {
+            lineEnd = lineEnd + 1;
+        }
+        mut u64 code = offset;
+        while (code < lineEnd && is_space(text.data[code]))
+        {
+            code = code + 1;
+        }
+        mut bool comment = code + 1 < lineEnd && text.data[code] == 47 && text.data[code + 1] == 47;
+        if (!comment && matches_at(text, code, &importWord) && (code + importWord.length == lineEnd || is_space(text.data[code + importWord.length]) || text.data[code + importWord.length] == 34))
+        {
+            append_token(&output, line, code - offset, importWord.length, 0, &previousLine, &previousStart, &first);
+            code = code + importWord.length;
+            while (code < lineEnd && is_space(text.data[code]))
+            {
+                code = code + 1;
+            }
+            if (code < lineEnd && text.data[code] == 34)
+            {
+                mut u64 end = code + 1;
+                mut bool escaped = false;
+                while (end < lineEnd)
+                {
+                    if (!escaped && text.data[end] == 34)
+                    {
+                        end = end + 1;
+                        break;
+                    }
+                    if (!escaped && text.data[end] == 92)
+                    {
+                        escaped = true;
+                    }
+                    else
+                    {
+                        escaped = false;
+                    }
+                    end = end + 1;
+                }
+                append_token(&output, line, code - offset, end - code, 4, &previousLine, &previousStart, &first);
+            }
+        }
+        else if (!comment && matches_at(text, code, &configWord))
+        {
+            append_token(&output, line, code - offset, configWord.length, 0, &previousLine, &previousStart, &first);
+        }
+        else if (!comment && matches_at(text, code, &asmWord))
+        {
+            append_token(&output, line, code - offset, asmWord.length, 0, &previousLine, &previousStart, &first);
+        }
+        else if (!comment && matches_at(text, code, &endWord))
+        {
+            append_token(&output, line, code - offset, endWord.length, 0, &previousLine, &previousStart, &first);
         }
 
-        self.data[self.length] = c;
-        self.length = self.length + 1;
-        self.data[self.length] = 0;
+        if (lineEnd < text.length)
+        {
+            offset = lineEnd + 1;
+            line = line + 1;
+        }
+        else
+        {
+            offset = lineEnd;
+        }
     }
+    output.append("]}");
+    tunnel output -> String result;
+}
+
+
+def append_diagnostic(*String output, u64 line, u64 column, *String message, *bool first)
+{
+    if (!first[0])
+    {
+        output.append(",");
+    }
+    output.append("{\"range\":{\"start\":{\"line\":");
+    append_number(output, line);
+    output.append(",\"character\":");
+    append_number(output, column);
+    output.append("},\"end\":{\"line\":");
+    append_number(output, line);
+    output.append(",\"character\":");
+    append_number(output, column + 1);
+    output.append("}},\"severity\":1,\"source\":\"shaftls\",\"message\":\"");
+    output.append(message.get_view());
+    output.append("\"}");
+    first[0] = false;
+}
+
+
+// Braces in strings and line comments do not participate in structure. Every
+// unmatched close and every remaining open is reported at its source position.
+def publish_structure_diagnostics(*String uri, *String text, *String notificationMethod, *String unmatchedMessage, *String unclosedMessage)
+{
+    // A source byte can produce one complete diagnostic object, not merely one
+    // output byte (for example, a document of unmatched closing braces).
+    reserve mut String params = String::with_capacity(text.length * 160 + uri.length + 128);
+    params.append("{\"uri\":\"");
+    params.append(uri.get_view());
+    params.append("\",\"diagnostics\":[");
+    mut bool first = true;
+    mut u64[] braceLines = __shaft_alloc_or_exit((text.length + 1) * 8);
+    mut u64[] braceColumns = __shaft_alloc_or_exit((text.length + 1) * 8);
+    mut u64 depth = 0;
+    mut u64 line = 0;
+    mut u64 column = 0;
+    mut u64 offset = 0;
+    mut bool inString = false;
+    mut bool escaped = false;
+    mut bool comment = false;
+
+    while (offset < text.length)
+    {
+        mut u8 byte = text.data[offset];
+        if (comment)
+        {
+            if (byte == 10)
+            {
+                comment = false;
+            }
+        }
+        else if (inString)
+        {
+            if (!escaped && byte == 34)
+            {
+                inString = false;
+            }
+            if (!escaped && byte == 92)
+            {
+                escaped = true;
+            }
+            else
+            {
+                escaped = false;
+            }
+        }
+        else if (byte == 47 && offset + 1 < text.length && text.data[offset + 1] == 47)
+        {
+            comment = true;
+        }
+        else if (byte == 34)
+        {
+            inString = true;
+            escaped = false;
+        }
+        else if (byte == 123)
+        {
+            braceLines[depth] = line;
+            braceColumns[depth] = column;
+            depth = depth + 1;
+        }
+        else if (byte == 125)
+        {
+            if (depth == 0)
+            {
+                append_diagnostic(&params, line, column, unmatchedMessage, &first);
+            }
+            else
+            {
+                depth = depth - 1;
+            }
+        }
+
+        if (byte == 10)
+        {
+            line = line + 1;
+            column = 0;
+        }
+        else
+        {
+            column = column + 1;
+        }
+        offset = offset + 1;
+    }
+    while (depth > 0)
+    {
+        depth = depth - 1;
+        append_diagnostic(&params, braceLines[depth], braceColumns[depth], unclosedMessage, &first);
+    }
+    params.append("]}");
+    send_notification(notificationMethod, &params);
 }
 
 
 def main(String[] args)
 {
-    reserve mut StringBuilder response =
-        StringBuilder::initialize(2048);
+    reserve String initializeMarker = String::from_str("\"method\":\"initialize\"");
+    reserve String shutdownMarker = String::from_str("\"method\":\"shutdown\"");
+    reserve String exitMarker = String::from_str("\"method\":\"exit\"");
+    reserve String didOpenMarker = String::from_str("\"method\":\"textDocument/didOpen\"");
+    reserve String didChangeMarker = String::from_str("\"method\":\"textDocument/didChange\"");
+    reserve String semanticMarker = String::from_str("\"method\":\"textDocument/semanticTokens/full\"");
+    reserve String uriMarker = String::from_str("\"uri\":\"");
+    reserve String textMarker = String::from_str("\"text\":\"");
+    reserve String rangeMarker = String::from_str("\"range\":");
+    reserve String startLineMarker = String::from_str("\"start\":{\"line\":");
+    reserve String endLineMarker = String::from_str("\"end\":{\"line\":");
+    reserve String characterMarker = String::from_str("\"character\":");
+    reserve String diagnosticsMethod = String::from_str("textDocument/publishDiagnostics");
+    reserve String unmatchedMessage = String::from_str("Unmatched closing brace");
+    reserve String unclosedMessage = String::from_str("Unclosed opening brace");
+    reserve String initializeResult = String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
+    reserve String nullResult = String::from_str("null");
+    reserve mut String documentUri = String::with_capacity(1);
+    reserve mut String documentText = String::with_capacity(1);
+    mut bool running = true;
+    mut bool shutdownRequested = false;
+    mut bool exitReceived = false;
 
-    response.append_cstr(
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{}}}"
-    );
-
-    reserve mut StringBuilder header =
-        StringBuilder::initialize(64);
-
-    header.append_cstr(
-        "Content-Length: 53\r\n\r\n"
-    );
-
-    mut u64 offset = 0;
-
-    while (offset < response.length)
+    while (running)
     {
-        header.append_char(
-            response.data[offset]
-        );
-
-        offset = offset + 1;
+        reserve String message = read_message();
+        if (message.length == 0)
+        {
+            running = false;
+        }
+        else if (contains(&message, &initializeMarker))
+        {
+            send_response(request_id(&message), &initializeResult);
+        }
+        else if (contains(&message, &shutdownMarker))
+        {
+            shutdownRequested = true;
+            send_response(request_id(&message), &nullResult);
+        }
+        else if (contains(&message, &exitMarker))
+        {
+            exitReceived = true;
+            running = false;
+        }
+        else if (contains(&message, &didOpenMarker))
+        {
+            documentUri = json_string(&message, &uriMarker);
+            documentText = json_string(&message, &textMarker);
+            publish_structure_diagnostics(&documentUri, &documentText, &diagnosticsMethod, &unmatchedMessage, &unclosedMessage);
+        }
+        else if (contains(&message, &didChangeMarker))
+        {
+            if (contains(&message, &rangeMarker))
+            {
+                reserve String replacement = json_string(&message, &textMarker);
+                reserve u64 rangeStart = document_offset(&documentText, json_number(&message, &startLineMarker, 0), json_number(&message, &characterMarker, 0));
+                reserve u64 rangeEnd = document_offset(&documentText, json_number(&message, &endLineMarker, 0), json_number(&message, &characterMarker, 1));
+                documentText = replace_document_range(&documentText, rangeStart, rangeEnd, &replacement);
+            }
+            else
+            {
+                // Full-content changes replace the stored text.
+                documentText = json_string(&message, &textMarker);
+            }
+            reserve String changedUri = json_string(&message, &uriMarker);
+            if (changedUri.length != 0)
+            {
+                documentUri = changedUri;
+            }
+            publish_structure_diagnostics(&documentUri, &documentText, &diagnosticsMethod, &unmatchedMessage, &unclosedMessage);
+        }
+        else if (contains(&message, &semanticMarker))
+        {
+            reserve String tokens = semantic_tokens(&documentText);
+            send_response(request_id(&message), &tokens);
+        }
     }
-
-    reserve i64 written =
-        write(
-            1,
-            header.data
-        );
+    if (exitReceived && !shutdownRequested)
+    {
+        exit(1);
+    }
 }

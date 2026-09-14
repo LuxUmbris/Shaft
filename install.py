@@ -2,7 +2,7 @@
 """Install a host-compatible Shaft build and its bundled resources.
 
 Usage:
-    python3 install.py [BUILD_DIR] [--prefix PREFIX] [--force]
+    python3 install.py [BUILD_DIR] [--prefix PREFIX] [--force] [--vscode] [--vim] [--neovim]
 
 When BUILD_DIR is omitted, the installer scans this repository for a directory
 containing a usable `shaftc` binary. Build directory names are not significant.
@@ -11,19 +11,19 @@ containing a usable `shaftc` binary. Build directory names are not significant.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import platform
 import re
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-RUNTIME_NAMES = ("linux.c", "darwin.c", "windows.c")
+RUNTIME_NAMES = ("linux.shaft", "darwin.shaft", "macos.shaft", "windows.shaft")
 PATH_BLOCK_BEGIN = "# >>> Shaft compiler PATH >>>"
 PATH_BLOCK_END = "# <<< Shaft compiler PATH <<<"
 
@@ -67,6 +67,10 @@ def host_target() -> Target:
 
 def binary_name(target: Target) -> str:
     return "shaftc.exe" if target.system == "windows" else "shaftc"
+
+
+def language_server_name(target: Target) -> str:
+    return "shaftls.exe" if target.system == "windows" else "shaftls"
 
 
 def inspect_binary_bytes(data: bytes) -> Target:
@@ -171,21 +175,85 @@ def copy_file(source: Path, destination: Path, executable: bool = False) -> None
     os.replace(temporary, destination)
 
 
-def ensure_prefix(prefix: Path, force: bool) -> None:
+def install_editor_files(source_root: Path, destination_root: Path, files: tuple[str, ...]) -> list[Path]:
+    sources = [source_root / relative for relative in files]
+    missing = [str(path) for path in sources if not path.is_file()]
+    if missing:
+        raise InstallError("editor integration resources are incomplete: " + ", ".join(missing))
+    installed: list[Path] = []
+    for relative, source in zip(files, sources):
+        destination = destination_root / relative
+        copy_file(source, destination)
+        installed.append(destination)
+    return installed
+
+
+def install_vim(source_root: Path, vim_home: Path) -> list[Path]:
+    return install_editor_files(source_root / "editors" / "vim", vim_home, (
+        "ftdetect/shaft.vim", "syntax/shaft.vim", "plugin/shaft_lsp.vim",
+    ))
+
+
+def install_neovim(source_root: Path, config_home: Path) -> list[Path]:
+    return install_editor_files(source_root / "editors" / "neovim", config_home, (
+        "lua/shaft/init.lua", "plugin/shaft.lua",
+    ))
+
+
+def neovim_config_directory(target: Target, environment: dict[str, str] | None = None) -> Path:
+    environment = environment or os.environ
+    home = Path(environment.get("HOME") or Path.home())
+    if target.system == "windows":
+        return Path(environment.get("LOCALAPPDATA") or home / "AppData" / "Local") / "nvim"
+    return Path(environment.get("XDG_CONFIG_HOME") or home / ".config") / "nvim"
+
+
+def vim_runtime_directory(target: Target, environment: dict[str, str] | None = None) -> Path:
+    environment = environment or os.environ
+    home = Path(environment.get("HOME") or Path.home())
+    return home / ("vimfiles" if target.system == "windows" else ".vim")
+
+
+def install_vscode(source_root: Path, code_command: str = "code") -> None:
+    extension_root = source_root / "editors" / "vscode-shaft"
+    packager = extension_root / "scripts" / "package-vsix.cjs"
+    if not packager.is_file():
+        raise InstallError(f"VS Code packager is missing: {packager}")
+    node = shutil.which("node")
+    code = shutil.which(code_command)
+    if not node:
+        raise InstallError("--vscode requires node on PATH to package the extension")
+    if not code:
+        raise InstallError(f"--vscode requires '{code_command}' on PATH")
+    with tempfile.TemporaryDirectory(prefix="shaft-vscode-") as temporary:
+        archive = Path(temporary) / "shaft.vsix"
+        try:
+            subprocess.run([node, str(packager), str(archive)], cwd=extension_root, check=True)
+            subprocess.run([code, "--install-extension", str(archive), "--force"], check=True)
+        except subprocess.CalledProcessError as error:
+            raise InstallError(f"VS Code extension installation failed with exit status {error.returncode}") from error
+
+
+def ensure_prefix(prefix: Path, target: Target, force: bool) -> None:
     if prefix.exists() and not prefix.is_dir():
         raise InstallError(f"installation prefix is not a directory: {prefix}")
-    binary = prefix / "bin" / ("shaftc.exe" if os.name == "nt" else "shaftc")
-    if binary.exists() and not force:
-        raise InstallError(f"{binary} already exists; use --force to replace this Shaft installation")
+    binaries = [prefix / "bin" / binary_name(target), prefix / "bin" / language_server_name(target)]
+    existing = [binary for binary in binaries if binary.exists()]
+    if existing and not force:
+        raise InstallError(f"{existing[0]} already exists; use --force to replace this Shaft installation")
 
 
 def install(build_dir: Path, source_root: Path, prefix: Path, target: Target, force: bool) -> Path:
     build_dir = build_dir.resolve()
     prefix = prefix.expanduser().resolve()
     compiler = binary_in(build_dir, target) or binary_in(build_dir)
+    language_server = build_dir / language_server_name(target)
     if compiler is None:
         raise InstallError(f"build directory does not contain {binary_name(target)}: {build_dir}")
+    if not language_server.is_file():
+        raise InstallError(f"build directory does not contain {language_server_name(target)}: {build_dir}")
     validate_binary(compiler, target)
+    validate_binary(language_server, target)
 
     standard_library = source_root / "std" / "std.shaft"
     runtime_dir = source_root / "std" / "runtime"
@@ -194,48 +262,23 @@ def install(build_dir: Path, source_root: Path, prefix: Path, target: Target, fo
     if missing:
         raise InstallError("source resources are incomplete: " + ", ".join(missing))
 
-    ensure_prefix(prefix, force)
+    ensure_prefix(prefix, target, force)
     installed_binary = prefix / "bin" / binary_name(target)
+    installed_language_server = prefix / "bin" / language_server_name(target)
     copy_file(compiler, installed_binary, executable=True)
+    copy_file(language_server, installed_language_server, executable=True)
     copy_file(standard_library, prefix / "share" / "shaft" / "std" / "std.shaft")
     for runtime in RUNTIME_NAMES:
         copy_file(runtime_dir / runtime, prefix / "share" / "shaft" / "std" / "runtime" / runtime)
 
     if not installed_binary.is_file() or not os.access(installed_binary, os.X_OK):
         raise InstallError(f"installed compiler is missing or not executable: {installed_binary}")
+    if not installed_language_server.is_file() or not os.access(installed_language_server, os.X_OK):
+        raise InstallError(f"installed language server is missing or not executable: {installed_language_server}")
     if not (prefix / "share" / "shaft" / "std" / "std.shaft").is_file():
         raise InstallError("installed standard library is missing")
     return installed_binary
 
-
-def language_server_config_path(target: Target, environment: dict[str, str] | None = None) -> Path:
-    environment = environment or os.environ
-    home = Path(environment.get("HOME") or Path.home())
-    if target.system == "windows":
-        return Path(environment.get("APPDATA") or home / "AppData" / "Roaming") / "Shaft" / "compiler.json"
-    if target.system == "darwin":
-        return home / "Library" / "Application Support" / "Shaft" / "compiler.json"
-    return Path(environment.get("XDG_CONFIG_HOME") or home / ".config") / "shaft" / "compiler.json"
-
-
-def register_language_server_compiler(
-    compiler: Path, prefix: Path, target: Target, environment: dict[str, str] | None = None
-) -> Path:
-    """Persist the installed compiler location for the Shaft VS Code LSP."""
-    configuration = language_server_config_path(target, environment)
-    standard_library = prefix / "share" / "shaft" / "std" / "std.shaft"
-    resources = prefix / "share" / "shaft"
-    payload = {
-        "compilerPath": str(compiler),
-        "stdlibPath": str(standard_library),
-        "resourcePath": str(resources),
-        "target": str(target),
-    }
-    configuration.parent.mkdir(parents=True, exist_ok=True)
-    temporary = configuration.with_name(f".{configuration.name}.tmp-{os.getpid()}")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, configuration)
-    return configuration
 
 
 def _atomic_write(destination: Path, content: str) -> None:
@@ -313,6 +356,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("build_dir", nargs="?", type=Path, help="Build directory containing shaftc/shaftc.exe; auto-discovered when omitted.")
     parser.add_argument("--prefix", type=Path, default=Path.home() / ".local", help="Installation prefix (default: ~/.local).")
     parser.add_argument("--force", action="store_true", help="Replace an existing compiler in the prefix.")
+    parser.add_argument("--vscode", action="store_true", help="Package and install the Shaft VS Code extension with code.")
+    parser.add_argument("--vim", action="store_true", help="Install Shaft Vim runtime files into ~/.vim (or ~/vimfiles on Windows).")
+    parser.add_argument("--neovim", action="store_true", help="Install and auto-enable Shaftls in the Neovim configuration directory.")
     parser.add_argument("--dry-run", action="store_true", help="Validate selection and print the planned install without changing files.")
     return parser.parse_args()
 
@@ -324,23 +370,44 @@ def main() -> int:
         expected_binary = binary_name(target)
         build_dir = arguments.build_dir.resolve() if arguments.build_dir else discover_build_directory(ROOT, expected_binary, target)
         compiler = binary_in(build_dir, target) or binary_in(build_dir)
+        language_server = build_dir / language_server_name(target)
         if compiler is None:
             raise InstallError(f"build directory does not contain {expected_binary}: {build_dir}")
+        if not language_server.is_file():
+            raise InstallError(f"build directory does not contain {language_server_name(target)}: {build_dir}")
         validate_binary(compiler, target)
+        validate_binary(language_server, target)
         prefix = arguments.prefix.expanduser().resolve()
         print(f"Host target: {target}")
         print(f"Build directory: {build_dir}")
         print(f"Compiler: {compiler}")
+        print(f"Language server: {language_server}")
         print(f"Install prefix: {prefix}")
+        if arguments.vim:
+            print(f"Vim runtime: {vim_runtime_directory(target)}")
+        if arguments.neovim:
+            print(f"Neovim configuration: {neovim_config_directory(target)}")
+        if arguments.vscode:
+            print("VS Code extension: code --install-extension <packaged Shaft VSIX> --force")
         if arguments.dry_run:
             print("Dry run successful; no files were changed.")
             return 0
         installed = install(build_dir, ROOT, prefix, target, arguments.force)
-        registration = register_language_server_compiler(installed, prefix, target)
         profiles = register_path(prefix, target)
+        vim_files = install_vim(ROOT, vim_runtime_directory(target)) if arguments.vim else []
+        neovim_files = install_neovim(ROOT, neovim_config_directory(target)) if arguments.neovim else []
+        if arguments.vscode:
+            install_vscode(ROOT)
         print(f"Installed {installed}")
+        print(f"Installed {prefix / 'bin' / language_server_name(target)}")
         print(f"Resources: {prefix / 'share' / 'shaft'}")
-        print(f"VS Code LSP registration: {registration}")
+        for path in vim_files:
+            print(f"Installed Vim runtime: {path}")
+        for path in neovim_files:
+            print(f"Installed Neovim runtime: {path}")
+        if arguments.vscode:
+            print("Installed Shaft VS Code extension.")
+
         if profiles:
             print("PATH updated in: " + ", ".join(str(profile) for profile in profiles))
             print("Open a new terminal or source the updated shell profile to use shaftc immediately.")

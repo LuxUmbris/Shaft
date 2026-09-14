@@ -179,7 +179,7 @@ test('the server discovers an installer-registered compiler outside PATH', async
   fs.mkdirSync(path.dirname(standardLibrary), { recursive: true });
   fs.copyFileSync(path.join(repository, 'build', 'shaftc'), compiler);
   fs.copyFileSync(path.join(repository, 'std', 'std.shaft'), standardLibrary);
-  for (const runtime of ['linux.c', 'darwin.c', 'windows.c']) {
+  for (const runtime of ['linux.shaft', 'darwin.shaft', 'macos.shaft', 'windows.shaft']) {
     const target = path.join(prefix, 'share', 'shaft', 'std', 'runtime', runtime);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.join(repository, 'std', 'runtime', runtime), target);

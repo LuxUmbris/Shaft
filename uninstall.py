@@ -10,7 +10,6 @@ Only Shaft-owned files and PATH entries marked by install.py are removed.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import shutil
@@ -59,30 +58,23 @@ def remove_windows_user_path(bin_directory: Path) -> bool:
         raise UninstallError(f"could not update the Windows user PATH: {error}") from error
 
 
-def registration_belongs_to_prefix(registration: Path, prefix: Path) -> bool:
-    try:
-        data = json.loads(registration.read_text(encoding="utf-8"))
-        compiler = Path(data.get("compilerPath", "")).expanduser().resolve()
-        return compiler == (prefix / "bin" / install.binary_name(install.host_target())).resolve()
-    except (OSError, json.JSONDecodeError):
-        return False
-
-
-def uninstall(prefix: Path, target: install.Target, registration: Path) -> list[Path]:
-    """Remove compiler, resources, and matching registration; return deleted paths."""
+def uninstall(prefix: Path, target: install.Target) -> list[Path]:
+    """Remove compiler and bundled resources; return deleted paths."""
     prefix = prefix.expanduser().resolve()
     deleted: list[Path] = []
     compiler = prefix / "bin" / install.binary_name(target)
+    language_server = prefix / "bin" / install.language_server_name(target)
     resources = prefix / "share" / "shaft"
     if compiler.is_file():
         compiler.unlink()
         deleted.append(compiler)
+    if language_server.is_file():
+        language_server.unlink()
+        deleted.append(language_server)
     if resources.is_dir():
         shutil.rmtree(resources)
         deleted.append(resources)
-    if registration.is_file() and registration_belongs_to_prefix(registration, prefix):
-        registration.unlink()
-        deleted.append(registration)
+
     return deleted
 
 
@@ -98,23 +90,24 @@ def main() -> int:
     try:
         target = install.host_target()
         prefix = arguments.prefix.expanduser().resolve()
-        registration = install.language_server_config_path(target)
+
         compiler = prefix / "bin" / install.binary_name(target)
+        language_server = prefix / "bin" / install.language_server_name(target)
         resources = prefix / "share" / "shaft"
         profiles = [] if target.system == "windows" else install.posix_path_profiles(target)
         print(f"Host target: {target}")
         print(f"Install prefix: {prefix}")
         if arguments.dry_run:
-            for path in (compiler, resources):
+            for path in (compiler, language_server, resources):
                 if path.exists(): print(f"Would remove: {path}")
-            if registration.is_file() and registration_belongs_to_prefix(registration, prefix): print(f"Would remove: {registration}")
+
             for profile in profiles:
                 if profile.exists() and install.PATH_BLOCK_BEGIN in profile.read_text(encoding="utf-8"):
                     print(f"Would remove Shaft PATH block from: {profile}")
             print("Dry run successful; no files were changed.")
             return 0
 
-        removed = uninstall(prefix, target, registration)
+        removed = uninstall(prefix, target)
         if target.system == "windows":
             path_changed = remove_windows_user_path(prefix / "bin")
         else:

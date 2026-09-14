@@ -83,6 +83,7 @@ namespace Checker
         bool has_writer = false;
         bool isOptional = false; // Is it ?T
         bool isFunction = false;
+        bool isCFunction = false;
         std::vector<Type> paramTypes;
         Type resultType{TypeKind::Error};
         bool hasResultType = false;

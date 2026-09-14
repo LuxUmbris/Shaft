@@ -1,0 +1,13 @@
+class Node
+{
+    mut u64 value;
+
+    def replace(&self, Node other) -> Node result
+    {
+        tunnel other -> Node result;
+    }
+}
+
+def main()
+{
+}

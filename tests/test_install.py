@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import struct
 import subprocess
@@ -88,24 +87,6 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(installer.InstallError, "targets windows/x86_64"):
                 installer.validate_binary(binary, installer.Target("linux", "x86_64"))
 
-    def test_registers_installed_compiler_for_the_vscode_language_server(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            prefix = root / "prefix"
-            config_home = root / "config"
-            compiler = prefix / "bin" / "shaftc"
-            compiler.parent.mkdir(parents=True)
-            compiler.write_bytes(elf(62))
-            (prefix / "share" / "shaft" / "std").mkdir(parents=True)
-            (prefix / "share" / "shaft" / "std" / "std.shaft").write_text("// std\n", encoding="utf-8")
-
-            registration = installer.register_language_server_compiler(
-                compiler, prefix, installer.Target("linux", "x86_64"), {"XDG_CONFIG_HOME": str(config_home)}
-            )
-            data = __import__("json").loads(registration.read_text(encoding="utf-8"))
-            self.assertEqual(data["compilerPath"], str(compiler))
-            self.assertEqual(data["stdlibPath"], str(prefix / "share" / "shaft" / "std" / "std.shaft"))
-            self.assertEqual(data["resourcePath"], str(prefix / "share" / "shaft"))
 
     def test_adds_and_removes_only_the_managed_posix_path_block(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -140,29 +121,28 @@ class InstallerTests(unittest.TestCase):
             installer.update_posix_path_file(profile, Path(temporary) / "prefix" / "bin", fish=True)
             self.assertIn("set -gx PATH", profile.read_text(encoding="utf-8"))
 
-    def test_uninstaller_removes_only_shaft_files_and_registration(self) -> None:
+    def test_uninstaller_removes_only_shaft_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             prefix = root / "prefix"
             compiler = prefix / "bin" / "shaftc"
+            language_server = prefix / "bin" / "shaftls"
             resources = prefix / "share" / "shaft"
             compiler.parent.mkdir(parents=True)
             compiler.write_bytes(elf(62))
+            language_server.write_bytes(elf(62))
             (resources / "std").mkdir(parents=True)
             (resources / "std" / "std.shaft").write_text("// std\n", encoding="utf-8")
             unrelated = prefix / "share" / "other" / "keep.txt"
             unrelated.parent.mkdir(parents=True)
             unrelated.write_text("keep\n", encoding="utf-8")
-            config_home = root / "config"
-            registration = installer.register_language_server_compiler(
-                compiler, prefix, installer.Target("linux", "x86_64"), {"XDG_CONFIG_HOME": str(config_home)}
-            )
-
-            removed = uninstaller.uninstall(prefix, installer.Target("linux", "x86_64"), registration)
+            removed = uninstaller.uninstall(prefix, installer.Target("linux", "x86_64"))
             self.assertIn(compiler, removed)
+            self.assertIn(language_server, removed)
             self.assertFalse(compiler.exists())
+            self.assertFalse(language_server.exists())
             self.assertFalse(resources.exists())
-            self.assertFalse(registration.exists())
+
             self.assertTrue(unrelated.is_file())
 
     def test_installs_binary_and_resources_to_a_custom_prefix(self) -> None:
@@ -174,15 +154,61 @@ class InstallerTests(unittest.TestCase):
             build.mkdir()
             source.mkdir()
             (build / "shaftc").write_bytes(elf(62))
+            (build / "shaftls").write_bytes(elf(62))
             (source / "std" / "runtime").mkdir(parents=True)
             (source / "std" / "std.shaft").write_text("// std\n", encoding="utf-8")
-            for runtime in ("linux.c", "darwin.c", "windows.c"):
+            for runtime in ("linux.shaft", "darwin.shaft", "macos.shaft", "windows.shaft"):
                 (source / "std" / "runtime" / runtime).write_text("/* runtime */\n", encoding="utf-8")
 
             installer.install(build, source, prefix, installer.Target("linux", "x86_64"), force=False)
             self.assertEqual((prefix / "bin" / "shaftc").read_bytes(), elf(62))
+            self.assertEqual((prefix / "bin" / "shaftls").read_bytes(), elf(62))
             self.assertEqual((prefix / "share" / "shaft" / "std" / "std.shaft").read_text(encoding="utf-8"), "// std\n")
-            self.assertTrue((prefix / "share" / "shaft" / "std" / "runtime" / "linux.c").is_file())
+            self.assertTrue((prefix / "share" / "shaft" / "std" / "runtime" / "linux.shaft").is_file())
+
+    def test_installs_vim_and_neovim_runtime_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            vim_home = root / "vim-home"
+            nvim_config = root / "nvim-config"
+            for relative, content in {
+                "editors/vim/ftdetect/shaft.vim": "ftdetect\n",
+                "editors/vim/syntax/shaft.vim": "syntax\n",
+                "editors/vim/plugin/shaft_lsp.vim": "plugin\n",
+                "editors/neovim/lua/shaft/init.lua": "return {}\n",
+                "editors/neovim/plugin/shaft.lua": "require('shaft').setup()\n",
+            }.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            installer.install_vim(source, vim_home)
+            installer.install_neovim(source, nvim_config)
+
+            self.assertEqual((vim_home / "ftdetect" / "shaft.vim").read_text(encoding="utf-8"), "ftdetect\n")
+            self.assertEqual((vim_home / "syntax" / "shaft.vim").read_text(encoding="utf-8"), "syntax\n")
+            self.assertEqual((vim_home / "plugin" / "shaft_lsp.vim").read_text(encoding="utf-8"), "plugin\n")
+            self.assertEqual((nvim_config / "lua" / "shaft" / "init.lua").read_text(encoding="utf-8"), "return {}\n")
+            self.assertEqual((nvim_config / "plugin" / "shaft.lua").read_text(encoding="utf-8"), "require('shaft').setup()\n")
+    def test_cli_vim_and_neovim_flags_install_to_user_runtime_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            build = root / "build"
+            prefix = root / "prefix"
+            home = root / "home"
+            config = root / "config"
+            build.mkdir()
+            (build / "shaftc").write_bytes(elf(62))
+            (build / "shaftls").write_bytes(elf(62))
+            environment = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(config), "SHELL": "/bin/bash"}
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "install.py"), str(build), "--prefix", str(prefix), "--vim", "--neovim"],
+                text=True, capture_output=True, env=environment, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((home / ".vim" / "plugin" / "shaft_lsp.vim").is_file())
+            self.assertTrue((config / "nvim" / "plugin" / "shaft.lua").is_file())
 
 
 if __name__ == "__main__":

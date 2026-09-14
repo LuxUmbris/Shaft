@@ -76,3 +76,10 @@ void panic(Error error)
 
     exit(1);
 }
+
+void panic_at_source(std::string message, const std::string &modulePath, uint64_t byte_pos,
+                     std::string *source)
+{
+    const ErrorPos position = get_error_pos(byte_pos, source);
+    panic({std::move(message), modulePath, position.line, position.column});
+}

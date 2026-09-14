@@ -56,6 +56,7 @@ namespace Parser
         BreakStmt,
         ContinueStmt,
         ExprStmt,
+        InlineAsmStmt,
         ReturnStmt, // used by cdef/cdec (C-ABI functions); `def`/`dec` use tunnel/TunnelStmt
 
         // types and memory annotations
@@ -82,10 +83,10 @@ namespace Parser
 
         // async / concurrency
         StateBindingDecl, // State foo() s;
-        ThreadBindingDecl, // Thread foo() worker; cooperative task handle
+        ThreadBindingDecl, // Native-thread deferred-call handle
         StartStmt,        // start s;
         AwaitExpr,        // await s; / await foo();
-        ThreadTaskStmt,   // t { ... }
+        ThreadTaskStmt,   // t { ... } (cooperative named task block)
 
         // literals and identifiers
         Identifier,

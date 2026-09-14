@@ -4,6 +4,7 @@ const childProcess = require('node:child_process');
 const path = require('node:path');
 const vscode = require('vscode');
 const extensionSettings = require('./server/lib/extension-settings.cjs');
+const serverCommand = require('./server/lib/server-command.cjs');
 
 let server;
 let requestId = 0;
@@ -68,18 +69,12 @@ function processMessages() {
 }
 function config() {
   const values = vscode.workspace.getConfiguration('shaft.languageServer');
-  const formatting = vscode.workspace.getConfiguration('shaft.format');
-  return {
-    compilerPath: extensionSettings.explicitValue(values.inspect('compilerPath')), diagnostics: values.get('diagnostics'),
-    stdlibPath: values.get('stdlibPath'), resourcePath: values.get('resourcePath'), maxProblems: values.get('maxProblems'),
-    insertFinalNewline: formatting.get('insertFinalNewline'),
-  };
+  return { serverPath: extensionSettings.explicitValue(values.inspect('serverPath')) };
 }
 async function startServer(context) {
   if (server) return;
-  const executable = process.execPath;
-  const script = context.asAbsolutePath('server/shaft-lsp.cjs');
-  server = childProcess.spawn(executable, [script], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const launch = serverCommand.resolveShaftlsCommand(config().serverPath);
+  server = childProcess.spawn(launch.executable, launch.arguments, { stdio: ['pipe', 'pipe', 'pipe'] });
   server.stdout.on('data', (chunk) => { readBuffer = Buffer.concat([readBuffer, chunk]); processMessages(); });
   server.stderr.on('data', (chunk) => output.append(chunk.toString()));
   server.on('exit', (code) => { output.appendLine(`Shaft language server stopped (${code ?? 'signal'}).`); server = undefined; });
@@ -114,23 +109,6 @@ function activate(context) {
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => { if (isShaft(document)) notify('textDocument/didClose', { textDocument: { uri: document.uri.toString() } }); }));
   for (const document of vscode.workspace.textDocuments) if (isShaft(document)) notify('textDocument/didOpen', { textDocument: textDocument(document) });
 
-  context.subscriptions.push(vscode.languages.registerCompletionItemProvider({ language: 'shaft' }, {
-    provideCompletionItems(document, position) { return request('textDocument/completion', { textDocument: { uri: document.uri.toString() }, position }).then((result) => result.items.map((item) => Object.assign(new vscode.CompletionItem(item.label, item.kind || vscode.CompletionItemKind.Text), { detail: item.detail }))); },
-  }, '.', ':'));
-  context.subscriptions.push(vscode.languages.registerDefinitionProvider({ language: 'shaft' }, {
-    provideDefinition(document, position) { return request('textDocument/definition', { textDocument: { uri: document.uri.toString() }, position }).then((locations) => locations?.map((location) => new vscode.Location(asUri(location.uri), asRange(location.range))) || []); },
-  }));
-  context.subscriptions.push(vscode.languages.registerHoverProvider({ language: 'shaft' }, {
-    provideHover(document, position) { return request('textDocument/hover', { textDocument: { uri: document.uri.toString() }, position }).then((result) => result ? new vscode.Hover(new vscode.MarkdownString(result.contents.value), result.range && asRange(result.range)) : undefined); },
-  }));
-  context.subscriptions.push(vscode.languages.registerDocumentFormattingEditProvider({ language: 'shaft' }, {
-    provideDocumentFormattingEdits(document, options) { return request('textDocument/formatting', { textDocument: { uri: document.uri.toString() }, options }).then((edits) => edits.map((edit) => new vscode.TextEdit(asRange(edit.range), edit.newText))); },
-  }));
-  context.subscriptions.push(vscode.languages.registerDocumentSymbolProvider({ language: 'shaft' }, {
-    provideDocumentSymbols(document) { return request('textDocument/documentSymbol', { textDocument: { uri: document.uri.toString() } }).then((symbols) => symbols.map((symbol) => new vscode.DocumentSymbol(symbol.name, symbol.detail, symbol.kind, asRange(symbol.range), asRange(symbol.selectionRange)))); },
-  }));
-  context.subscriptions.push(vscode.languages.registerWorkspaceSymbolProvider({ provideWorkspaceSymbols(query) { return request('workspace/symbol', { query }).then((symbols) => symbols.map((symbol) => new vscode.SymbolInformation(symbol.name, symbol.kind, '', new vscode.Location(asUri(symbol.location.uri), asRange(symbol.location.range))))); } }));
-  context.subscriptions.push(vscode.languages.registerFoldingRangeProvider({ language: 'shaft' }, { provideFoldingRanges(document) { return request('textDocument/foldingRange', { textDocument: { uri: document.uri.toString() } }).then((ranges) => ranges.map((range) => new vscode.FoldingRange(range.startLine, range.endLine, vscode.FoldingRangeKind.Region))); } }));
   const semanticLegend = new vscode.SemanticTokensLegend(['keyword', 'type', 'function', 'number', 'string', 'comment', 'operator'], []);
   context.subscriptions.push(vscode.languages.registerDocumentSemanticTokensProvider({ language: 'shaft' }, {
     provideDocumentSemanticTokens(document) {
@@ -139,7 +117,6 @@ function activate(context) {
   }, semanticLegend));
 
   context.subscriptions.push(vscode.commands.registerCommand('shaft.restartLanguageServer', async () => { await stopServer(); await startServer(context); for (const document of vscode.workspace.textDocuments) if (isShaft(document)) notify('textDocument/didOpen', { textDocument: textDocument(document) }); vscode.window.showInformationMessage('Shaft language server restarted.'); }));
-  context.subscriptions.push(vscode.commands.registerCommand('shaft.checkFile', (document = vscode.window.activeTextEditor?.document) => { if (!document || !isShaft(document)) return vscode.window.showWarningMessage('Open a Shaft file first.'); notify('textDocument/didSave', { textDocument: { uri: document.uri.toString() }, text: document.getText() }); }));
   context.subscriptions.push(vscode.commands.registerCommand('shaft.openSyntaxSpecification', () => vscode.commands.executeCommand('vscode.open', vscode.Uri.file(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', 'syntax.md')))));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => { if (event.affectsConfiguration('shaft.languageServer')) notify('workspace/didChangeConfiguration', { settings: { shaft: { languageServer: config() } } }); }));
 }

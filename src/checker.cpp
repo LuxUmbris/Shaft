@@ -205,8 +205,6 @@ namespace Checker
                 return "bool";
             case TypeKind::Char:
                 return "char";
-            case TypeKind::String:
-                return "String";
             case TypeKind::State:
                 return "State";
             case TypeKind::Thread:
@@ -342,14 +340,16 @@ namespace Checker
             case Parser::NodeType::CustomType:
             {
                 const std::string typeName = custom_type_name(node);
-                auto mutable_type = [&node](Type type) {
+                auto mutable_type = [&node](Type type)
+                {
                     type.isMutable = node.isMutable;
                     for (const Parser::ASTNode &argument : node.children)
                         type.genericArgs.push_back(infer_type_from_node(argument));
                     return type;
                 };
 
-                if (typeName == "String" || typeName == "str" || typeName == "cstr")
+                // only when String/str are defined in the symbol table in case we have --no-std
+                if ((typeName == "String" || typeName == "str") && registeredTypes.find(typeName) != registeredTypes.end())
                     return mutable_type(Type(TypeKind::String, typeName));
 
                 if (typeName == "Self" && !structNameStack.empty())
@@ -385,6 +385,7 @@ namespace Checker
                 return type;
             }
             default:
+                error("Cannot infer type from this node.", node);
                 return {TypeKind::Error, {}};
             }
         }
@@ -579,13 +580,19 @@ namespace Checker
             case Parser::NodeType::MoveExpr:
             {
                 if (expr.children.empty())
+                {
+                    error("Cannot infer type from move expression with no operand.", expr);
                     return {TypeKind::Error, {}};
+                }
                 return infer_expression_type(table, expr.children.front());
             }
             case Parser::NodeType::RefExpr:
             {
                 if (expr.children.empty())
+                {
+                    error("Cannot infer type from reference expression with no operand.", expr);
                     return {TypeKind::Error, {}};
+                }
                 Type pointee = infer_expression_type(table, expr.children.front());
                 Type reference(TypeKind::Reference, "&");
                 reference.isMutable = pointee.isMutable;
@@ -597,7 +604,10 @@ namespace Checker
             case Parser::NodeType::CallExpr:
             {
                 if (expr.children.empty())
+                {
+                    error("Cannot infer type from call expression with no callee.", expr);
                     return {TypeKind::Error, {}};
+                }
                 const Parser::ASTNode &callee = expr.children.front();
                 std::string name;
                 if (callee.type == Parser::NodeType::Identifier)
@@ -614,7 +624,10 @@ namespace Checker
             case Parser::NodeType::UnaryExpr:
             {
                 if (expr.children.empty())
+                {
+                    error("Cannot infer type from unary expression with no operand.", expr);
                     return {TypeKind::Error, {}};
+                }
                 const Type operand = infer_expression_type(table, expr.children.front());
                 if (!std::holds_alternative<Lexer::Operator>(expr.value))
                     return operand;
@@ -634,7 +647,10 @@ namespace Checker
             case Parser::NodeType::IndexExpr:
             {
                 if (expr.children.size() != 2)
+                {
+                    error("Cannot infer type from index expression with invalid number of children.", expr);
                     return {TypeKind::Error, {}};
+                }
                 const Type receiver = infer_expression_type(table, expr.children.front());
                 if (receiver.kind == TypeKind::Array && receiver.innerType)
                     return *receiver.innerType;
@@ -642,10 +658,18 @@ namespace Checker
                     return *receiver.innerType;
                 const auto definition = registeredTypes.find(receiver.name);
                 if (definition == registeredTypes.end() || definition->second.indexedField.empty())
+                {
+                    error("Cannot infer type from index expression on non-array type '" + receiver.name + "'.", expr);
                     return {TypeKind::Error, {}};
+                }
                 const auto field = definition->second.members.find(definition->second.indexedField);
                 if (field == definition->second.members.end())
+                {
+                    error("Cannot infer type from index expression on type '" + receiver.name +
+                          "' with missing indexed field '" + definition->second.indexedField + "'.",
+                          expr);
                     return {TypeKind::Error, {}};
+                }
                 const Parser::ASTNode &backingNode = field->second.typeNode;
                 const Type backing = infer_type_from_node(backingNode);
                 if (!backing.innerType)
@@ -663,30 +687,46 @@ namespace Checker
             case Parser::NodeType::MemberAccessExpr:
             {
                 if (expr.children.empty())
+                {
+                    error("Member access on an empty expression.", expr);
                     return {TypeKind::Error, {}};
+                }
                 const Type receiver = infer_expression_type(table, expr.children.front());
-                const auto definition = registeredTypes.find(receiver.name);
+                const Type &aggregateReceiver =
+                    (receiver.kind == TypeKind::Pointer || receiver.kind == TypeKind::Reference) && receiver.innerType
+                        ? *receiver.innerType
+                    : receiver;
+                const auto definition = registeredTypes.find(aggregateReceiver.name);
                 if (definition == registeredTypes.end())
+                {
+                    error("Member access on unknown type '" + aggregateReceiver.name + "'.", expr);
                     return {TypeKind::Error, {}};
+                }
                 const std::string memberName = std::string(std::get<std::string_view>(expr.value));
                 const auto field = definition->second.members.find(memberName);
                 if (field == definition->second.members.end())
+                {
+                    error("Member '" + memberName + "' not found in type '" + aggregateReceiver.name + "'.", expr);
                     return {TypeKind::Error, {}};
+                }
                 const Type fieldType = infer_type_from_node(field->second.typeNode);
                 const auto generic = std::find(definition->second.genericParameters.begin(),
                                                definition->second.genericParameters.end(), fieldType.name);
                 if (generic != definition->second.genericParameters.end())
                 {
                     const size_t index = static_cast<size_t>(generic - definition->second.genericParameters.begin());
-                    if (index < receiver.genericArgs.size())
-                        return receiver.genericArgs[index];
+                    if (index < aggregateReceiver.genericArgs.size())   // was receiver.genericArgs — also wrong for the same reason
+                        return aggregateReceiver.genericArgs[index];
                 }
                 return fieldType;
             }
             case Parser::NodeType::ScopeAccessExpr:
             {
                 if (expr.children.empty())
+                {
+                    error("Scope access on an empty expression.", expr);
                     return {TypeKind::Error, {}};
+                }
                 const std::string enumName = scope_access_name(expr.children.front());
                 const std::string memberName = std::string(std::get<std::string_view>(expr.value));
                 const auto definition = registeredTypes.find(enumName);
@@ -694,13 +734,17 @@ namespace Checker
                     definition->second.members.find(memberName) == definition->second.members.end())
                 {
                     error("Unknown enum member '" + enumName + "::" + memberName + "'.", expr);
+                    return {TypeKind::Error, {}};
                 }
                 return Type(TypeKind::Enum, enumName);
             }
             case Parser::NodeType::BinaryExpr:
             {
                 if (expr.children.size() < 2)
+                {
+                    error("Cannot infer type from binary expression with less than two operands.", expr);
                     return {TypeKind::Error, {}};
+                }
 
                 const Type leftType = infer_expression_type(table, expr.children[0]);
                 const Type rightType = infer_expression_type(table, expr.children[1]);
@@ -735,12 +779,38 @@ namespace Checker
             case Parser::NodeType::AssignmentExpr:
             {
                 if (expr.children.size() < 2)
+                {
+                    error("Cannot infer type from assignment expression with less than two operands.", expr);
                     return {TypeKind::Error, {}};
+                }
                 return infer_expression_type(table, expr.children[1]);
             }
             default:
-                return {TypeKind::Error, {}};
+                {
+                    error("Cannot infer type for this expression.", expr);
+                    return {TypeKind::Error, {}};
+                }
             }
+        }
+
+        bool is_pointer_to_byte(const Type &type)
+        {
+            if (type.kind != TypeKind::Pointer || !type.innerType)
+                return false;
+            const TypeKind pointee = type.innerType->kind;
+            return pointee == TypeKind::U8 || pointee == TypeKind::I8 || pointee == TypeKind::Char;
+        }
+
+        bool string_literal_decays_to_pointer(const Type &declaredType, const Parser::ASTNode &argNode)
+        {
+            if (argNode.type != Parser::NodeType::StringLiteral)
+                return false;
+            if (is_pointer_to_byte(declaredType))
+                return true;
+            if (declaredType.kind == TypeKind::String &&
+               (declaredType.name == "str"))
+                return true;
+            return false;
         }
 
         bool is_assignable(const Type &declaredType, const Type &valueType)
@@ -760,8 +830,6 @@ namespace Checker
                 return is_assignable(declaredType.innerType ? *declaredType.innerType : Type{},
                                      valueType.innerType ? *valueType.innerType : Type{});
             }
-            if (declaredType.kind == TypeKind::Pointer && valueType.kind == TypeKind::String)
-                return true;
 
             if ((declaredType.kind == TypeKind::Array && valueType.kind == TypeKind::Pointer) ||
                 (declaredType.kind == TypeKind::Pointer && valueType.kind == TypeKind::Array))
@@ -784,10 +852,8 @@ namespace Checker
             }
             if (declaredType.kind == TypeKind::String || valueType.kind == TypeKind::String)
             {
-                if (declaredType.kind == TypeKind::Struct && declaredType.name == "str" &&
-                    valueType.kind == TypeKind::String)
-                    return true;
-                return declaredType.kind == TypeKind::String && valueType.kind == TypeKind::String;
+                return declaredType.kind == TypeKind::String && valueType.kind == TypeKind::String &&
+                       declaredType.name == valueType.name;
             }
             if (declaredType.kind == TypeKind::Array || valueType.kind == TypeKind::Array)
             {
@@ -797,6 +863,10 @@ namespace Checker
             }
             if (valueType.kind == TypeKind::Enum && is_numeric(declaredType.kind))
                 return true;
+            if (declaredType.kind == TypeKind::Struct || declaredType.kind == TypeKind::Class || declaredType.kind == TypeKind::Enum)
+            {
+                return valueType.kind == declaredType.kind && declaredType.name == valueType.name;
+            }
             if (declaredType.kind == valueType.kind)
                 return true;
             if (declaredType.kind == TypeKind::Struct || declaredType.kind == TypeKind::Class ||
@@ -804,6 +874,7 @@ namespace Checker
                 return valueType.kind == declaredType.kind && declaredType.name == valueType.name;
             if (is_numeric(declaredType.kind) && is_numeric(valueType.kind))
                 return true;
+
             return false;
         }
 
@@ -817,11 +888,14 @@ namespace Checker
                 return left.kind == TypeKind::Bool && right.kind == TypeKind::Bool;
             if (op == Lexer::Operator::ASSIGN)
                 return (left.kind == TypeKind::String && right.kind == TypeKind::String) ||
-                       (left.kind == right.kind && left.kind != TypeKind::Pointer);
+                       (left.kind == right.kind && left.name == right.name && left.kind != TypeKind::Pointer);
+            if (left.kind == TypeKind::Struct || left.kind == TypeKind::Class || left.kind == TypeKind::Enum)
+                return left.kind == right.kind && left.name == right.name;
             if (op == Lexer::Operator::LESS_THAN || op == Lexer::Operator::GREATER_THAN ||
                 op == Lexer::Operator::LESS_EQUAL || op == Lexer::Operator::GREATER_EQUAL)
                 return (is_numeric(left.kind) && is_numeric(right.kind)) ||
                        (left.kind == right.kind && left.kind != TypeKind::Pointer) ||
+                       (left.kind == TypeKind::Pointer && right.kind == TypeKind::Pointer) ||
                        (left.kind == TypeKind::Reference && right.kind == TypeKind::Reference);
             if ((left.kind == TypeKind::Pointer || left.kind == TypeKind::Reference) &&
                 is_numeric(right.kind) && (op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS))
@@ -829,6 +903,10 @@ namespace Checker
             if ((left.kind == TypeKind::Pointer || right.kind == TypeKind::Pointer) &&
                 (op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS))
                 return false;
+            if ((left.kind == TypeKind::Pointer || left.kind == TypeKind::Reference) &&
+                (right.kind == TypeKind::Pointer || right.kind == TypeKind::Reference) &&
+                (op == Lexer::Operator::EQUAL || op == Lexer::Operator::NOT_EQUAL))
+                return true;
             if (left.kind == TypeKind::Pointer || right.kind == TypeKind::Pointer ||
                 left.kind == TypeKind::Reference || right.kind == TypeKind::Reference)
                 return false;
@@ -889,6 +967,10 @@ namespace Checker
             if (child.type == Parser::NodeType::GenericParam)
                 def.genericParameters.push_back(std::string(std::get<std::string_view>(child.value)));
         }
+
+        // Publish the declaration before resolving member signatures so methods
+        // can refer to their enclosing type by name.
+        registeredTypes[def.name] = def;
 
         uint64_t enumMaximum = UINT64_MAX;
         if (def.isEnum && node.children.size() > 1 && node.children[1].type == Parser::NodeType::PrimitiveType)
@@ -1069,6 +1151,7 @@ namespace Checker
             return;
 
         std::vector<Type> argTypes;
+        std::vector<const Parser::ASTNode *> argNodes;
         bool hasExplicitGenericArguments = false;
         for (size_t i = 1; i < expr.children.size(); ++i)
         {
@@ -1078,6 +1161,7 @@ namespace Checker
                 continue;
             }
             argTypes.push_back(infer_expression_type(table, expr.children[i]));
+            argNodes.push_back(&expr.children[i]);
         }
 
         const auto &callee = expr.children.front();
@@ -1105,7 +1189,11 @@ namespace Checker
             }
             for (size_t i = 0; i < argTypes.size(); ++i)
             {
-                if (!hasExplicitGenericArguments && !is_assignable(symbol->paramTypes[i], argTypes[i]))
+                const bool cAbiWordConversion = symbol->isCFunction &&
+                    ((symbol->paramTypes[i].kind == TypeKind::Pointer && is_numeric(argTypes[i].kind)) ||
+                     (is_numeric(symbol->paramTypes[i].kind) && argTypes[i].kind == TypeKind::Pointer));
+                if (!hasExplicitGenericArguments && !is_assignable(symbol->paramTypes[i], argTypes[i]) &&
+                    !string_literal_decays_to_pointer(symbol->paramTypes[i], *argNodes[i]) && !cAbiWordConversion)
                 {
                     error("Function argument type mismatch.", callee);
                 }
@@ -1170,7 +1258,7 @@ namespace Checker
                     }
                     for (size_t i = 0; i < argTypes.size(); ++i)
                     {
-                        if (!is_assignable(methodIt->second.paramTypes[i], argTypes[i]))
+                        if (!is_assignable(methodIt->second.paramTypes[i], argTypes[i]) && !string_literal_decays_to_pointer(methodIt->second.paramTypes[i], *argNodes[i]))
                         {
                             error("Method argument type mismatch.", callee);
                         }
@@ -1413,6 +1501,7 @@ namespace Checker
                      child.type != Parser::NodeType::CustomType &&
                      child.type != Parser::NodeType::PointerType &&
                      child.type != Parser::NodeType::ReferenceType &&
+                     child.type != Parser::NodeType::StructInitExpr &&
                      child.type != Parser::NodeType::MoveExpr &&
                      child.type != Parser::NodeType::RefExpr)
             {
@@ -1424,7 +1513,7 @@ namespace Checker
                 {
                     error("Cannot implicitly copy a cleanup-owning value; use move or ref.", node);
                 }
-                if (!is_assignable(declaredType, valueType))
+                if (!is_assignable(declaredType, valueType) && !string_literal_decays_to_pointer(declaredType, child))
                 {
                     error("Type mismatch in assignment or initialization.", node);
                 }
@@ -1750,9 +1839,22 @@ namespace Checker
         {
             if (node.children.empty() || node.children.front().type != Parser::NodeType::Identifier)
                 return;
-            structNameStack.push_back(std::string(std::get<std::string_view>(node.children.front().value)));
+            const std::string structName = std::string(std::get<std::string_view>(node.children.front().value));
+            structNameStack.push_back(structName);
+
+            std::string nested = namespaceName;
+            if (!nested.empty())
+                nested += "::";
+            nested += structName;
+
             for (auto &child : node.children)
-                declare_function_symbols(table, child, namespaceName);
+            {
+                const bool isStaticFunction =
+                    (child.type == Parser::NodeType::FunctionDecl || child.type == Parser::NodeType::FunctionDef ||
+                     child.type == Parser::NodeType::CFunctionDecl || child.type == Parser::NodeType::CFunctionDef) &&
+                    (child.children.empty() || child.children[1].type != Parser::NodeType::Param /* no receiver */);
+                declare_function_symbols(table, child, isStaticFunction ? nested : namespaceName);
+            }
             structNameStack.pop_back();
             return;
         }
@@ -1770,6 +1872,8 @@ namespace Checker
             Symbol symbol;
             symbol.name = name;
             symbol.isFunction = true;
+            symbol.isCFunction = node.type == Parser::NodeType::CFunctionDecl ||
+                                 node.type == Parser::NodeType::CFunctionDef;
             std::vector<std::string> genericParameters;
             for (const auto &child : node.children)
                 if (child.type == Parser::NodeType::GenericParam)
@@ -1853,10 +1957,6 @@ namespace Checker
             break;
 
         case Parser::NodeType::VariableDecl:
-            if (functionBodyDepth == 0)
-            {
-                error("Top-level variable declarations are not supported; declare the value inside a function.", node);
-            }
             check_assignment_and_ownership(table, node);
             {
                 const auto validate_runtime_array_lengths = [&](const auto &self, const Parser::ASTNode &typeNode) -> void {
@@ -1964,8 +2064,7 @@ namespace Checker
                     }
                 }
             }
-            if (node.children.size() > 1 && node.children[1].type != Parser::NodeType::TunnelBindingExpr &&
-                !is_assignable(declared, infer_expression_type(table, node.children[1])))
+            if (node.children.size() > 1 && node.children[1].type != Parser::NodeType::TunnelBindingExpr && !is_assignable(declared, infer_expression_type(table, node.children[1])) && !string_literal_decays_to_pointer(declared, node.children[1]))
             {
                 error("Type mismatch in reserve initialization.", node);
             }
@@ -1989,6 +2088,19 @@ namespace Checker
             if (node.children.empty() || infer_expression_type(table, node.children.front()).kind != TypeKind::Bool)
             {
                 error("Boolean condition required for control flow.", node);
+            }
+            for (auto &child : node.children)
+                check_node(table, child);
+            break;
+        }
+
+        case Parser::NodeType::MatchStmt:
+        {
+            for (size_t index = 1; index < node.children.size(); ++index)
+            {
+                const Parser::ASTNode &arm = node.children[index];
+                if (arm.type == Parser::NodeType::MatchDefault && index + 1 != node.children.size())
+                    error("match default must be the final arm.", arm);
             }
             for (auto &child : node.children)
                 check_node(table, child);
@@ -2130,6 +2242,11 @@ namespace Checker
         case Parser::NodeType::EnumDecl:
             register_type_definition(node);
             break;
+        case Parser::NodeType::FunctionDecl:
+            for (const auto &child : node.children)
+                if (child.type == Parser::NodeType::GenericParam)
+                    error("generic function declarations require a definition.", child);
+            break;
         case Parser::NodeType::CFunctionDecl:
             for (const auto &child : node.children)
                 if (child.type == Parser::NodeType::OptionalType || child.type == Parser::NodeType::ArrayType)
@@ -2138,6 +2255,9 @@ namespace Checker
                 }
             break;
         case Parser::NodeType::UsingMacroDecl:
+            break;
+
+        case Parser::NodeType::InlineAsmStmt:
             break;
 
         case Parser::NodeType::ExportDecl:
@@ -2182,6 +2302,14 @@ namespace Checker
 
         case Parser::NodeType::FunctionDef:
         {
+            const bool isMain = !node.children.empty() && node.children.front().type == Parser::NodeType::Identifier &&
+                                std::get<std::string_view>(node.children.front().value) == "main";
+            if (isMain)
+            {
+                for (const auto &child : node.children)
+                    if (child.type == Parser::NodeType::TunnelSlot)
+                        error("main cannot declare tunnel outputs.", child);
+            }
             size_t genericsPushed = push_generic_params(node.children);
             bool prevInC = inCFunctionBody;
             inCFunctionBody = false;
@@ -2298,6 +2426,13 @@ namespace Checker
             if (node.children.size() != 3)
             {
                 error("Malformed foreach-loop.", node);
+            }
+            const Type iterableType = infer_expression_type(table, node.children[1]);
+            const bool isVector = (iterableType.kind == TypeKind::Struct || iterableType.kind == TypeKind::Class) &&
+                                  iterableType.name == "Vector";
+            if (iterableType.kind != TypeKind::Array && !isVector)
+            {
+                error("foreach requires a fixed-size array, T[length] runtime array, or Vector<T>.", node.children[1]);
             }
             table.push_scope();
             Symbol item;

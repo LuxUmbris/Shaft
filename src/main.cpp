@@ -66,6 +66,8 @@ namespace
         std::string runtimePath;
         std::string resourcePath;
         std::string targetTriple;
+        std::string packageName;
+        std::string packageVersion;
         OptimizationLevel optimization = OptimizationLevel::O2;
         std::vector<std::string> linkDirectories;
         std::vector<std::string> linkArguments;
@@ -318,6 +320,10 @@ namespace
         }
         if (fields.find("build.target") != fields.end())
             options.targetTriple = stringField("build.target");
+        if (fields.find("package.name") != fields.end())
+            options.packageName = stringField("package.name");
+        if (fields.find("package.version") != fields.end())
+            options.packageVersion = stringField("package.version");
         if (fields.find("build.native") != fields.end())
             options.nativeCpu = boolField("build.native");
         if (fields.find("build.no_std") != fields.end())
@@ -504,6 +510,11 @@ namespace
     class ProjectModuleLoader
     {
     public:
+        explicit ProjectModuleLoader(Lexer::Configuration configuration)
+            : configuration(std::move(configuration))
+        {
+        }
+
         std::vector<ImportedSource> load(const std::filesystem::path &entry)
         {
             visit(entry);
@@ -511,6 +522,7 @@ namespace
         }
 
     private:
+        Lexer::Configuration configuration;
         std::vector<ImportedSource> modules;
         std::unordered_set<std::string> visited;
         std::unordered_set<std::string> active;
@@ -528,7 +540,8 @@ namespace
             if (!active.emplace(key).second)
                 throw std::runtime_error("cyclic import involving '" + key + "'");
 
-            ImportedSource module = extract_imports(path, read_source(key));
+            const Lexer::Module source{path.string(), read_source(key)};
+            ImportedSource module = extract_imports(path, Lexer::preprocess_config_blocks(source, configuration));
             for (const std::string &import : module.imports)
                 visit(path.parent_path() / import);
             active.erase(key);
@@ -537,9 +550,10 @@ namespace
         }
     };
 
-    std::vector<ImportedSource> load_project_modules(const std::string &entryPath)
+    std::vector<ImportedSource> load_project_modules(const std::string &entryPath,
+                                                      const Lexer::Configuration &configuration)
     {
-        ProjectModuleLoader loader;
+        ProjectModuleLoader loader(configuration);
         return loader.load(entryPath);
     }
 
@@ -884,8 +898,12 @@ namespace
                                  "'; use --resources to set its directory");
     }
 
+    std::filesystem::path bundled_runtime(const Options &options, const char *argv0,
+                                          const std::string &targetTriple);
+    std::string selected_target_triple(const Options &options);
+
     std::vector<ImportedSource> source_modules_with_stdlib(const Options &options, const char *argv0,
-                                                        std::vector<ImportedSource> projectModules)
+                                                           std::vector<ImportedSource> projectModules)
     {
         if (options.noStd)
             return projectModules;
@@ -897,8 +915,15 @@ namespace
         if (std::filesystem::equivalent(stdlib, options.inputPath))
             return projectModules;
         std::vector<ImportedSource> modules;
-        modules.reserve(projectModules.size() + 1);
+        modules.reserve(projectModules.size() + 2);
         modules.push_back({"std/std.shaft", read_source(stdlib.string()), {}});
+        if (options.emit == EmitKind::Binary)
+        {
+            const std::filesystem::path runtime = bundled_runtime(options, argv0, selected_target_triple(options));
+            if (!std::filesystem::is_regular_file(runtime))
+                throw std::runtime_error("failed to read Shaft runtime '" + runtime.string() + "'");
+            modules.push_back({runtime.generic_string(), read_source(runtime.string()), {}});
+        }
         modules.insert(modules.end(), std::make_move_iterator(projectModules.begin()),
                        std::make_move_iterator(projectModules.end()));
         return modules;
@@ -915,11 +940,13 @@ namespace
         if (!options.runtimePath.empty())
             return options.runtimePath;
         if (target_is_linux(targetTriple))
-            return find_resource(options, argv0, "std/runtime/linux.c");
+            return find_resource(options, argv0, "std/runtime/linux.shaft");
+        if (targetTriple.find("macos") != std::string::npos)
+            return find_resource(options, argv0, "std/runtime/macos.shaft");
         if (targetTriple.find("darwin") != std::string::npos || targetTriple.find("apple") != std::string::npos)
-            return find_resource(options, argv0, "std/runtime/darwin.c");
+            return find_resource(options, argv0, "std/runtime/darwin.shaft");
         if (targetTriple.find("windows") != std::string::npos || targetTriple.find("mingw") != std::string::npos)
-            return find_resource(options, argv0, "std/runtime/windows.c");
+            return find_resource(options, argv0, "std/runtime/windows.shaft");
         throw std::runtime_error("no bundled runtime matches target '" + targetTriple + "'; use --runtime");
     }
 
@@ -948,11 +975,40 @@ namespace
         return result;
     }
 
+    Lexer::Configuration lexer_configuration(const Options &options)
+    {
+        Lexer::Configuration configuration;
+        configuration.values = {
+            {"build.entry", options.inputPath},
+            {"build.output", options.outputPath},
+            {"build.target", selected_target_triple(options)},
+            {"build.emit", emit_name(options.emit)},
+            {"build.optimization", optimization_name(options.optimization)},
+            {"build.no_std", options.noStd ? "true" : "false"},
+            {"build.native", options.nativeCpu ? "true" : "false"},
+            {"build.hosted", options.hosted ? "true" : "false"},
+            {"build.check_only", options.checkOnly ? "true" : "false"},
+            {"build.verbose", options.verbose ? "true" : "false"},
+        };
+        if (!options.stdlibPath.empty())
+            configuration.values.emplace("build.stdlib", options.stdlibPath);
+        if (!options.runtimePath.empty())
+            configuration.values.emplace("build.runtime", options.runtimePath);
+        if (!options.resourcePath.empty())
+            configuration.values.emplace("build.resources", options.resourcePath);
+        if (!options.packageName.empty())
+            configuration.values.emplace("package.name", options.packageName);
+        if (!options.packageVersion.empty())
+            configuration.values.emplace("package.version", options.packageVersion);
+        return configuration;
+    }
+
     void initialize_targets()
     {
         LLVMInitializeAllTargetInfos();
         LLVMInitializeAllTargets();
         LLVMInitializeAllTargetMCs();
+        LLVMInitializeAllAsmParsers();
         LLVMInitializeAllAsmPrinters();
     }
 
@@ -1121,6 +1177,66 @@ namespace
         return std::filesystem::temp_directory_path() / ("shaftc-hosted-" + std::to_string(stamp) + ".c");
     }
 
+    void inline_assembly_diagnostic_handler(LLVMDiagnosticInfoRef diagnostic, void *opaqueContext)
+    {
+        auto *context = static_cast<Codegen::Context *>(opaqueContext);
+        const Parser::ASTNode *node = context ? context->inlineAssemblyDiagnosticNode : nullptr;
+        char *descriptionText = LLVMGetDiagInfoDescription(diagnostic);
+        const std::string description = descriptionText ? descriptionText : "inline assembly error";
+        LLVMDisposeMessage(descriptionText);
+
+        constexpr const char *marker = "<inline asm>:";
+        if (node && node->mod_path && node->source && description.rfind(marker, 0) == 0)
+        {
+            const size_t messageStart = description.find(": ", std::char_traits<char>::length(marker));
+            const size_t messageEnd = description.find('\n');
+            const std::string message = messageStart == std::string::npos
+                                            ? description
+                                            : description.substr(messageStart + 2, messageEnd - messageStart - 2);
+
+            uint64_t sourcePosition = node->start;
+            const std::string_view assembly = std::get<std::string_view>(node->value);
+            const size_t diagnosticLineStart = messageEnd == std::string::npos ? description.size() : messageEnd + 1;
+            const size_t diagnosticLineEnd = description.find('\n', diagnosticLineStart);
+            const std::string_view diagnosticLine =
+                std::string_view(description).substr(diagnosticLineStart, diagnosticLineEnd - diagnosticLineStart);
+            const size_t diagnosticTextStart = diagnosticLine.find_first_not_of(" \t");
+            if (diagnosticTextStart != std::string_view::npos)
+            {
+                const std::string_view diagnosticText = diagnosticLine.substr(diagnosticTextStart);
+                const size_t assemblyOffset = static_cast<size_t>(assembly.data() - node->source->data());
+                for (size_t lineStart = 0; lineStart < assembly.size();)
+                {
+                    const size_t lineEnd = assembly.find('\n', lineStart);
+                    const size_t boundedLineEnd = lineEnd == std::string_view::npos ? assembly.size() : lineEnd;
+                    const std::string_view assemblyLine = assembly.substr(lineStart, boundedLineEnd - lineStart);
+                    const size_t assemblyTextStart = assemblyLine.find_first_not_of(" \t");
+                    if (assemblyTextStart != std::string_view::npos &&
+                        assemblyLine.substr(assemblyTextStart) == diagnosticText)
+                    {
+                        sourcePosition = assemblyOffset + lineStart + assemblyTextStart;
+                        const size_t caretLineStart = diagnosticLineEnd == std::string_view::npos ? description.size() : diagnosticLineEnd + 1;
+                        const size_t caret = description.find('^', caretLineStart);
+                        if (caret != std::string::npos && caret >= diagnosticLineStart + diagnosticTextStart)
+                        {
+                            const size_t column = caret - diagnosticLineStart - diagnosticTextStart;
+                            if (column < diagnosticText.size())
+                                sourcePosition += column;
+                        }
+                        break;
+                    }
+                    if (lineEnd == std::string_view::npos)
+                        break;
+                    lineStart = lineEnd + 1;
+                }
+            }
+            panic_at_source("inline assembly: " + message, *node->mod_path, sourcePosition, node->source);
+        }
+
+        // LLVM sends optimization remarks through this handler. Native-emission failures are
+        // returned by the emission API, so non-inline diagnostics must not become CLI noise.
+    }
+
     void emit_artifact(LLVMModuleRef module, const Options &options, const char *argv0)
     {
         const std::string targetTriple = selected_target_triple(options);
@@ -1169,15 +1285,7 @@ namespace
                 if (options.hosted)
                 {
                     std::vector<std::string> linker{SHAFT_CLANG_PATH, "-fuse-ld=" + lld, objectPath.string()};
-                    if (!options.noStd)
-                    {
-                        const std::filesystem::path runtime = bundled_runtime(options, argv0, targetTriple);
-                        if (!std::filesystem::is_regular_file(runtime))
-                            throw std::runtime_error("failed to read runtime '" + runtime.string() + "'");
-                        linker.emplace_back("-DSHAFT_HOSTED");
-                        linker.emplace_back(runtime.string());
-                    }
-                    else
+                    if (options.noStd)
                     {
                         LLVMValueRef entry = LLVMGetNamedFunction(module, "__main");
                         if (!entry || LLVMCountParams(entry) != 0 ||
@@ -1193,6 +1301,15 @@ namespace
                         bridge << "extern int __main(void); int main(void) { return __main(); }\n";
                         linker.emplace_back(hostedBridge.string());
                     }
+                    else
+                    {
+                        hostedBridge = temporary_hosted_bridge_path();
+                        std::ofstream bridge(hostedBridge);
+                        if (!bridge)
+                            throw std::runtime_error("failed to create hosted C entry bridge");
+                        bridge << "extern int __shaft_entry(int, char **); int main(int argc, char **argv) { return __shaft_entry(argc, argv); }\n";
+                        linker.emplace_back(hostedBridge.string());
+                    }
                     for (const std::string &directory : options.linkDirectories)
                     {
                         linker.emplace_back("-L" + directory);
@@ -1205,16 +1322,13 @@ namespace
                 }
                 else
                 {
-                    const std::filesystem::path runtime = bundled_runtime(options, argv0, targetTriple);
-                    if (!std::filesystem::is_regular_file(runtime))
-                        throw std::runtime_error("failed to read runtime '" + runtime.string() + "'");
                     if (!options.targetTriple.empty())
                     {
                         if (!target_is_linux(targetTriple))
                             throw std::runtime_error("cross-target binary linking currently supports Linux targets; emit an object for other targets");
                         std::vector<std::string> linker{SHAFT_CLANG_PATH, "--target=" + targetTriple, "-fuse-ld=" + lld,
-                                                        "-nostdlib", "-static", "-ffreestanding", "-fno-stack-protector",
-                                                        objectPath.string(), runtime.string()};
+                                                        "-nostdlib", "-static", "-ffreestanding", "-fno-stack-protector", "-fno-builtin-strlen",
+                                                        objectPath.string()};
                         linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
                         linker.emplace_back("-Wl,-e,_start");
                         linker.emplace_back("-o");
@@ -1224,7 +1338,7 @@ namespace
                     else
                     {
                         std::vector<std::string> linker{SHAFT_CLANG_PATH, "-fuse-ld=" + lld, "-nostdlib", "-static",
-                                                        "-ffreestanding", "-fno-stack-protector", objectPath.string(), runtime.string()};
+                                                        "-ffreestanding", "-fno-stack-protector", "-fno-builtin-strlen", objectPath.string()};
                         linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
                         linker.emplace_back("-Wl,-e,_start");
                         linker.emplace_back("-o");
@@ -1280,7 +1394,8 @@ int main(int argc, char **argv)
         if (inputSource.empty())
             throw std::runtime_error("source file is empty");
 
-        const std::vector<ImportedSource> projectModules = load_project_modules(options.inputPath);
+        const Lexer::Configuration configuration = lexer_configuration(options);
+        const std::vector<ImportedSource> projectModules = load_project_modules(options.inputPath, configuration);
         const std::vector<ImportedSource> sourceModules =
             source_modules_with_stdlib(options, argv[0], projectModules);
 
@@ -1289,7 +1404,7 @@ int main(int argc, char **argv)
         for (ImportedSource s : sourceModules)
             raw_modules.push_back({s.path, s.source});
 
-        Parser::parse(Lexer::tokenize_modules(raw_modules));
+        Parser::parse(Lexer::tokenize_modules(raw_modules, configuration));
 
         verbose(options, "checking");
         Checker::set_stdlib_enabled(!options.noStd);
@@ -1318,6 +1433,7 @@ int main(int argc, char **argv)
 
         verbose(options, "generating LLVM IR...");
         context = Codegen::create_context(options.inputPath.c_str());
+        LLVMContextSetDiagnosticHandler(context.llvmCtx, inline_assembly_diagnostic_handler, &context);
         context.stdlibEnabled = !options.noStd;
         context.targetPointerWidthBits =
             target_pointer_width_bits(context.llvmCtx, selected_target_triple(options), options);

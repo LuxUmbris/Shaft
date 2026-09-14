@@ -1,7 +1,7 @@
 if(NOT DEFINED SHAFTC OR NOT DEFINED SMOKE_SOURCE OR NOT DEFINED CLASS_INDEX_INIT_SOURCE OR NOT DEFINED INVALID_CLASS_INDEX_SOURCE OR
    NOT DEFINED ORDERED_USING_MACRO_SOURCE OR NOT DEFINED FORWARD_USING_MACRO_SOURCE OR NOT DEFINED DUPLICATE_USING_MACRO_SOURCE OR
    NOT DEFINED RECURSIVE_USING_MACRO_SOURCE OR NOT DEFINED INVALID_STRING_USING_MACRO_SOURCE OR NOT DEFINED NESTED_TEMPLATE_SOURCE OR
-   NOT DEFINED MALFORMED_NESTED_TEMPLATE_SOURCE OR NOT DEFINED QUALIFIED_TYPES_SOURCE OR
+   NOT DEFINED MALFORMED_NESTED_TEMPLATE_SOURCE OR NOT DEFINED SELF_TYPE_METHOD_SOURCE OR NOT DEFINED QUALIFIED_TYPES_SOURCE OR
    NOT DEFINED STD_HASH_COLLECTIONS_SOURCE OR NOT DEFINED STD_ENTRY_SOURCE OR NOT DEFINED STDLIB_SOURCE OR NOT DEFINED UNKNOWN_CALL_SOURCE OR
    NOT DEFINED DUPLICATE_DEFINITION_SOURCE OR NOT DEFINED LLVM_AS OR NOT DEFINED WORK_DIR)
     message(FATAL_ERROR "The shaftc smoke-test inputs are incomplete")
@@ -117,7 +117,8 @@ foreach(case duplicate-using-macro recursive-using-macro invalid-string-using-ma
     if(result EQUAL 0)
         message(FATAL_ERROR "Unsafe using macro case '${case}' compiled successfully")
     endif()
-    string(FIND "${error}" "${expected}" error_offset)
+    string(TOLOWER "${error}" normalized_error)
+    string(FIND "${normalized_error}" "${expected}" error_offset)
     if(error_offset EQUAL -1)
         message(FATAL_ERROR "Unexpected ${case} diagnostic (${result}):\n${output}${error}")
     endif()
@@ -137,6 +138,15 @@ if(NOT result EQUAL 42)
 endif()
 
 execute_process(
+    COMMAND "${SHAFTC}" --no-std --check-only "${SELF_TYPE_METHOD_SOURCE}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "shaftc rejected a class method using its own type (${result}):\n${output}${error}")
+endif()
+
+execute_process(
     COMMAND "${SHAFTC}" --emit llvm -o "${WORK_DIR}/malformed-nested-template.ll" "${MALFORMED_NESTED_TEMPLATE_SOURCE}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
@@ -144,7 +154,8 @@ execute_process(
 if(result EQUAL 0)
     message(FATAL_ERROR "A malformed nested template compiled successfully")
 endif()
-string(FIND "${error}" "Error at line" error_offset)
+string(TOLOWER "${error}" malformed_error)
+string(FIND "${malformed_error}" "error:" error_offset)
 if(error_offset EQUAL -1)
     message(FATAL_ERROR "Unexpected malformed nested template diagnostic (${result}):\n${output}${error}")
 endif()

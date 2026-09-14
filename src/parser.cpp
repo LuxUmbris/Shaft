@@ -19,6 +19,7 @@ namespace Parser
     static ASTNode parse_statement();
     static ASTNode parse_return_statement();
     static ASTNode parse_expression_statement();
+    static ASTNode parse_inline_asm_statement();
     static ASTNode parse_if_statement();
     static ASTNode parse_valid_statement();
     static ASTNode parse_match_statement();
@@ -257,29 +258,39 @@ namespace Parser
             return is_primitive_type_keyword(kw) || kw == Lexer::Keyword::MUT;
         }
         if (check_op(Lexer::Operator::MULTIPLY) || check_op(Lexer::Operator::AMPERSAND) ||
-            check_op(Lexer::Operator::QUESTION_MARK))
+            check_op(Lexer::Operator::QUESTION_MARK) || check_op(Lexer::Operator::LEFT_PAREN))
             return true;
         return at_custom_type_var_decl_start();
     }
 
-    // A leading '*' or '&' may begin either a type or a unary expression. Only
-    // treat it as a declaration when a complete type is followed by a name.
-    static bool at_variable_declaration_start()
+    // Scan a type without constructing an AST, so declarations beginning with
+    // a pointer/reference or parenthesized type remain distinguishable from expressions.
+    static bool skip_type_node(uint64_t &offset)
     {
-        uint64_t offset = 0;
         if (check_kw(Lexer::Keyword::MUT, offset))
+        {
             ++offset;
-        while (check_op(Lexer::Operator::MULTIPLY, offset) ||
-               check_op(Lexer::Operator::AMPERSAND, offset) ||
-               check_op(Lexer::Operator::QUESTION_MARK, offset))
+            return skip_type_node(offset);
+        }
+
+        if (check_op(Lexer::Operator::MULTIPLY, offset) || check_op(Lexer::Operator::AMPERSAND, offset) ||
+            check_op(Lexer::Operator::QUESTION_MARK, offset))
         {
             ++offset;
             if (check_kw(Lexer::Keyword::MUT, offset))
                 ++offset;
+            return skip_type_node(offset);
         }
 
-        if (check(Lexer::TokenType::Keyword, offset) &&
-            is_primitive_type_keyword(std::get<Lexer::Keyword>(peek(offset).value)))
+        if (check_op(Lexer::Operator::LEFT_PAREN, offset))
+        {
+            ++offset;
+            if (!skip_type_node(offset) || !check_op(Lexer::Operator::RIGHT_PAREN, offset))
+                return false;
+            ++offset;
+        }
+        else if (check(Lexer::TokenType::Keyword, offset) &&
+                 is_primitive_type_keyword(std::get<Lexer::Keyword>(peek(offset).value)))
         {
             ++offset;
         }
@@ -322,7 +333,15 @@ namespace Parser
                 return false;
             ++offset;
         }
-        return check(Lexer::TokenType::Identifier, offset);
+        return true;
+    }
+
+    // A leading '*' or '&' may begin either a type or a unary expression. Only
+    // treat it as a declaration when a complete type is followed by a name.
+    static bool at_variable_declaration_start()
+    {
+        uint64_t offset = 0;
+        return skip_type_node(offset) && check(Lexer::TokenType::Identifier, offset);
     }
 
     static void syncronize()
@@ -710,6 +729,14 @@ namespace Parser
 
     static ASTNode parse_type_node_base()
     {
+        if (check_op(Lexer::Operator::LEFT_PAREN))
+        {
+            advance();
+            ASTNode type = parse_type_node();
+            consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after parenthesized type");
+            return type;
+        }
+
         if (check_op(Lexer::Operator::MULTIPLY))
         {
             Lexer::Token star_token = advance();
@@ -894,6 +921,13 @@ namespace Parser
         ASTNode node{NodeType::ExprStmt, expr.start, expr.mod_path, expr.source, std::monostate{}, {}};
         node.children.push_back(expr);
         return node;
+    }
+
+    static ASTNode parse_inline_asm_statement()
+    {
+        Lexer::Token token = advance();
+        return ASTNode{NodeType::InlineAsmStmt, token.start, token.mod_path, token.source,
+                       std::get<std::string_view>(token.value), {}};
     }
 
     static ASTNode parse_if_statement()
@@ -1211,6 +1245,9 @@ namespace Parser
 
     static ASTNode parse_statement()
     {
+        if (check(Lexer::TokenType::InlineAsm))
+            return parse_inline_asm_statement();
+
         if (at_state_binding_start())
             return parse_state_binding_decl();
 
@@ -1793,6 +1830,9 @@ namespace Parser
     {
         Lexer::Token token = peek();
 
+        if (check(Lexer::TokenType::InlineAsm))
+            return parse_inline_asm_statement();
+
         if (at_state_binding_start())
             return parse_state_binding_decl();
 
@@ -1912,6 +1952,7 @@ namespace Parser
         case NodeType::BreakStmt: return "BreakStmt";
         case NodeType::ContinueStmt: return "ContinueStmt";
         case NodeType::ExprStmt: return "ExprStmt";
+        case NodeType::InlineAsmStmt: return "InlineAsmStmt";
         case NodeType::ReturnStmt: return "ReturnStmt";
         case NodeType::PrimitiveType: return "PrimitiveType";
         case NodeType::PointerType: return "PointerType";

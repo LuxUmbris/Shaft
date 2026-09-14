@@ -57,9 +57,18 @@ test('grammar scopes custom types, macros, global, and boolean literals', () => 
   const grammar = require('../syntaxes/shaft.tmLanguage.json');
   assert.match(grammar.repository.declarations.patterns[0].captures['3'].name, /entity\.name\.type/);
   assert.match(grammar.repository.customTypes.patterns[0].match, /reserve/);
-  assert.match(grammar.repository.macros.patterns[0].match, /!/);
+  const functionMacros = grammar.repository.macros.patterns.find((pattern) => pattern.match?.includes('!'));
+  assert.match(functionMacros.match, /!/);
   assert.match(grammar.repository.keywords.match, /global/);
   assert.match(grammar.repository.booleans.match, /true\|false/);
+});
+
+test('grammar scopes imports and @config/@asm metaprogramming directives', () => {
+  const grammar = require('../syntaxes/shaft.tmLanguage.json');
+  assert.match(grammar.repository.keywords.match, /import/);
+  const directives = grammar.repository.macros.patterns.find((pattern) => pattern.match?.includes('config'));
+  assert.ok(directives);
+  assert.match(directives.name, /preprocessor/);
 });
 
 test('grammar scopes qualified custom types at arbitrary namespace depth', () => {

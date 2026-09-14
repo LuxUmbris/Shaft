@@ -4,7 +4,7 @@
 
 ### Whitespace, comments, and identifiers
 
-Whitespace separates tokens. Line comments begin with `//`; block comments use `/* ... */`; documentation comments written as `///` are comments to the compiler and are consumed by the VS Code tooling for hover documentation.
+Whitespace separates tokens. Line comments begin with `//`; block comments use `/* ... */`; documentation comments use `///`. All three comment forms are ignored by the compiler. The current native `shaftls` server does not derive hover content or compiler diagnostics from documentation comments.
 
 Identifiers are distinct from keywords. Qualified identifiers use `::`:
 
@@ -80,7 +80,7 @@ Backend representation in this revision:
 | `f64` | `double` |
 | enum | declared integral backing type; `i32` when omitted |
 
-`usize` is lowered to an unsigned integer matching the selected target's native pointer width. `State` and `Thread` both use the executable cooperative deferred-call semantics described in §11. A `Thread` binding is a deterministic task handle, not a host OS thread.
+`usize` is lowered to an unsigned integer matching the selected target's native pointer width. `State` is an executable cooperative deferred-call handle. `Thread` is distinct: on the Linux x86_64 freestanding runtime it creates a native concurrent execution context as described in §11.
 
 ### Compound and named types
 
@@ -89,7 +89,7 @@ The grammar accepted for types is:
 ```text
 type           ::= type-prefix* type-base array-suffix*
 type-prefix    ::= "mut" | "*" ["mut"] | "&" ["mut"] | "?"
-type-base      ::= primitive-type | qualified-name ["<" type ("," type)* ">"]
+type-base      ::= primitive-type | qualified-name ["<" type ("," type)* ">"] | "(" type ")"
 array-suffix   ::= "[" [integer-literal | identifier] "]"
 qualified-name ::= identifier ("::" identifier)*
 ```
@@ -99,13 +99,15 @@ Examples:
 ```shaft
 * i8 rawBytes;
 &mut u64 writer;
+&(u8[64]) wholeBuffer;
+mut (mut u8)[64] writableBytes;
 ?String maybeName;
 u8[16] fixed;
 String[] argv;
 Collections::HashMap<String, u64> counts;
 ```
 
-A fixed-size array `T[N]` lowers to an LLVM array. A named runtime array `T[name]` requires a previously declared `u64` or `usize` local length binding; the allocation snapshots that count, and named runtime arrays cannot be struct or class fields. `T[]` is the borrowed pointer-style form used where a separate count is supplied by the surrounding ABI. Pointer and reference types both lower as opaque LLVM pointers. References carry checker-enforced lexical aliasing: one `&mut T` writer is exclusive, while any number of `&T` readers may coexist; readers and a writer may not coexist.
+A parenthesized type is transparent grouping, but it controls which type an array suffix or prefix wraps: `&(u8[64])` is a reference to one 64-byte array, while `mut (mut u8)[64]` is a mutable fixed array whose `u8` members are mutable. A fixed-size array `T[N]` lowers to an LLVM array. A named runtime array `T[name]` requires a previously declared `u64` or `usize` local length binding; the allocation snapshots that count, and named runtime arrays cannot be struct or class fields. `T[]` is the borrowed pointer-style form used where a separate count is supplied by the surrounding ABI. Pointer and reference types both lower as opaque LLVM pointers. References carry checker-enforced lexical aliasing: one `&mut T` writer is exclusive, while any number of `&T` readers may coexist; readers and a writer may not coexist.
 
 Qualified custom type identity is canonical: `Left::Token` and `Right::Token` are distinct types.
 
@@ -113,7 +115,7 @@ Optional values lower to a tagged LLVM aggregate containing a presence flag and 
 
 ### Generic syntax
 
-Structs, classes, and Shaft `def`/`dec` declarations accept simple name-only generic parameter lists. Named types and explicit generic calls accept type arguments. Nested closing `>>` is accepted as two generic closers.
+Structs, classes, and Shaft `def` definitions accept simple name-only generic parameter lists. `dec` declarations cannot be generic because generic functions require a Shaft definition for specialization. Named types and explicit generic calls accept type arguments. Nested closing `>>` is accepted as two generic closers.
 
 ```shaft
 struct<T, U> Pair { T first; U second; }
@@ -192,7 +194,7 @@ Shaft functions use output tunnels rather than a C return value:
 definition ::= "def" ["async"] identifier "(" parameters? ")"
                ["<" generic-parameters ">"] tunnel-slots block
 declaration ::= "dec" ["async"] identifier "(" parameters? ")"
-               ["<" generic-parameters ">"] tunnel-slots ";"
+               tunnel-slots ";"
 tunnel-slots ::= [ ["?"] "->" type identifier ]
 ```
 
@@ -202,7 +204,7 @@ def add(i32 lhs, i32 rhs) -> i32 result {
 }
 ```
 
-A non-optional tunnel slot must be populated on every checked path. The checker rejects missing required slots, unknown slot names, type mismatches, and a slot that may be written more than once. `tunnel value -> T slot;` must restate the slot type syntactically; the checker compares it with the declared slot type. `async def` and `async dec` are cooperative callable declarations: they use the same native tunnel ABI as `def`/`dec` and can be scheduled through `State` or `Thread` with `start` and `await`.
+A non-optional tunnel slot must be populated on every checked path. The checker rejects missing required slots, unknown slot names, type mismatches, and a slot that may be written more than once. `tunnel value -> T slot;` must restate the slot type syntactically; the checker compares it with the declared slot type. `async def` and `async dec` use the same native tunnel ABI as `def`/`dec`; they can be scheduled cooperatively through `State`. A native `Thread` entry must instead be a non-generic void `def` without tunnel outputs.
 
 `def` lowers as an LLVM `void` function with tunnel results passed as output pointers. Optional results additionally receive native presence-flag output pointers; an unfilled result produces an absent optional, while a tunneled value produces a present optional with its payload. A single tunnel may be used as a call expression. Bind multiple required outputs exactly once with `reserve T first, U second = call();`; each binding receives its corresponding slot in declaration order. A direct `__shaft_alloc` or `__shaft_alloc_or_exit` result, or an aggregate containing compiler-owned allocation storage, cannot be tunneled because tunnel payloads do not yet transport ownership metadata.
 
@@ -395,6 +397,22 @@ A `using` macro is a scoped lexer expansion. Object-like macros use an identifie
 
 `using` is private to its source module and lexical scope. `using global` exports an alias to later compiler source modules. The standard prelude uses `using global` for its public output convenience macros: `print!` and `println!`; they are available from application source. Its other internal macros remain private. Local declarations shadow global ones. An invocation of an unavailable `name!(...)` is a lexer error, preventing accidental fallback to an ordinary expression.
 
+### Configuration blocks and inline assembly
+
+```shaft
+@config.build.target = "x86_64-unknown-linux-gnu"
+@asm
+    nop
+@end
+@end
+```
+
+`@config.<build|package>.<field> = value` starts a lexer macro block, closed by a matching `@end`. The lexer compares the value exactly against the active compiler configuration. A matching block contributes its contents to the token stream; a nonmatching block is removed before imports, parsing, macro expansion, checking, and code generation. Nested `@config` blocks and `@asm` blocks are matched correctly. This makes target-specific source safe: code that is invalid for another target can live in a nonmatching block.
+
+The supported scalar `build` fields are `entry`, `output`, `target`, `emit`, `optimization`, `stdlib`, `runtime`, `resources`, `no_std`, `native`, `hosted`, `check_only`, and `verbose`. The supported `package` fields are `name` and `version`, supplied by `Shaft.build`; an unavailable field simply does not match. Array-valued build fields (`links` and `link_directories`) are intentionally not comparable. Strings may be quoted; booleans use `true` or `false`.
+
+`@asm ... @end` is a function-body statement containing raw target assembly. It lowers to a side-effecting LLVM inline-assembly call with no Shaft operands or results, so it is suitable for target-specific instructions such as `nop`, barriers, or fixed-register sequences. Use a surrounding target configuration block when the assembly is ISA-specific. The assembler syntax is the selected LLVM target's default (AT&T for x86); malformed or unsupported assembly is rejected by LLVM during native emission.
+
 ### Compiler-provided `printf`
 
 With the standard prelude enabled (the default), `printf` is a compiler-provided formatting intrinsic, not a declaration from `std`:
@@ -462,9 +480,23 @@ Error [L:C]: checker message
 Warning [L:C]: checker warning
 ```
 
-`shaftc --check-only` stops after lexing, parsing, and checking. It is appropriate for editor diagnostics; use a normal compile to validate target-specific linking and artifact emission.
+`shaftc --check-only` stops after lexing, parsing, and checking. It is appropriate for CI and explicit editor-side validation; the current native `shaftls` server does not invoke `shaftc`, so its diagnostics are limited to structural brace matching.
 
 Without `--check-only`, the compiler creates an LLVM module and emits one requested artifact. `--emit` accepts `llvm`, `object`, `asm`, `staticlib`, `dynamiclib`, and `binary`. `--target <LLVM-target-triple>` validates and selects an LLVM target for IR/native emission. Cross-target binary/static/dynamic linking still depends on a compatible external linker and runtime; target selection alone does not provide a cross-runtime.
+
+## Editor protocol and integrations
+
+`shaftls` is the native, dependency-free LSP server. It speaks JSON-RPC 2.0 over standard input/output using `Content-Length` framing; stdout is reserved for protocol frames. The server is tooling rather than a source-language semantic authority: it implements lifecycle, document open/change/close synchronization, semantic tokens, and structural brace diagnostics.
+
+Its semantic-token classification currently covers the `import` keyword, import paths, and the `@config`, `@asm`, and `@end` meta directives. Brace diagnostics report unmatched closing braces and unclosed opening braces. The server does not currently run the compiler or perform parsing, import resolution, type checking, completion, hover, definition lookup, document symbols, or formatting. Editor integrations must not represent those unimplemented operations as language validation.
+
+Install the server with `shaftc` and optionally install the shipped editor integrations:
+
+```sh
+python3 install.py --vscode --vim --neovim
+```
+
+The VS Code client starts `shaftls` from `PATH` unless `shaft.languageServer.serverPath` supplies an explicit executable. Vim starts `g:shaftls_cmd` when set, otherwise `shaftls`; Neovim starts `opts.cmd` when provided to `require('shaft').setup(opts)`, otherwise `shaftls`. The installed Neovim plugin calls that setup automatically. See the repository `README.md` for target paths and the VS Code prerequisites (`code`, `node`, and `zip`).
 
 ## Async states and named tasks
 
@@ -473,23 +505,22 @@ def worker(*i32 output) {
     *output = 41;
 }
 
+// `State` is cooperative and executes on the caller.
 State worker(&result) state;
 start state;
 await state;
 
-// `Thread` uses the same deterministic cooperative lifecycle.
+// `Thread` starts `worker` concurrently; await joins it.
 Thread worker(&result) workerThread;
 start workerThread;
 await workerThread;
-
-workerTask {
-    result = result + 1;
-}
 ```
 
-`State call(args) name;` and `Thread call(args) name;` store a deferred call. `start name;` runs that call once. `await name` observes completion and starts a not-yet-started task before observing it, so both forms have a single deterministic execution point. They are checker-visible lexical bindings and are released when their enclosing scope ends. `Thread` deliberately has no host-thread, scheduler, or libc dependency: it is the named cooperative-handle spelling.
+`State call(args) name;` stores a deferred call. `start name;` runs that call once on the caller, and `await name` starts a not-yet-started state before observing its completion.
 
-A named task block uses `identifier { ... }`. It is an executable cooperative task unit: the block runs in deterministic program order, can use enclosing addressable values, and composes with `State`, `start`, and `await` without a libc or host-thread dependency. The native regression executes a `def` through a `State`, awaits it, executes a named task block, and exits with `42`.
+`Thread call(args) name;` captures a call at `start name;`, creates a native Linux x86_64 execution context, and runs the target concurrently. `await name` joins that execution context; it also starts an unstarted thread before joining it. Scope cleanup also joins a started Thread before releasing its locals. Thread entry points currently must be non-generic free Shaft `def` functions with no tunnel outputs. The argument values are captured at `start`; pointer arguments still point to their original storage, which must remain valid until `await` or scope exit. Each handle starts once. A lexical Thread binding has one capture slot, so re-entering that binding while its previous invocation is still active terminates with status `72` rather than corrupting its captured arguments. `Thread` uses Linux `clone` plus futex completion, without libc or a hosted runtime; Linux runtime allocation metadata and buffered stdin are serialized. Shaft does not yet provide source-level atomics or race diagnostics, so application mutable state shared across Threads must be externally serialized. Other runtime targets reject the ABI at link time until their native thread backends are implemented.
+
+A named task block uses `identifier { ... }`. It remains an executable cooperative task unit: the block runs in deterministic program order, can use enclosing addressable values, and composes with `State`, `start`, and `await`.
 
 ## 12. Networking
 
@@ -515,7 +546,7 @@ Network::close(&client);
 
 `Network::tcp_listen_ipv4(address, port, backlog)` creates a synchronous TCP listener and `Network::accept(&listener)` waits for one client. This is the simplest shape for a one-request-at-a-time HTTP host.
 
-`Network::set_nonblocking(&socket)` switches a listener or connected socket to nonblocking mode. Then `Network::try_accept`, `Network::try_send`, and `Network::try_receive` return `-2` when their operation would block, allowing an application to poll multiple sessions without one idle peer stopping the loop. `try_send` may write only a prefix; retain the unsent suffix and retry it later. These calls are async-ready, not hidden parallelism: Shaft's `State`/`Thread` execution is deterministic and cooperative, so an `async def` cannot itself make a blocking host syscall concurrent or faster. Use the `try_*` API for responsiveness/multiplexing; add an OS event loop or host-thread runtime only when true parallel I/O is deliberately designed and implemented.
+`Network::set_nonblocking(&socket)` switches a listener or connected socket to nonblocking mode. Then `Network::try_accept`, `Network::try_send`, and `Network::try_receive` return `-2` when their operation would block, allowing an application to poll multiple sessions without one idle peer stopping the loop. `try_send` may write only a prefix; retain the unsent suffix and retry it later. `State` is cooperative, while Linux x86_64 `Thread` can run an eligible void `def` concurrently; use nonblocking APIs when multiplexing is sufficient and Thread only when shared-state synchronization and native concurrency are deliberately designed.
 
 ## 13. Test-backed portable subset
 

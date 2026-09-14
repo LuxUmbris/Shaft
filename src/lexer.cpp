@@ -32,6 +32,179 @@ namespace Lexer
 
     static std::deque<std::string> sourceArchive;
     static std::deque<std::string> modPathArchive;
+    static Configuration activeConfiguration;
+
+    static std::string trim_directive(std::string_view text)
+    {
+        size_t first = 0;
+        while (first < text.size() && (text[first] == ' ' || text[first] == '\t' || text[first] == '\r' ||
+                                       text[first] == '\n'))
+            ++first;
+        size_t last = text.size();
+        while (last > first && (text[last - 1] == ' ' || text[last - 1] == '\t' ||
+                                text[last - 1] == '\r' || text[last - 1] == '\n'))
+            --last;
+        return std::string(text.substr(first, last - first));
+    }
+
+    [[noreturn]] static void config_macro_error(const std::string &path, size_t lineNumber,
+                                                 const std::string &message)
+    {
+        throw std::runtime_error(path + ":" + std::to_string(lineNumber) + ": " + message);
+    }
+
+    static std::string decode_config_value(std::string value, const std::string &path, size_t lineNumber)
+    {
+        value = trim_directive(value);
+        if (value.empty())
+            config_macro_error(path, lineNumber, "@config requires a value after '='");
+        if (value.front() != '"')
+            return value;
+        if (value.size() < 2 || value.back() != '"')
+            config_macro_error(path, lineNumber, "@config string values must be quoted and terminated");
+
+        std::string decoded;
+        for (size_t index = 1; index + 1 < value.size(); ++index)
+        {
+            if (value[index] != '\\')
+            {
+                decoded += value[index];
+                continue;
+            }
+            if (++index + 1 >= value.size())
+                config_macro_error(path, lineNumber, "@config string value has an incomplete escape");
+            switch (value[index])
+            {
+            case '\\': decoded += '\\'; break;
+            case '"': decoded += '"'; break;
+            case 'n': decoded += '\n'; break;
+            case 't': decoded += '\t'; break;
+            default: config_macro_error(path, lineNumber, "@config string value has an unsupported escape");
+            }
+        }
+        return decoded;
+    }
+
+    static bool parse_config_header(std::string_view lineText, const std::string &path, size_t lineNumber,
+                                    std::string &field, std::string &value)
+    {
+        const std::string directive = trim_directive(lineText);
+        constexpr std::string_view prefix = "@config.";
+        if (directive.rfind(prefix, 0) != 0)
+            return false;
+        const size_t equals = directive.find('=');
+        if (equals == std::string::npos)
+            config_macro_error(path, lineNumber, "@config requires '= value'");
+        field = trim_directive(std::string_view(directive).substr(prefix.size(), equals - prefix.size()));
+        const size_t dot = field.find('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 == field.size() ||
+            field.find('.', dot + 1) != std::string::npos)
+            config_macro_error(path, lineNumber, "@config requires @config.<build|package>.<field> = value");
+        const std::string table = field.substr(0, dot);
+        if (table != "build" && table != "package")
+            config_macro_error(path, lineNumber, "@config table must be 'build' or 'package'");
+        value = decode_config_value(directive.substr(equals + 1), path, lineNumber);
+        return true;
+    }
+
+    static bool is_asm_header(std::string_view lineText)
+    {
+        return trim_directive(lineText) == "@asm";
+    }
+
+    static bool is_end_directive(std::string_view lineText)
+    {
+        return trim_directive(lineText) == "@end";
+    }
+
+    static std::string blank_directive_range(std::string_view text)
+    {
+        std::string blank;
+        blank.reserve(text.size());
+        for (char character : text)
+            if (character == '\n' || character == '\r')
+                blank += character;
+        return blank;
+    }
+
+    static size_t line_end(const std::string &text, size_t start)
+    {
+        const size_t newline = text.find('\n', start);
+        return newline == std::string::npos ? text.size() : newline + 1;
+    }
+
+    static size_t matching_macro_end(const std::string &text, size_t bodyStart, const std::string &path,
+                                     size_t openingLine)
+    {
+        size_t cursor = bodyStart;
+        size_t depth = 1;
+        while (cursor < text.size())
+        {
+            const size_t end = line_end(text, cursor);
+            const std::string_view lineText(text.data() + cursor, end - cursor);
+            const std::string directive = trim_directive(lineText);
+            if (directive.rfind("@config.", 0) == 0 || is_asm_header(lineText))
+                ++depth;
+            else if (is_end_directive(lineText) && --depth == 0)
+                return cursor;
+            cursor = end;
+        }
+        config_macro_error(path, openingLine, "macro block was never terminated with @end");
+    }
+
+    static std::string filter_config_blocks(const std::string &text, size_t begin, size_t limit,
+                                            const std::string &path, size_t firstLine,
+                                            const Configuration &configuration)
+    {
+        std::string filtered;
+        size_t cursor = begin;
+        size_t lineNumber = firstLine;
+        while (cursor < limit)
+        {
+            const size_t end = line_end(text, cursor);
+            const std::string_view lineText(text.data() + cursor, end - cursor);
+            std::string field;
+            std::string value;
+            if (parse_config_header(lineText, path, lineNumber, field, value))
+            {
+                const size_t bodyStart = end;
+                const size_t closeStart = matching_macro_end(text, bodyStart, path, lineNumber);
+                const size_t closeEnd = line_end(text, closeStart);
+                const auto configured = configuration.values.find(field);
+                const bool enabled = configured != configuration.values.end() && configured->second == value;
+                filtered += blank_directive_range(lineText);
+                if (enabled)
+                {
+                    size_t bodyFirstLine = lineNumber + 1;
+                    filtered += filter_config_blocks(text, bodyStart, closeStart, path, bodyFirstLine, configuration);
+                }
+                else
+                {
+                    filtered += blank_directive_range(
+                        std::string_view(text.data() + bodyStart, closeStart - bodyStart));
+                }
+                filtered += blank_directive_range(std::string_view(text.data() + closeStart, closeEnd - closeStart));
+                lineNumber += static_cast<size_t>(std::count(text.begin() + cursor, text.begin() + closeEnd, '\n'));
+                cursor = closeEnd;
+                continue;
+            }
+            if (is_end_directive(lineText))
+                config_macro_error(path, lineNumber, "@end has no matching @config or @asm block");
+            if (is_asm_header(lineText))
+            {
+                const size_t closeStart = matching_macro_end(text, end, path, lineNumber);
+                const size_t closeEnd = line_end(text, closeStart);
+                filtered.append(text, cursor, closeEnd - cursor);
+                lineNumber += static_cast<size_t>(std::count(text.begin() + cursor, text.begin() + closeEnd, '\n'));
+                cursor = closeEnd;
+                continue;
+            }
+            filtered.append(text, cursor, end - cursor);
+            lineNumber += static_cast<size_t>(std::count(text.begin() + cursor, text.begin() + end, '\n'));
+            cursor = end;
+        }
+        return filtered;
+    }
 
     inline bool is_whitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
     inline bool is_digit(char c) { return c >= '0' && c <= '9'; }
@@ -764,6 +937,18 @@ namespace Lexer
         return resolved;
     }
 
+    static Token parse_inline_asm()
+    {
+        const uint64_t start = pos;
+        const size_t headerEnd = line_end(source, pos);
+        const size_t bodyStart = headerEnd;
+        const size_t closeStart = matching_macro_end(source, bodyStart, current_mod_path, line);
+        const size_t closeEnd = line_end(source, closeStart);
+        pos = closeEnd;
+        return Token{TokenType::InlineAsm, start,
+                     std::string_view(source).substr(bodyStart, closeStart - bodyStart), &source, &current_mod_path};
+    }
+
     Token next_token()
     {
         skip_whitespace_and_comments();
@@ -775,6 +960,9 @@ namespace Lexer
         }
 
         char c = peek();
+
+        if (c == '@' && is_asm_header(std::string_view(source).substr(pos, line_end(source, pos) - pos)))
+            return parse_inline_asm();
 
         if (is_alpha(c))
         {
@@ -884,13 +1072,17 @@ namespace Lexer
 
     LexedModule tokenize(const Module &src)
     {
-        LexedModule module = tokenize_raw(src);
+        Module filtered = src;
+        filtered.source = preprocess_config_blocks(src, activeConfiguration);
+        LexedModule module = tokenize_raw(filtered);
         module.tokens = contains_using_macro(module.tokens) ? resolve_using_macros(module.tokens) : module.tokens;
         return module;
     }
 
-    std::vector<LexedModule> tokenize_modules(const std::vector<Module> &modules)
+    std::vector<LexedModule> tokenize_modules(const std::vector<Module> &modules,
+                                              const Configuration &configuration)
     {
+        activeConfiguration = configuration;
         globalMacroScope = MacroScope{};
         std::vector<LexedModule> lexed_modules;
         for (Module mod : modules)
@@ -899,5 +1091,10 @@ namespace Lexer
             lexed_modules.push_back(tokenize(mod));
         }
         return std::move(lexed_modules);
+    }
+
+    std::string preprocess_config_blocks(const Module &module, const Configuration &configuration)
+    {
+        return filter_config_blocks(module.source, 0, module.source.size(), module.path, 1, configuration);
     }
 } // namespace Lexer

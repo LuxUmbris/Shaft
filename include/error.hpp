@@ -17,5 +17,7 @@ struct ErrorPos
     uint64_t column;
 };
 
-void panic(Error error);
+[[noreturn]] void panic(Error error);
 ErrorPos get_error_pos(uint64_t byte_pos, std::string* source);
+[[noreturn]] void panic_at_source(std::string message, const std::string &modulePath,
+                                  uint64_t byte_pos, std::string *source);

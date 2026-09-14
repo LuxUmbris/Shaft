@@ -135,6 +135,7 @@ namespace Lexer
         StringLiteral,
         CharLiteral,
         BoolLiteral,
+        InlineAsm,
         ModuleBoundary,
         EndOfFile
     };
@@ -257,6 +258,12 @@ namespace Lexer
         std::string source;
     };
 
+    // Values visible to source-level @config blocks for this compilation.
+    struct Configuration
+    {
+        std::unordered_map<std::string, std::string> values;
+    };
+
     struct LexedModule
     {
         std::string path;
@@ -264,6 +271,8 @@ namespace Lexer
     };
 
     LexedModule tokenize(const Module &src);
-    std::vector<LexedModule> tokenize_modules(const std::vector<Module> &sources);
+    std::string preprocess_config_blocks(const Module &source, const Configuration &configuration);
+    std::vector<LexedModule> tokenize_modules(const std::vector<Module> &sources,
+                                              const Configuration &configuration = {});
 
 } // namespace Lexer

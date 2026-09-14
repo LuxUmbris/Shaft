@@ -48,6 +48,10 @@
     "macros": {
       "patterns": [
         {
+          "name": "meta.preprocessor.shaft",
+          "match": "^\\s*@(?:config(?:\\.(?:build|package)\\.[A-Za-z_]\\w*)?|asm|end)\\b"
+        },
+        {
           "match": "\\b(using)(\\s+global)?\\s+([A-Za-z_]\\w*)(?=\\s*!\\s*\\()",
           "captures": {
             "1": { "name": "keyword.other.macro.shaft" },

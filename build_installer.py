@@ -62,14 +62,16 @@ def main() -> None:
     shutil.rmtree(stage_dir, ignore_errors=True)
     run(["cmake", "--install", str(build_dir), "--config", build_type, "--prefix", str(package_root)])
 
-    binary = package_root / "bin" / ("shaftc.exe" if system == "Windows" else "shaftc")
+    compiler = package_root / "bin" / ("shaftc.exe" if system == "Windows" else "shaftc")
+    language_server = package_root / "bin" / ("shaftls.exe" if system == "Windows" else "shaftls")
     stdlib = package_root / "share" / "shaft" / "std" / "std.shaft"
     runtimes = [
-        package_root / "share" / "shaft" / "std" / "runtime" / "linux.c",
-        package_root / "share" / "shaft" / "std" / "runtime" / "darwin.c",
-        package_root / "share" / "shaft" / "std" / "runtime" / "windows.c",
+        package_root / "share" / "shaft" / "std" / "runtime" / "linux.shaft",
+        package_root / "share" / "shaft" / "std" / "runtime" / "darwin.shaft",
+        package_root / "share" / "shaft" / "std" / "runtime" / "macos.shaft",
+        package_root / "share" / "shaft" / "std" / "runtime" / "windows.shaft",
     ]
-    required = [binary, stdlib, *runtimes]
+    required = [compiler, language_server, stdlib, *runtimes]
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise SystemExit("installer staging is incomplete: " + ", ".join(missing))

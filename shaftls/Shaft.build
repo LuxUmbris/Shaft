@@ -5,5 +5,5 @@ version = "0.1.0"
 [build]
 entry = "src/main.shaft"
 output = "build/shaftls"
-hosted = true
+hosted = false
 optimization = "O3"

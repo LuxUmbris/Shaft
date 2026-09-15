@@ -1,5 +1,6 @@
 #include "parser.hpp"
 #include "lexer.hpp"
+#include <cctype>
 #include <iostream>
 
 namespace Parser
@@ -926,8 +927,59 @@ namespace Parser
     static ASTNode parse_inline_asm_statement()
     {
         Lexer::Token token = advance();
-        return ASTNode{NodeType::InlineAsmStmt, token.start, token.mod_path, token.source,
-                       std::get<std::string_view>(token.value), {}};
+        const std::string_view raw = std::get<std::string_view>(token.value);
+        const size_t lineEnd = raw.find('\n');
+        const std::string_view header = raw.substr(0, lineEnd);
+        const std::string_view assembly = lineEnd == std::string_view::npos ? std::string_view{}
+                                                                              : raw.substr(lineEnd + 1);
+        ASTNode node{NodeType::InlineAsmStmt, token.start, token.mod_path, token.source, assembly, {}};
+
+        size_t begin = 0;
+        while (begin < header.size() && std::isspace(static_cast<unsigned char>(header[begin])))
+            ++begin;
+        size_t end = header.size();
+        while (end > begin && std::isspace(static_cast<unsigned char>(header[end - 1])))
+            --end;
+        if (begin == end)
+            return node;
+        if (header[begin] != '(' || header[end - 1] != ')')
+            error("Expected inline assembly operands in '@asm(...)'.");
+
+        size_t cursor = begin + 1;
+        const size_t operandsEnd = end - 1;
+        while (cursor < operandsEnd)
+        {
+            while (cursor < operandsEnd && std::isspace(static_cast<unsigned char>(header[cursor])))
+                ++cursor;
+            bool writable = false;
+            constexpr std::string_view mut = "mut";
+            if (header.substr(cursor, mut.size()) == mut && cursor + mut.size() < operandsEnd &&
+                std::isspace(static_cast<unsigned char>(header[cursor + mut.size()])))
+            {
+                writable = true;
+                cursor += mut.size();
+                while (cursor < operandsEnd && std::isspace(static_cast<unsigned char>(header[cursor])))
+                    ++cursor;
+            }
+            const size_t nameStart = cursor;
+            if (cursor == operandsEnd || !(std::isalpha(static_cast<unsigned char>(header[cursor])) || header[cursor] == '_'))
+                error("Expected an inline assembly operand name.");
+            ++cursor;
+            while (cursor < operandsEnd && (std::isalnum(static_cast<unsigned char>(header[cursor])) || header[cursor] == '_'))
+                ++cursor;
+            ASTNode operand{NodeType::Identifier, token.start + 4 + nameStart, token.mod_path, token.source,
+                            header.substr(nameStart, cursor - nameStart), {}};
+            operand.isMutable = writable;
+            node.children.push_back(std::move(operand));
+            while (cursor < operandsEnd && std::isspace(static_cast<unsigned char>(header[cursor])))
+                ++cursor;
+            if (cursor == operandsEnd)
+                break;
+            if (header[cursor] != ',')
+                error("Expected ',' between inline assembly operands.");
+            ++cursor;
+        }
+        return node;
     }
 
     static ASTNode parse_if_statement()
@@ -1427,6 +1479,14 @@ namespace Parser
     {
         Lexer::Token keyword_tok = advance(); // dec/def/cdec/cdef
 
+        bool isNaked = false;
+        if (check_kw(Lexer::Keyword::NAKED))
+        {
+            if (!hasBody || !isCFunction)
+                error("'naked' is only valid on cdef function definitions.");
+            advance();
+            isNaked = true;
+        }
         bool isAsync = false;
         if (allowAsync && check_kw(Lexer::Keyword::ASYNC))
         {
@@ -1437,6 +1497,7 @@ namespace Parser
         Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected function name");
         ASTNode node{nodeType, keyword_tok.start, keyword_tok.mod_path, keyword_tok.source, std::monostate{}, {}};
         node.isAsync = isAsync;
+        node.isNaked = isNaked;
 
         // name stored as the first child, matching struct/enum decl conventions
         node.children.push_back(ASTNode{NodeType::Identifier,

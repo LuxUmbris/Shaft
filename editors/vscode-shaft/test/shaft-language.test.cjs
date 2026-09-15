@@ -50,7 +50,7 @@ test('keeps async keyword metadata synchronized with shaftc', () => {
   assert.doesNotMatch(grammar.repository.keywords.match, /asyc/);
   const functionDeclaration = grammar.repository.declarations.patterns.find((pattern) => pattern.match.includes('(def|'));
   assert.ok(functionDeclaration);
-  assert.match(functionDeclaration.match, /\(async\)/);
+  assert.match(functionDeclaration.match, /async\|naked/);
 });
 
 test('grammar scopes custom types, macros, global, and boolean literals', () => {
@@ -69,6 +69,14 @@ test('grammar scopes imports and @config/@asm metaprogramming directives', () =>
   const directives = grammar.repository.macros.patterns.find((pattern) => pattern.match?.includes('config'));
   assert.ok(directives);
   assert.match(directives.name, /preprocessor/);
+});
+
+test('grammar scopes naked functions and raw assembly bodies', () => {
+  const grammar = require('../syntaxes/shaft.tmLanguage.json');
+  assert.match(grammar.repository.keywords.match, /naked/);
+  assert.ok(grammar.repository.assembly);
+  assert.match(grammar.repository.assembly.begin, /@asm/);
+  assert.match(grammar.repository.assembly.end, /@end/);
 });
 
 test('grammar scopes qualified custom types at arbitrary namespace depth', () => {

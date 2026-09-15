@@ -109,7 +109,7 @@ function activate(context) {
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => { if (isShaft(document)) notify('textDocument/didClose', { textDocument: { uri: document.uri.toString() } }); }));
   for (const document of vscode.workspace.textDocuments) if (isShaft(document)) notify('textDocument/didOpen', { textDocument: textDocument(document) });
 
-  const semanticLegend = new vscode.SemanticTokensLegend(['keyword', 'type', 'function', 'number', 'string', 'comment', 'operator'], []);
+  const semanticLegend = new vscode.SemanticTokensLegend(['keyword', 'type', 'function', 'number', 'string', 'comment', 'operator', 'macro', 'variable'], []);
   context.subscriptions.push(vscode.languages.registerDocumentSemanticTokensProvider({ language: 'shaft' }, {
     provideDocumentSemanticTokens(document) {
       return request('textDocument/semanticTokens/full', { textDocument: { uri: document.uri.toString() } }).then((result) => new vscode.SemanticTokens(new Uint32Array(result.data)));

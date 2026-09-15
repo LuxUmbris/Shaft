@@ -2258,6 +2258,38 @@ namespace Checker
             break;
 
         case Parser::NodeType::InlineAsmStmt:
+            if (!node.children.empty() && functionBodyDepth == 0)
+                error("Inline assembly operands are only valid inside a function body.", node);
+            for (const auto &operand : node.children)
+            {
+                const std::string name = std::string(std::get<std::string_view>(operand.value));
+                Symbol *symbol = table.lookup(name);
+                if (!symbol)
+                    error("Unknown inline assembly operand '" + name + "'.", operand);
+                const Type type = infer_type_from_node(symbol->typeNode);
+                switch (type.kind)
+                {
+                case TypeKind::U8:
+                case TypeKind::U16:
+                case TypeKind::U32:
+                case TypeKind::U64:
+                case TypeKind::USIZE:
+                case TypeKind::I8:
+                case TypeKind::I16:
+                case TypeKind::I32:
+                case TypeKind::I64:
+                case TypeKind::Bool:
+                case TypeKind::Char:
+                case TypeKind::Pointer:
+                case TypeKind::Reference:
+                case TypeKind::Enum:
+                    break;
+                default:
+                    error("Inline assembly operands must be integer, pointer, reference, or enum values.", operand);
+                }
+                if (operand.isMutable && !type.isMutable)
+                    error("A 'mut' inline assembly operand requires a mutable binding.", operand);
+            }
             break;
 
         case Parser::NodeType::ExportDecl:
@@ -2351,6 +2383,22 @@ namespace Checker
             inCFunctionBody = true;
             activeCFunctionReturnType = Type(TypeKind::Void);
             activeCFunctionReturnsValue = false;
+            if (node.isNaked)
+            {
+                bool hasAssembly = false;
+                for (const auto &child : node.children)
+                    if (child.type == Parser::NodeType::BlockStmt)
+                    {
+                        for (const auto &statement : child.children)
+                        {
+                            if (statement.type != Parser::NodeType::InlineAsmStmt)
+                                error("A naked function body may contain only @asm blocks.", statement);
+                            hasAssembly = true;
+                        }
+                    }
+                if (!hasAssembly)
+                    error("A naked function body requires an @asm block.", node);
+            }
             for (const auto &child : node.children)
             {
                 if (child.type == Parser::NodeType::PrimitiveType ||

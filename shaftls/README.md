@@ -14,11 +14,11 @@ From the repository root:
 The server currently provides:
 
 - incremental document synchronization (`didOpen`, full and ranged `didChange`)
-- semantic tokens for `import` and its quoted path, plus `@config`, `@asm`, and `@end`
+- semantic tokens for `import` and its quoted path; `@config`, `@asm`, and `@end`; and raw-assembly instructions, registers, named operands, numeric immediates, and `//` comments
 - structural `publishDiagnostics` messages for unmatched closing braces and unclosed opening braces, ignoring braces in quoted strings and `//` comments
 - LSP initialization, shutdown, and exit lifecycle handling
 
-The LSP semantic-token legend is `keyword`, `type`, `function`, `number`, `string`, `comment`, `operator`; directive and import keywords use `keyword`, while import paths use `string`.
+The LSP semantic-token legend is `keyword`, `type`, `function`, `number`, `string`, `comment`, `operator`, `macro`, `variable`; directives and import keywords use `keyword`, import paths use `string`, and raw assembly uses `macro` for instructions, `variable` for registers/named operands, `number` for numeric immediates, and `comment` for `//` comments.
 
 ## Editors
 

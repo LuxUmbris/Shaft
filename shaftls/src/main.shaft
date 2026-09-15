@@ -409,8 +409,83 @@ def is_space(u8 byte) -> bool result
 }
 
 
+def is_assembly_name_start(u8 byte) -> bool result
+{
+    tunnel (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte == 95 -> bool result;
+}
+
+
+def is_assembly_name_part(u8 byte) -> bool result
+{
+    tunnel is_assembly_name_start(byte) || (byte >= 48 && byte <= 57) -> bool result;
+}
+
+
 // Highlight declaration syntax from actual source lines. Meta directives are
 // treated as keyword tokens so they use the editor's standard keyword color.
+def append_assembly_tokens(*String text, u64 offset, u64 lineEnd, u64 line, *String output,
+                           *u64 previousLine, *u64 previousStart, *bool first)
+{
+    mut u64 cursor = offset;
+    while (cursor < lineEnd && is_space(text.data[cursor]))
+    {
+        cursor = cursor + 1;
+    }
+    if (cursor < lineEnd && is_assembly_name_start(text.data[cursor]))
+    {
+        mut u64 end = cursor + 1;
+        while (end < lineEnd && is_assembly_name_part(text.data[end]))
+        {
+            end = end + 1;
+        }
+        append_token(output, line, cursor - offset, end - cursor, 7, previousLine, previousStart, first);
+        cursor = end;
+    }
+    while (cursor < lineEnd)
+    {
+        if (cursor + 1 < lineEnd && text.data[cursor] == 47 && text.data[cursor + 1] == 47)
+        {
+            append_token(output, line, cursor - offset, lineEnd - cursor, 5, previousLine, previousStart, first);
+            cursor = lineEnd;
+        }
+        else if (text.data[cursor] == 37 && cursor + 1 < lineEnd && is_assembly_name_start(text.data[cursor + 1]))
+        {
+            mut u64 end = cursor + 2;
+            while (end < lineEnd && is_assembly_name_part(text.data[end]))
+            {
+                end = end + 1;
+            }
+            append_token(output, line, cursor - offset, end - cursor, 8, previousLine, previousStart, first);
+            cursor = end;
+        }
+        else if (text.data[cursor] == 36 && cursor + 1 < lineEnd && text.data[cursor + 1] >= 48 && text.data[cursor + 1] <= 57)
+        {
+            mut u64 end = cursor + 2;
+            while (end < lineEnd && text.data[end] >= 48 && text.data[end] <= 57)
+            {
+                end = end + 1;
+            }
+            append_token(output, line, cursor + 1 - offset, end - cursor - 1, 3, previousLine, previousStart, first);
+            cursor = end;
+        }
+        else if (text.data[cursor] == 36 && cursor + 1 < lineEnd && is_assembly_name_start(text.data[cursor + 1]))
+        {
+            mut u64 end = cursor + 2;
+            while (end < lineEnd && is_assembly_name_part(text.data[end]))
+            {
+                end = end + 1;
+            }
+            append_token(output, line, cursor - offset, end - cursor, 8, previousLine, previousStart, first);
+            cursor = end;
+        }
+        else
+        {
+            cursor = cursor + 1;
+        }
+    }
+}
+
+
 def semantic_tokens(*String text) -> String result
 {
     reserve String importWord = String::from_str("import");
@@ -424,6 +499,7 @@ def semantic_tokens(*String text) -> String result
     mut bool first = true;
     mut u64 line = 0;
     mut u64 offset = 0;
+    mut bool inAssembly = false;
 
     while (offset < text.length)
     {
@@ -477,10 +553,16 @@ def semantic_tokens(*String text) -> String result
         else if (!comment && matches_at(text, code, &asmWord))
         {
             append_token(&output, line, code - offset, asmWord.length, 0, &previousLine, &previousStart, &first);
+            inAssembly = true;
         }
         else if (!comment && matches_at(text, code, &endWord))
         {
             append_token(&output, line, code - offset, endWord.length, 0, &previousLine, &previousStart, &first);
+            inAssembly = false;
+        }
+        else if (!comment && inAssembly)
+        {
+            append_assembly_tokens(text, offset, lineEnd, line, &output, &previousLine, &previousStart, &first);
         }
 
         if (lineEnd < text.length)
@@ -630,7 +712,7 @@ def main(String[] args)
     reserve String diagnosticsMethod = String::from_str("textDocument/publishDiagnostics");
     reserve String unmatchedMessage = String::from_str("Unmatched closing brace");
     reserve String unclosedMessage = String::from_str("Unclosed opening brace");
-    reserve String initializeResult = String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
+    reserve String initializeResult = String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\",\"macro\",\"variable\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
     reserve String nullResult = String::from_str("null");
     reserve mut String documentUri = String::with_capacity(1);
     reserve mut String documentText = String::with_capacity(1);

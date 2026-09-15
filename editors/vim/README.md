@@ -12,4 +12,4 @@ It writes only Shaft-owned files under `~/.vim/{ftdetect,syntax,plugin}` (or `~/
 let g:shaftls_cmd = '/absolute/path/to/Shaft-bootstrap/shaftls/build/shaftls'
 ```
 
-The included syntax file highlights Shaft imports, macro calls, and `@config`, `@asm`, and `@end` metaprogramming directives. The LSP plugin uses Vim's built-in LSP API when available; older Vim versions retain syntax/filetype support.
+The included syntax file highlights Shaft imports, macro calls, `naked` functions, `@config`, `@asm`, and `@end` metaprogramming directives, and assembly instructions, registers, named operands, immediates, and comments within `@asm` blocks. The LSP plugin uses Vim's built-in LSP API when available; older Vim versions retain syntax/filetype support.

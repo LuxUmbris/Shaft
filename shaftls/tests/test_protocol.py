@@ -106,7 +106,53 @@ class ShaftLsProtocolTests(unittest.TestCase):
                 0, 7, 14, 4, 0,  # "shared.shaft"
                 1, 0, 7, 0, 0,   # @config
                 1, 0, 4, 0, 0,   # @asm
-                2, 0, 4, 0, 0,   # @end
+                1, 0, 3, 7, 0,   # ret
+                1, 0, 4, 0, 0,   # @end
+            ])
+        finally:
+            if server.poll() is None:
+                server.kill()
+                server.wait()
+            server.stdin.close()
+            server.stdout.close()
+            server.stderr.close()
+
+    def test_semantic_tokens_highlight_assembly_instructions_registers_operands_and_comments(self):
+        build = subprocess.run([str(SHAFTC), "--build", "Shaft.build"], cwd=PROJECT, text=True, capture_output=True, check=False)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        server = subprocess.Popen([str(BINARY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            uri = "file:///workspace/assembly.shaft"
+            messages = [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "shaft", "version": 1, "text": "cdef naked answer() -> i32\n{\n    @asm(value)\n        addl $2, $value // increment\n        movl %eax, %ebx\n    @end\n}\n"}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "textDocument/semanticTokens/full", "params": {"textDocument": {"uri": uri}}},
+                {"jsonrpc": "2.0", "method": "exit", "params": {}},
+            ]
+            for message in messages:
+                server.stdin.write(frame(message))
+            server.stdin.flush()
+            output, error = server.communicate(timeout=3)
+            self.assertEqual(server.returncode, 1, error.decode())
+            responses = []
+            while output:
+                header, output = output.split(b"\r\n\r\n", 1)
+                length = int(next(line.split(b":", 1)[1].strip() for line in header.split(b"\r\n") if line.lower().startswith(b"content-length:")))
+                body, output = output[:length], output[length:]
+                responses.append(json.loads(body.decode("utf-8")))
+            initialized = next(response["result"] for response in responses if response.get("id") == 1)
+            self.assertEqual(initialized["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"], ["keyword", "type", "function", "number", "string", "comment", "operator", "macro", "variable"])
+            tokens = next(response["result"]["data"] for response in responses if response.get("id") == 2)
+            self.assertEqual(tokens, [
+                2, 4, 4, 0, 0,    # @asm
+                1, 8, 4, 7, 0,    # addl
+                0, 6, 1, 3, 0,    # 2
+                0, 3, 6, 8, 0,    # $value
+                0, 7, 12, 5, 0,   # // increment
+                1, 8, 4, 7, 0,    # movl
+                0, 5, 4, 8, 0,    # %eax
+                0, 6, 4, 8, 0,    # %ebx
+                1, 4, 4, 0, 0,    # @end
             ])
         finally:
             if server.poll() is None:

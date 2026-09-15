@@ -5,7 +5,7 @@ A dependency-free VS Code extension that starts the installed `shaftls` stdio La
 ## Features
 
 - `.shaft` language mode with bracket matching, comment toggling, auto-closing pairs, indentation rules, and TextMate syntax highlighting.
-- Semantic tokens from `shaftls` for `import`, import paths, and `@config`, `@asm`, and `@end` directives.
+- Semantic tokens from `shaftls` for `import`, import paths, `@config`, `@asm`, and `@end`, plus raw-assembly instructions, registers, named operands, immediates, and comments.
 - Structural diagnostics from `shaftls` for unmatched/unclosed braces; braces in strings and `//` comments are ignored.
 - Incremental live-document synchronization for open and edited `.shaft` buffers.
 - Shaft snippets and syntax highlighting for declarations, macros, imports, types, and meta-programming.

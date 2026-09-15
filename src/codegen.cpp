@@ -1,6 +1,7 @@
 #include "codegen.hpp"
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <iostream>
 #include <stdexcept>
 
@@ -2391,16 +2392,103 @@ namespace Codegen
         case Parser::NodeType::InlineAsmStmt:
         {
             ctx.inlineAssemblyDiagnosticNode = &node;
-            const std::string_view assembly = std::get<std::string_view>(node.value);
+            const std::string_view assemblySource = std::get<std::string_view>(node.value);
             if (!ctx.currentFunction)
             {
-                LLVMAppendModuleInlineAsm(ctx.module, assembly.data(), assembly.size());
+                LLVMAppendModuleInlineAsm(ctx.module, assemblySource.data(), assemblySource.size());
                 return nullptr;
             }
-            LLVMTypeRef functionType = LLVMFunctionType(LLVMVoidTypeInContext(ctx.llvmCtx), nullptr, 0, 0);
+
+            std::vector<LLVMValueRef> inputs;
+            std::vector<LLVMTypeRef> inputTypes;
+            std::vector<VarInfo *> writableOperands;
+            std::unordered_map<std::string, unsigned> operandNumbers;
+            std::string constraints;
+            for (const auto &operand : node.children)
+                if (operand.isMutable)
+                {
+                    const std::string name = std::string(std::get<std::string_view>(operand.value));
+                    VarInfo *variable = ctx.find_var(name);
+                    if (!variable)
+                        throw std::runtime_error("unknown inline assembly operand '" + name + "'");
+                    if (!constraints.empty())
+                        constraints += ',';
+                    constraints += "=r";
+                    operandNumbers[name] = static_cast<unsigned>(writableOperands.size());
+                    writableOperands.push_back(variable);
+                }
+
+            for (const auto &operand : node.children)
+            {
+                const std::string name = std::string(std::get<std::string_view>(operand.value));
+                VarInfo *variable = ctx.find_var(name);
+                if (!variable)
+                    throw std::runtime_error("unknown inline assembly operand '" + name + "'");
+                inputTypes.push_back(variable->type.llvmType);
+                inputs.push_back(LLVMBuildLoad2(ctx.builder, variable->type.llvmType, variable->address,
+                                                "asminput"));
+                if (!constraints.empty())
+                    constraints += ',';
+                if (operand.isMutable)
+                {
+                    constraints += std::to_string(operandNumbers.at(name));
+                }
+                else
+                {
+                    operandNumbers[name] = static_cast<unsigned>(writableOperands.size() + inputs.size() - 1);
+                    constraints += "r";
+                }
+            }
+
+            std::string assembly;
+            assembly.reserve(assemblySource.size());
+            for (size_t index = 0; index < assemblySource.size();)
+            {
+                if (assemblySource[index] == '$' && index + 1 < assemblySource.size() &&
+                    (std::isalpha(static_cast<unsigned char>(assemblySource[index + 1])) ||
+                     assemblySource[index + 1] == '_'))
+                {
+                    size_t end = index + 2;
+                    while (end < assemblySource.size() &&
+                           (std::isalnum(static_cast<unsigned char>(assemblySource[end])) || assemblySource[end] == '_'))
+                        ++end;
+                    const std::string name(assemblySource.substr(index + 1, end - index - 1));
+                    const auto found = operandNumbers.find(name);
+                    if (found != operandNumbers.end())
+                    {
+                        assembly += "${";
+                        assembly += std::to_string(found->second);
+                        assembly += '}';
+                        index = end;
+                        continue;
+                    }
+                }
+                if (assemblySource[index] == '$')
+                    assembly += '$';
+                assembly += assemblySource[index++];
+            }
+
+            std::vector<LLVMTypeRef> outputTypes;
+            for (VarInfo *variable : writableOperands)
+                outputTypes.push_back(variable->type.llvmType);
+            LLVMTypeRef resultType = LLVMVoidTypeInContext(ctx.llvmCtx);
+            if (outputTypes.size() == 1)
+                resultType = outputTypes.front();
+            else if (outputTypes.size() > 1)
+                resultType = LLVMStructTypeInContext(ctx.llvmCtx, outputTypes.data(), outputTypes.size(), 0);
+            LLVMTypeRef functionType = LLVMFunctionType(resultType, inputTypes.data(), inputTypes.size(), 0);
             LLVMValueRef inlineAssembly = LLVMGetInlineAsm(
-                functionType, assembly.data(), assembly.size(), "", 0, 1, 0, LLVMInlineAsmDialectATT, 0);
-            return LLVMBuildCall2(ctx.builder, functionType, inlineAssembly, nullptr, 0, "");
+                functionType, assembly.data(), assembly.size(), constraints.data(), constraints.size(), 1, 0,
+                LLVMInlineAsmDialectATT, 0);
+            LLVMValueRef call = LLVMBuildCall2(ctx.builder, functionType, inlineAssembly, inputs.data(), inputs.size(), "");
+            for (size_t index = 0; index < writableOperands.size(); ++index)
+            {
+                LLVMValueRef output = writableOperands.size() == 1
+                                          ? call
+                                          : LLVMBuildExtractValue(ctx.builder, call, static_cast<unsigned>(index), "asmoutput");
+                LLVMBuildStore(ctx.builder, output, writableOperands[index]->address);
+            }
+            return call;
         }
 
         case Parser::NodeType::IfStmt:
@@ -2797,6 +2885,15 @@ namespace Codegen
             LLVMValueRef func = LLVMGetNamedFunction(ctx.module, mangledName.c_str());
             if (!func)
                 func = LLVMAddFunction(ctx.module, mangledName.c_str(), funcType);
+
+            if (node.isNaked)
+            {
+                const unsigned nakedKind = LLVMGetEnumAttributeKindForName("naked", 5);
+                if (!nakedKind)
+                    throw std::runtime_error("LLVM does not support the naked function attribute");
+                LLVMAddAttributeAtIndex(func, LLVMAttributeFunctionIndex,
+                                        LLVMCreateEnumAttribute(ctx.llvmCtx, nakedKind, 0));
+            }
 
             if (node.type == Parser::NodeType::CFunctionDecl)
                 return func;

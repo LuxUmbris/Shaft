@@ -125,6 +125,34 @@ class CompilerFlagsTests(unittest.TestCase):
             self.assertIn("this_is_not_an_instruction", output)
             self.assertNotIn("<inline asm>", output)
 
+    def test_naked_c_function_and_mutable_local_inline_asm_operand_execute(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "naked-and-operand-asm.shaft"
+            binary = pathlib.Path(directory) / "naked-and-operand-asm"
+            source.write_text(
+                "cdef add_two() -> i32\n"
+                "{\n"
+                "    mut i32 value = 40;\n"
+                "    i32 increment = 2;\n"
+                "    @asm(mut value, increment)\n"
+                "        addl $increment, $value\n"
+                "    @end\n"
+                "    return value;\n"
+                "}\n"
+                "cdef naked answer() -> i32\n"
+                "{\n"
+                "    @asm\n"
+                "        mov $42, %eax\n"
+                "        ret\n"
+                "    @end\n"
+                "}\n"
+                "cdef main() -> i32 { if (add_two() != 42) { return 1; } return answer(); }\n",
+                encoding="utf-8",
+            )
+            compilation = self.run_compiler("--no-std", "--hosted", "-o", str(binary), str(source))
+            self.assertEqual(compilation.returncode, 0, compilation.stdout + compilation.stderr)
+            self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 42)
+
     def test_optimization_remarks_are_not_compiler_output(self):
         with tempfile.TemporaryDirectory() as directory:
             source = pathlib.Path(directory) / "quiet-optimization.shaft"

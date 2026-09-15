@@ -116,6 +116,7 @@ namespace Parser
         // extra flags
         bool isOptional = false;
         bool isAsync = false;
+        bool isNaked = false;
         bool isExported = false;
         bool isGlobal = false;
         bool isMutable = false;

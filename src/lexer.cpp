@@ -109,7 +109,11 @@ namespace Lexer
 
     static bool is_asm_header(std::string_view lineText)
     {
-        return trim_directive(lineText) == "@asm";
+        const std::string directive = trim_directive(lineText);
+        if (directive.rfind("@asm", 0) != 0)
+            return false;
+        return directive.size() == 4 || directive[4] == '(' ||
+               std::isspace(static_cast<unsigned char>(directive[4]));
     }
 
     static bool is_end_directive(std::string_view lineText)
@@ -941,12 +945,12 @@ namespace Lexer
     {
         const uint64_t start = pos;
         const size_t headerEnd = line_end(source, pos);
-        const size_t bodyStart = headerEnd;
-        const size_t closeStart = matching_macro_end(source, bodyStart, current_mod_path, line);
+        const size_t closeStart = matching_macro_end(source, headerEnd, current_mod_path, line);
         const size_t closeEnd = line_end(source, closeStart);
         pos = closeEnd;
         return Token{TokenType::InlineAsm, start,
-                     std::string_view(source).substr(bodyStart, closeStart - bodyStart), &source, &current_mod_path};
+                     std::string_view(source).substr(start + 4, closeStart - (start + 4)), &source,
+                     &current_mod_path};
     }
 
     Token next_token()

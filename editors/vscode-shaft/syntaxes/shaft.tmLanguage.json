@@ -6,6 +6,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#raw-strings" },
+    { "include": "#assembly" },
     { "include": "#macros" },
     { "include": "#declarations" },
     { "include": "#booleans" },
@@ -45,6 +46,24 @@
       },
       "end": "^\\1$"
     },
+    "assembly": {
+      "name": "meta.embedded.assembly.shaft",
+      "begin": "^(\\s*)(@asm)(?:\\([^\\n]*\\))?\\s*$",
+      "beginCaptures": {
+        "2": { "name": "keyword.control.assembly.shaft" }
+      },
+      "end": "^\\s*(@end)\\b",
+      "endCaptures": {
+        "1": { "name": "keyword.control.assembly.shaft" }
+      },
+      "patterns": [
+        { "name": "comment.line.double-slash.assembly.shaft", "match": "//.*$" },
+        { "name": "keyword.instruction.assembly.shaft", "match": "^\\s*[A-Za-z_.][A-Za-z0-9_.]*" },
+        { "name": "variable.language.register.assembly.shaft", "match": "%[A-Za-z][A-Za-z0-9]*" },
+        { "name": "variable.other.assembly.shaft", "match": "\\$[A-Za-z_]\\w*" },
+        { "name": "constant.numeric.assembly.shaft", "match": "\\$?\\b(?:0x[0-9A-Fa-f]+|\\d+)\\b" }
+      ]
+    },
     "macros": {
       "patterns": [
         {
@@ -79,7 +98,7 @@
           }
         },
         {
-          "match": "\\b(def|dec|cdef|cdec)\\s*(<[^>]*>)?\\s*(?:(async)\\s+)?([A-Za-z_]\\w*)",
+          "match": "\\b(def|dec|cdef|cdec)\\s*(<[^>]*>)?\\s*(?:(async|naked)\\s+)?([A-Za-z_]\\w*)",
           "captures": {
             "1": { "name": "storage.type.function.shaft" },
             "2": { "name": "entity.name.type.parameter.shaft" },
@@ -95,7 +114,7 @@
     },
     "keywords": {
       "name": "keyword.control.shaft",
-      "match": "\\b(if|else|match|case|default|while|for|foreach|break|continue|return|tunnel|reserve|valid|move|ref|mut|namespace|using|global|import|export|inline|align|index|init|async|await|start|self|sizeof)\\b"
+      "match": "\\b(if|else|match|case|default|while|for|foreach|break|continue|return|tunnel|reserve|valid|move|ref|mut|namespace|using|global|import|export|inline|naked|align|index|init|async|await|start|self|sizeof)\\b"
     },
     "types": {
       "name": "support.type.shaft",

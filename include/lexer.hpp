@@ -41,6 +41,7 @@ namespace Lexer
         // functions
         TUNNEL,
         INLINE,
+        NAKED,
         RESERVE,
         RETURN,
         // memory and types
@@ -163,6 +164,7 @@ namespace Lexer
         {"import", Keyword::IMPORT},
         {"export", Keyword::EXPORT},
         {"inline", Keyword::INLINE},
+        {"naked", Keyword::NAKED},
         {"reserve", Keyword::RESERVE},
         {"valid", Keyword::VALID},
         {"match", Keyword::MATCH},

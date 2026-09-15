@@ -110,7 +110,7 @@ Source can select target- or package-specific text before it reaches the parser:
 @end
 ```
 
-`@config.<build|package>.<field> = value ... @end` is a lexer macro: matching blocks remain and nonmatching blocks are deleted before import discovery and parsing. `build.target` reflects `--target` (or the host triple); `package.name` and `package.version` come from `Shaft.build`. `@asm ... @end` is a function-body, side-effecting raw LLVM inline-assembly statement with no Shaft operands or results. See `syntax.md` for the complete supported configuration fields and nesting rules.
+`@config.<build|package>.<field> = value ... @end` is a lexer macro: matching blocks remain and nonmatching blocks are deleted before import discovery and parsing. `build.target` reflects `--target` (or the host triple); `package.name` and `package.version` come from `Shaft.build`. `@asm ... @end` is a function-body, side-effecting raw LLVM inline-assembly statement. `@asm(value)` passes a binding as a read-only register operand; `@asm(mut value)` writes its final register value back to a mutable binding; and `$value` names that operand in the assembly body. `cdef naked` emits no compiler prologue/epilogue and must return from its own assembly. See `syntax.md` for the complete supported configuration fields and nesting rules.
 
 ## Reproducible performance benchmarks
 
@@ -194,7 +194,7 @@ python3 install.py --vscode --vim --neovim
 
 The VS Code extension can use `shaft.languageServer.serverPath` to select an explicit `shaftls` executable. When that setting is empty, it uses `shaftls` from `PATH`. Vim honors `g:shaftls_cmd`; Neovim accepts `require('shaft').setup({ cmd = '/path/to/shaftls' })` if an override is needed.
 
-The native server currently provides lifecycle/document synchronization, semantic tokens for `import`, import paths, `@config`, `@asm`, and `@end`, plus structural diagnostics for unmatched or unclosed braces. Syntax highlighting and snippets are provided by the editor assets. It does **not** yet provide compiler-derived parser/checker/import diagnostics, completion, hover, definition, symbols, or formatting; the VS Code extension intentionally does not register providers for those methods.
+The native server currently provides lifecycle/document synchronization; semantic tokens for `import`, import paths, `@config`, `@asm`, and `@end`; and raw-assembly instructions, registers, named operands, numeric immediates, and comments, plus structural diagnostics for unmatched or unclosed braces. Syntax highlighting and snippets are provided by the editor assets. It does **not** yet provide compiler-derived parser/checker/import diagnostics, completion, hover, definition, symbols, or formatting; the VS Code extension intentionally does not register providers for those methods.
 
 For extension development, open `editors/vscode-shaft` in VS Code and press `F5`. Validate and package without marketplace tooling:
 

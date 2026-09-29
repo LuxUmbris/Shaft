@@ -8,8 +8,8 @@ set(targets
     "aarch64-unknown-linux-gnu|linux.shaft|linux-arm64.o"
     "x86_64-apple-darwin|darwin.shaft|darwin-x86_64.o"
     "aarch64-apple-darwin|darwin.shaft|darwin-arm64.o"
-    "x86_64-apple-macos|macos.shaft|macos-x86_64.o"
-    "aarch64-apple-macos|macos.shaft|macos-arm64.o"
+    "x86_64-apple-macos|darwin.shaft|darwin-macos-x86_64.o"
+    "aarch64-apple-macos|darwin.shaft|darwin-macos-arm64.o"
     "x86_64-w64-windows-gnu|windows.shaft|windows-x86_64.o"
     "aarch64-w64-windows-gnu|windows.shaft|windows-arm64.o")
 

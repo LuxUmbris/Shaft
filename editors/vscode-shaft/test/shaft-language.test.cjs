@@ -63,12 +63,19 @@ test('grammar scopes custom types, macros, global, and boolean literals', () => 
   assert.match(grammar.repository.booleans.match, /true\|false/);
 });
 
-test('grammar scopes imports and @config/@asm metaprogramming directives', () => {
+test('grammar scopes imports and config/error metaprogramming directives', () => {
   const grammar = require('../syntaxes/shaft.tmLanguage.json');
   assert.match(grammar.repository.keywords.match, /import/);
-  const directives = grammar.repository.macros.patterns.find((pattern) => pattern.match?.includes('config'));
+  const directives = grammar.repository.macros.patterns.find((pattern) => pattern.name?.includes('preprocessor') && pattern.match?.includes('config'));
+  const conditions = grammar.repository.macros.patterns.find((pattern) => pattern.match?.includes('in|matches'));
+  const error = grammar.repository.macros.patterns.find((pattern) => pattern.match?.includes('@error'));
   assert.ok(directives);
-  assert.match(directives.name, /preprocessor/);
+  assert.equal(directives.name, 'keyword.control.preprocessor.shaft');
+  assert.match(directives.match, /!?config/);
+  assert.ok(conditions);
+  assert.equal(conditions.captures['1'].name, 'keyword.control.preprocessor.shaft');
+  assert.ok(error);
+  assert.match(error.name, /invalid/);
 });
 
 test('grammar scopes naked functions and raw assembly bodies', () => {

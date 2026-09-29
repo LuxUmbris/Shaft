@@ -4,11 +4,13 @@ local M = {}
 function M.setup(opts)
   opts = opts or {}
   vim.filetype.add({ extension = { shaft = 'shaft' } })
+  vim.cmd('syntax enable')
   local group = vim.api.nvim_create_augroup('shaftls', { clear = true })
   vim.api.nvim_create_autocmd('FileType', {
     group = group,
     pattern = 'shaft',
     callback = function(args)
+      vim.bo[args.buf].syntax = 'shaft'
       local command = opts.cmd or vim.fn.exepath('shaftls')
       if command == '' then
         vim.notify('shaftls not found; pass cmd to require("shaft").setup.', vim.log.levels.WARN)

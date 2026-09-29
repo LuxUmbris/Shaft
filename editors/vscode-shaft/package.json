@@ -23,6 +23,12 @@
       "scopeName": "source.shaft",
       "path": "./syntaxes/shaft.tmLanguage.json"
     }],
+    "semanticTokenScopes": [{
+      "language": "shaft",
+      "scopes": {
+        "error": ["invalid.illegal.shaft"]
+      }
+    }],
     "snippets": [{ "language": "shaft", "path": "./snippets/shaft.code-snippets" }],
     "configuration": {
       "title": "Shaft",
@@ -30,6 +36,10 @@
         "shaft.languageServer.serverPath": {
           "type": "string", "default": "", "scope": "resource",
           "description": "Optional absolute shaftls executable. When empty, uses shaftls on PATH."
+        },
+        "shaft.languageServer.compilerPath": {
+          "type": "string", "default": "", "scope": "resource",
+          "description": "Optional absolute shaftc executable for live diagnostics. When empty, uses the installer registration if available."
         }
       }
     },
@@ -40,7 +50,7 @@
   },
   "scripts": {
     "test": "node --test test/compiler-discovery.test.cjs test/extension-settings.test.cjs test/server-command.test.cjs test/shaft-language.test.cjs",
-    "check": "node --check extension.cjs && node --check server/lib/extension-settings.cjs && node --check server/lib/server-command.cjs && npm test",
+    "check": "node --check extension.cjs && node --check server/lib/compiler-discovery.cjs && node --check server/lib/extension-settings.cjs && node --check server/lib/server-command.cjs && npm test",
     "package": "node scripts/package-vsix.cjs"
   }
 }

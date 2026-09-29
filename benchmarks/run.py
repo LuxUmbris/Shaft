@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run repeatable Shaft, Clang, and (when installed) rustc benchmarks."""
+"""Benchmark the Computer Language Benchmarks Game mandelbrot kernel."""
 
 import argparse
 import hashlib
@@ -16,7 +16,19 @@ import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_SHAFTC = ROOT / "build" / "shaftc"
+BENCHMARK_FAMILY = "Computer Language Benchmarks Game"
+BENCHMARK_NAME = "mandelbrot"
+
+
+def default_shaftc():
+    configured = os.environ.get("SHAFTC")
+    if configured:
+        return pathlib.Path(configured)
+    candidates = [ROOT / "build" / "shaftc", *sorted(ROOT.glob("build*/shaftc"), key=lambda path: path.stat().st_mtime, reverse=True)]
+    return next((path for path in candidates if path.is_file()), ROOT / "build" / "shaftc")
+
+
+DEFAULT_SHAFTC = default_shaftc()
 
 
 def command_version(command):
@@ -44,72 +56,104 @@ def host_metadata():
     }
 
 
-def write_sources(directory, updates):
-    shaft_lines = [
-        "cdef __shaft_entry(i32 argc, *i8 argv) -> i32",
-        "{",
-        "    mut i32 value = argc;",
-    ]
-    c_lines = ["#include <stdint.h>", "int main(int argc, char **argv) {", "    uint32_t value = (uint32_t)argc;"]
-    rust_lines = [
-        "#![no_std]",
-        "#![no_main]",
-        "#[panic_handler]",
-        "fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }",
-        "#[no_mangle]",
-        "pub extern \"C\" fn __shaft_entry(argc: i32, _: *const *const u8) -> i32 {",
-        "    let mut value = argc as u32;",
-    ]
-    for _ in range(updates):
-        shaft_lines.append("    value = value * 1664525 + 1013904223;")
-        c_lines.append("    value = value * UINT32_C(1664525) + UINT32_C(1013904223);")
-        rust_lines.append("    value = value.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);")
-    shaft_lines.extend(["    return value;", "}", ""])
-    c_lines.extend(["    return (int)(value & 255u);", "}", ""])
-    rust_lines.extend(["    core::hint::black_box(value);", "    value as i32", "}", ""])
-
-    sources = {
-        "shaft": directory / "compile-scale.shaft",
-        "clang": directory / "compile-scale.c",
-        "rust": directory / "compile-scale.rs",
-    }
-    for language, path in sources.items():
-        lines = {"shaft": shaft_lines, "clang": c_lines, "rust": rust_lines}[language]
-        path.write_text("\n".join(lines))
-    return sources
+def mandelbrot_exit_code(size, max_iterations):
+    """Return the escaped-iteration checksum used to prevent dead-code removal."""
+    checksum = 0
+    for y in range(size):
+        for x in range(size):
+            cr = 2.0 * x / size - 1.5
+            ci = 2.0 * y / size - 1.0
+            zr = 0.0
+            zi = 0.0
+            iteration = 0
+            while iteration < max_iterations and zr * zr + zi * zi <= 4.0:
+                zr, zi = zr * zr - zi * zi + cr, 2.0 * zr * zi + ci
+                iteration += 1
+            checksum += iteration
+    return checksum & 255
 
 
-def write_runtime_sources(directory, iterations):
-    shaft = directory / "runtime-xorshift.shaft"
-    c = directory / "runtime-xorshift.c"
-    rust = directory / "runtime-xorshift.rs"
+def write_mandelbrot_sources(directory, size, max_iterations):
+    shaft = directory / "mandelbrot.shaft"
+    c = directory / "mandelbrot.c"
+    rust = directory / "mandelbrot.rs"
     shaft.write_text(
-        "cdec __sys_write(i32 descriptor, *i8 buffer, u64 count) -> i64;\n"
-        "cdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n"
-        "    mut i32 value = argc;\n    mut i32 counter = 0;\n"
-        f"    while (counter < {iterations})\n    {{\n"
-        "        value = value ^ (value << 13);\n"
-        "        value = value ^ (value >> 17);\n"
-        "        value = value ^ (value << 5);\n"
-        "        counter = counter + 1;\n    }\n"
-        "    __sys_write(value, argv, 0);\n    return 0;\n}\n"
+        "def main(String[] args)\n"
+        "{\n"
+        "    mut i32 checksum = 0;\n"
+        "    mut i32 y = 0;\n"
+        f"    while (y < {size})\n"
+        "    {\n"
+        "        mut i32 x = 0;\n"
+        f"        while (x < {size})\n"
+        "        {\n"
+        f"            f64 cr = 2.0 * x / {size}.0 - 1.5;\n"
+        f"            f64 ci = 2.0 * y / {size}.0 - 1.0;\n"
+        "            mut f64 zr = 0.0;\n"
+        "            mut f64 zi = 0.0;\n"
+        "            mut i32 iteration = 0;\n"
+        f"            while (iteration < {max_iterations} && zr * zr + zi * zi <= 4.0)\n"
+        "            {\n"
+        "                f64 next = zr * zr - zi * zi + cr;\n"
+        "                zi = 2.0 * zr * zi + ci;\n"
+        "                zr = next;\n"
+        "                iteration = iteration + 1;\n"
+        "            }\n"
+        "            checksum = checksum + iteration;\n"
+        "            x = x + 1;\n"
+        "        }\n"
+        "        y = y + 1;\n"
+        "    }\n"
+        "    exit(checksum & 255);\n"
+        "}\n",
+        encoding="utf-8",
     )
     c.write_text(
-        "#include <stdint.h>\n#include <unistd.h>\n"
-        "int main(int argc, char **argv) {\n"
-        "    uint32_t value = (uint32_t)argc;\n    uint32_t counter = 0;\n"
-        f"    while (counter < {iterations}u) {{\n"
-        "        value ^= value << 13;\n        value ^= value >> 17;\n        value ^= value << 5;\n"
-        "        counter++;\n    }\n"
-        "    write((int)value, argv, 0);\n    return 0;\n}\n"
+        "int main(void)\n"
+        "{\n"
+        "    int checksum = 0;\n"
+        f"    for (int y = 0; y < {size}; ++y) {{\n"
+        f"        for (int x = 0; x < {size}; ++x) {{\n"
+        f"            double cr = 2.0 * x / {size}.0 - 1.5;\n"
+        f"            double ci = 2.0 * y / {size}.0 - 1.0;\n"
+        "            double zr = 0.0;\n"
+        "            double zi = 0.0;\n"
+        "            int iteration = 0;\n"
+        f"            while (iteration < {max_iterations} && zr * zr + zi * zi <= 4.0) {{\n"
+        "                double next = zr * zr - zi * zi + cr;\n"
+        "                zi = 2.0 * zr * zi + ci;\n"
+        "                zr = next;\n"
+        "                ++iteration;\n"
+        "            }\n"
+        "            checksum += iteration;\n"
+        "        }\n"
+        "    }\n"
+        "    return checksum & 255;\n"
+        "}\n",
+        encoding="utf-8",
     )
     rust.write_text(
         "fn main() {\n"
-        "    let mut value = std::hint::black_box(std::env::args().count() as u32);\n"
-        f"    for _ in 0..{iterations} {{\n"
-        "        value ^= value << 13;\n        value ^= value >> 17;\n        value ^= value << 5;\n"
+        "    let mut checksum: i32 = 0;\n"
+        f"    for y in 0..{size} {{\n"
+        f"        for x in 0..{size} {{\n"
+        f"            let cr = 2.0 * x as f64 / {size}.0 - 1.5;\n"
+        f"            let ci = 2.0 * y as f64 / {size}.0 - 1.0;\n"
+        "            let mut zr = 0.0;\n"
+        "            let mut zi = 0.0;\n"
+        "            let mut iteration = 0;\n"
+        f"            while iteration < {max_iterations} && zr * zr + zi * zi <= 4.0 {{\n"
+        "                let next = zr * zr - zi * zi + cr;\n"
+        "                zi = 2.0 * zr * zi + ci;\n"
+        "                zr = next;\n"
+        "                iteration += 1;\n"
+        "            }\n"
+        "            checksum += iteration;\n"
+        "        }\n"
         "    }\n"
-        "    std::hint::black_box(value);\n}\n"
+        "    std::process::exit(checksum & 255);\n"
+        "}\n",
+        encoding="utf-8",
     )
     return {"shaft": shaft, "clang": c, "rust": rust}
 
@@ -161,11 +205,18 @@ def pin_process_to_one_cpu(enabled):
         return {"status": "not-pinned", "reason": str(error)}
 
 
-def run_executables_interleaved(paths, iterations, warmups=1):
+def run_executables_interleaved(paths, expected_exit_code, iterations, warmups=1):
     names = sorted(paths)
+    exit_codes = {}
     for name in names:
         for _ in range(warmups):
-            subprocess.run([str(paths[name])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            result = subprocess.run([str(paths[name])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            if result.returncode != expected_exit_code:
+                raise RuntimeError(
+                    f"mandelbrot correctness check failed: {paths[name]}, "
+                    f"exit={result.returncode}, expected={expected_exit_code}"
+                )
+            exit_codes[name] = result.returncode
     samples = {name: [] for name in names}
     order = []
     for round_index in range(iterations):
@@ -174,12 +225,19 @@ def run_executables_interleaved(paths, iterations, warmups=1):
             start = time.perf_counter_ns()
             result = subprocess.run([str(paths[name])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             elapsed = (time.perf_counter_ns() - start) / 1_000_000
-            if result.returncode:
-                raise RuntimeError(f"runtime benchmark failed: {paths[name]}, exit={result.returncode}")
+            if result.returncode != expected_exit_code:
+                raise RuntimeError(
+                    f"mandelbrot runtime failed: {paths[name]}, "
+                    f"exit={result.returncode}, expected={expected_exit_code}"
+                )
             samples[name].append(elapsed)
             order.append(name)
     return {
-        name: {**summarize_samples([str(paths[name])], warmups, samples[name]), "binary_bytes": paths[name].stat().st_size}
+        name: {
+            **summarize_samples([str(paths[name])], warmups, samples[name]),
+            "binary_bytes": paths[name].stat().st_size,
+            "exit_code": exit_codes[name],
+        }
         for name in names
     }, order
 
@@ -192,23 +250,26 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shaftc", default=str(DEFAULT_SHAFTC))
     parser.add_argument("--iterations", type=int, default=7)
-    parser.add_argument("--updates", type=int, default=10_000)
-    parser.add_argument("--runtime-iterations", type=int, default=100_000_000)
+    parser.add_argument("--size", type=int, default=512, help="square image width used by the mandelbrot kernel")
+    parser.add_argument("--max-iterations", type=int, default=50, help="escape iterations per pixel")
     parser.add_argument("--skip-runtime", action="store_true")
     parser.add_argument("--no-pin", action="store_true", help="do not pin benchmark children to one CPU")
     parser.add_argument("--output", type=pathlib.Path, required=True)
     args = parser.parse_args()
-    if args.iterations < 1 or args.updates < 1 or args.runtime_iterations < 1:
-        parser.error("iteration counts must be positive")
+    if args.iterations < 1 or args.size < 1 or args.max_iterations < 1:
+        parser.error("iteration counts and mandelbrot parameters must be positive")
 
     shaftc = pathlib.Path(args.shaftc).resolve()
     if not shaftc.is_file():
         parser.error(f"shaft compiler is not a file: {shaftc}")
     clang = shutil.which("clang")
+    if not clang:
+        parser.error("clang was not found on PATH")
     rustc = shutil.which("rustc")
+    expected_exit_code = mandelbrot_exit_code(args.size, args.max_iterations)
     affinity = pin_process_to_one_cpu(not args.no_pin)
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "host": host_metadata(),
         "tools": {"shaft": command_version(shaftc), "clang": command_version("clang"), "rust": command_version("rustc")},
         "protocol": {
@@ -216,7 +277,7 @@ def main():
             "iterations": args.iterations,
             "affinity": affinity,
             "runtime_sample_order": "round-robin interleaved",
-            "shaft_flags": ["--no-std", "--native", "-O2"],
+            "shaft_flags": ["-O2"],
             "clang_flags": ["-O2", "-march=native"],
             "rust_flags": ["-C", "opt-level=2", "-C", "target-cpu=native", "-C", "panic=abort"],
         },
@@ -225,47 +286,59 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="shaft-bench-") as temp:
         directory = pathlib.Path(temp)
-        sources = write_sources(directory, args.updates)
-        scale = {"sources": {name: source_metadata(path) for name, path in sources.items()}, "implementations": {}}
-        commands = {
-            "shaft": [str(shaftc), "--no-std", "--native", "-O2", "--emit", "llvm", "-o", str(directory / "scale-shaft.ll"), str(sources["shaft"])],
-            "clang": [clang, "-O2", "-march=native", "-S", "-emit-llvm", "-o", str(directory / "scale-clang.ll"), str(sources["clang"])],
+        sources = write_mandelbrot_sources(directory, args.size, args.max_iterations)
+        mandelbrot = {
+            "family": BENCHMARK_FAMILY,
+            "name": BENCHMARK_NAME,
+            "variant": "escape-count kernel with a checked exit-code checksum",
+            "parameters": {"size": args.size, "max_iterations": args.max_iterations},
+            "expected_exit_code": expected_exit_code,
+            "sources": {name: source_metadata(path) for name, path in sources.items()},
+            "compile": {"implementations": {}},
         }
-        for name, command in commands.items():
-            scale["implementations"][name] = {"status": "ok", **run_timed(command, args.iterations)}
+        compile_commands = {
+            "shaft": [str(shaftc), "-O2", "--emit", "llvm", "-o", str(directory / "mandelbrot-shaft.ll"), str(sources["shaft"])],
+            "clang": [clang, "-O2", "-march=native", "-S", "-emit-llvm", "-o", str(directory / "mandelbrot-clang.ll"), str(sources["clang"])],
+        }
+        for name, command in compile_commands.items():
+            mandelbrot["compile"]["implementations"][name] = {"status": "ok", **run_timed(command, args.iterations)}
         if rustc:
-            command = [rustc, "-C", "opt-level=2", "-C", "target-cpu=native", "-C", "panic=abort", "--emit=llvm-ir", "-o", str(directory / "scale-rust.ll"), str(sources["rust"])]
-            scale["implementations"]["rust"] = {"status": "ok", **run_timed(command, args.iterations)}
+            command = [rustc, "-C", "opt-level=2", "-C", "target-cpu=native", "-C", "panic=abort", "--emit=llvm-ir", "-o", str(directory / "mandelbrot-rust.ll"), str(sources["rust"])]
+            mandelbrot["compile"]["implementations"]["rust"] = {"status": "ok", **run_timed(command, args.iterations)}
         else:
-            scale["implementations"]["rust"] = unavailable("rustc was not found on PATH")
-        report["benchmarks"]["compile_scale"] = scale
+            mandelbrot["compile"]["implementations"]["rust"] = unavailable("rustc was not found on PATH")
 
         if not args.skip_runtime:
-            runtime_sources = write_runtime_sources(directory, args.runtime_iterations)
-            runtime = {"sources": {name: source_metadata(path) for name, path in runtime_sources.items()}, "implementations": {}}
-            output_paths = {name: directory / f"runtime-{name}" for name in runtime_sources}
-            runtime_build = {"sources": {name: source_metadata(path) for name, path in runtime_sources.items()}, "implementations": {}}
+            output_paths = {name: directory / f"mandelbrot-{name}" for name in sources}
+            mandelbrot["build"] = {"implementations": {}}
             build_commands = {
-                "shaft": [str(shaftc), "--no-std", "--native", "-O2", "-o", str(output_paths["shaft"]), str(runtime_sources["shaft"])],
-                "clang": [clang, "-O2", "-march=native", "-o", str(output_paths["clang"]), str(runtime_sources["clang"])],
+                "shaft": [str(shaftc), "-O2", "-o", str(output_paths["shaft"]), str(sources["shaft"])],
+                "clang": [clang, "-O2", "-march=native", "-o", str(output_paths["clang"]), str(sources["clang"])],
             }
             for name, command in build_commands.items():
-                runtime_build["implementations"][name] = {"status": "ok", **run_timed(command, args.iterations)}
+                mandelbrot["build"]["implementations"][name] = {"status": "ok", **run_timed(command, args.iterations)}
             if rustc:
-                command = [rustc, "-C", "opt-level=2", "-C", "target-cpu=native", "-C", "panic=abort", "-o", str(output_paths["rust"]), str(runtime_sources["rust"])]
-                runtime_build["implementations"]["rust"] = {"status": "ok", **run_timed(command, args.iterations)}
+                command = [rustc, "-C", "opt-level=2", "-C", "target-cpu=native", "-C", "panic=abort", "-o", str(output_paths["rust"]), str(sources["rust"])]
+                mandelbrot["build"]["implementations"]["rust"] = {"status": "ok", **run_timed(command, args.iterations)}
             else:
-                runtime_build["implementations"]["rust"] = unavailable("rustc was not found on PATH")
-            report["benchmarks"]["runtime_build"] = runtime_build
-
-            available_paths = {name: output_paths[name] for name, entry in runtime_build["implementations"].items() if entry["status"] == "ok"}
-            runtime_samples, sample_order = run_executables_interleaved(available_paths, args.iterations)
-            runtime["implementations"] = {name: {"status": "ok", **result} for name, result in runtime_samples.items()}
-            for name, entry in runtime_build["implementations"].items():
+                mandelbrot["build"]["implementations"]["rust"] = unavailable("rustc was not found on PATH")
+            available_paths = {
+                name: output_paths[name]
+                for name, entry in mandelbrot["build"]["implementations"].items()
+                if entry["status"] == "ok"
+            }
+            runtime_samples, sample_order = run_executables_interleaved(
+                available_paths, expected_exit_code, args.iterations
+            )
+            mandelbrot["runtime"] = {
+                "implementations": {name: {"status": "ok", **result} for name, result in runtime_samples.items()},
+                "sample_order": sample_order,
+            }
+            for name, entry in mandelbrot["build"]["implementations"].items():
                 if entry["status"] != "ok":
-                    runtime["implementations"][name] = entry
-            runtime["sample_order"] = sample_order
-            report["benchmarks"]["runtime_xorshift"] = runtime
+                    mandelbrot["runtime"]["implementations"][name] = entry
+
+        report["benchmarks"][BENCHMARK_NAME] = mandelbrot
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

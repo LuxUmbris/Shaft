@@ -861,7 +861,8 @@ namespace Checker
                        declaredType.innerType && valueType.innerType &&
                        is_assignable(*declaredType.innerType, *valueType.innerType);
             }
-            if (valueType.kind == TypeKind::Enum && is_numeric(declaredType.kind))
+            if ((valueType.kind == TypeKind::Enum && is_numeric(declaredType.kind)) ||
+                (declaredType.kind == TypeKind::Enum && is_numeric(valueType.kind)))
                 return true;
             if (declaredType.kind == TypeKind::Struct || declaredType.kind == TypeKind::Class || declaredType.kind == TypeKind::Enum)
             {
@@ -876,6 +877,31 @@ namespace Checker
                 return true;
 
             return false;
+        }
+
+        bool implicitly_borrows_for_reference_parameter(const Type &parameterType,
+                                                        const Type &argumentType,
+                                                        const Parser::ASTNode &argument)
+        {
+            if (parameterType.kind != TypeKind::Reference || argumentType.kind == TypeKind::Reference ||
+                !parameterType.innerType)
+                return false;
+
+            const bool isDereference = argument.type == Parser::NodeType::UnaryExpr &&
+                                       std::holds_alternative<Lexer::Operator>(argument.value) &&
+                                       std::get<Lexer::Operator>(argument.value) == Lexer::Operator::MULTIPLY;
+            const bool isAddressable = argument.type == Parser::NodeType::Identifier ||
+                                       argument.type == Parser::NodeType::MemberAccessExpr ||
+                                       argument.type == Parser::NodeType::IndexExpr || isDereference;
+            return isAddressable && (!parameterType.isMutable || argumentType.isMutable) &&
+                   is_assignable(*parameterType.innerType, argumentType);
+        }
+
+        bool implicitly_dereferences_for_value_parameter(const Type &parameterType,
+                                                         const Type &argumentType)
+        {
+            return parameterType.kind != TypeKind::Reference && argumentType.kind == TypeKind::Reference &&
+                   argumentType.innerType && is_assignable(parameterType, *argumentType.innerType);
         }
 
         bool is_valid_binary_op(const Type &left, const Type &right, Lexer::Operator op)
@@ -1193,6 +1219,8 @@ namespace Checker
                     ((symbol->paramTypes[i].kind == TypeKind::Pointer && is_numeric(argTypes[i].kind)) ||
                      (is_numeric(symbol->paramTypes[i].kind) && argTypes[i].kind == TypeKind::Pointer));
                 if (!hasExplicitGenericArguments && !is_assignable(symbol->paramTypes[i], argTypes[i]) &&
+                    !implicitly_borrows_for_reference_parameter(symbol->paramTypes[i], argTypes[i], *argNodes[i]) &&
+                    !implicitly_dereferences_for_value_parameter(symbol->paramTypes[i], argTypes[i]) &&
                     !string_literal_decays_to_pointer(symbol->paramTypes[i], *argNodes[i]) && !cAbiWordConversion)
                 {
                     error("Function argument type mismatch.", callee);
@@ -1258,7 +1286,10 @@ namespace Checker
                     }
                     for (size_t i = 0; i < argTypes.size(); ++i)
                     {
-                        if (!is_assignable(methodIt->second.paramTypes[i], argTypes[i]) && !string_literal_decays_to_pointer(methodIt->second.paramTypes[i], *argNodes[i]))
+                        if (!is_assignable(methodIt->second.paramTypes[i], argTypes[i]) &&
+                            !implicitly_borrows_for_reference_parameter(methodIt->second.paramTypes[i], argTypes[i], *argNodes[i]) &&
+                            !implicitly_dereferences_for_value_parameter(methodIt->second.paramTypes[i], argTypes[i]) &&
+                            !string_literal_decays_to_pointer(methodIt->second.paramTypes[i], *argNodes[i]))
                         {
                             error("Method argument type mismatch.", callee);
                         }
@@ -2220,6 +2251,19 @@ namespace Checker
             if (!node.children.empty() &&
                 node.children.front().type == Parser::NodeType::Identifier)
                 structName = std::string(std::get<std::string_view>(node.children.front().value));
+
+            if (!activeNamespaces.empty())
+            {
+                std::string qualifiedName;
+                for (const std::string &name : activeNamespaces)
+                {
+                    if (!qualifiedName.empty())
+                        qualifiedName += "::";
+                    qualifiedName += name;
+                }
+                qualifiedName += "::" + structName;
+                structName = std::move(qualifiedName);
+            }
 
             structNameStack.push_back(structName);
             size_t genericsPushed = push_generic_params(node.children);

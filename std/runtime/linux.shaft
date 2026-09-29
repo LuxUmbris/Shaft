@@ -2,7 +2,7 @@
 // The target-specific assembly supplies the kernel ABI; every runtime API is
 // otherwise ordinary Shaft code in this module.
 
-@config.build.target = "x86_64-pc-linux-gnu"
+@config.build.target matches "x86_64-*linux-gnu"
 @config.build.hosted = false
 @asm
 .text
@@ -96,113 +96,19 @@ mut u64 runtime_sys_shutdown = 48;
 mut u64 runtime_sys_bind = 49;
 mut u64 runtime_sys_listen = 50;
 mut u64 runtime_sys_fcntl = 72;
+mut u64 runtime_sys_ioctl = 16;
 mut u64 runtime_sys_clock_gettime = 228;
 mut u64 runtime_sys_nanosleep = 35;
 mut u64 runtime_sys_futex = 202;
 mut u64 runtime_sys_exit = 60;
+mut u64 runtime_sys_execv = 59;
+mut u64 runtime_sys_clone = 56;
+mut u64 runtime_sys_wait4 = 61;
+mut u64 runtime_sys_pipe2 = 293;
+mut u64 runtime_sys_dup3 = 292;
 @end
 
-@config.build.target = "x86_64-unknown-linux-gnu"
-@config.build.hosted = false
-@asm
-.text
-.globl _start
-_start:
-    mov (%rsp), %edi
-    lea 8(%rsp), %rsi
-    and $-16, %rsp
-    call __shaft_entry
-    mov %eax, %edi
-    mov $60, %eax
-    syscall
-    ud2
-@end
-@end
-@asm
-.globl __shaft_syscall6
-__shaft_syscall6:
-    mov %rdi, %rax
-    mov %rsi, %rdi
-    mov %rdx, %rsi
-    mov %rcx, %rdx
-    mov %r8, %r10
-    mov %r9, %r8
-    mov 8(%rsp), %r9
-    syscall
-    ret
-@end
-@asm
-.globl __shaft_thread_clone
-__shaft_thread_clone:
-    push %r12
-    push %r13
-    mov %rsi, %r12
-    mov 16(%rsp), %r13
-    lea 65536(%rdi), %rsi
-    and $-16, %rsi
-    sub $8, %rsi
-    mov %r13, (%rsi)
-    mov (%rsp), %rax
-    mov %rax, 8(%rsi)
-    mov 8(%rsp), %rax
-    mov %rax, 16(%rsi)
-    mov $0x1350f00, %rdi
-    mov %r12, %rdx
-    mov %r12, %r10
-    xor %r8, %r8
-    mov $56, %rax
-    syscall
-    test %rax, %rax
-    jnz 1f
-    mov 8(%rsp), %r13
-    mov 16(%rsp), %r12
-    ret
-1:
-    pop %r13
-    pop %r12
-    ret
-@end
-@asm
-.globl __shaft_runtime_lock
-__shaft_runtime_lock:
-    mov $1, %rax
-1:
-    xchg %rax, runtime_lock(%rip)
-    test %rax, %rax
-    jz 2f
-    pause
-    mov $1, %rax
-    jmp 1b
-2:
-    ret
-.globl __shaft_runtime_unlock
-__shaft_runtime_unlock:
-    movq $0, runtime_lock(%rip)
-    ret
-@end
-mut u64 runtime_sys_read = 0;
-mut u64 runtime_sys_write = 1;
-mut u64 runtime_sys_open = 2;
-mut u64 runtime_sys_close = 3;
-mut u64 runtime_sys_lseek = 8;
-mut u64 runtime_sys_mmap = 9;
-mut u64 runtime_sys_munmap = 11;
-mut u64 runtime_sys_socket = 41;
-mut u64 runtime_sys_connect = 42;
-mut u64 runtime_sys_accept = 43;
-mut u64 runtime_sys_sendto = 44;
-mut u64 runtime_sys_recvfrom = 45;
-mut u64 runtime_sys_shutdown = 48;
-mut u64 runtime_sys_bind = 49;
-mut u64 runtime_sys_listen = 50;
-mut u64 runtime_sys_fcntl = 72;
-mut u64 runtime_sys_clock_gettime = 228;
-mut u64 runtime_sys_nanosleep = 35;
-mut u64 runtime_sys_futex = 202;
-mut u64 runtime_sys_exit = 60;
-@end
-
-@config.build.target = "aarch64-unknown-linux-gnu"
+@config.build.target matches "aarch64-*linux-gnu"
 @config.build.hosted = false
 @asm
 .text
@@ -264,13 +170,19 @@ mut u64 runtime_sys_shutdown = 210;
 mut u64 runtime_sys_bind = 200;
 mut u64 runtime_sys_listen = 201;
 mut u64 runtime_sys_fcntl = 25;
+mut u64 runtime_sys_ioctl = 29;
 mut u64 runtime_sys_clock_gettime = 113;
 mut u64 runtime_sys_nanosleep = 101;
 mut u64 runtime_sys_futex = 98;
 mut u64 runtime_sys_exit = 93;
+mut u64 runtime_sys_execv = 59;
+mut u64 runtime_sys_clone = 220;
+mut u64 runtime_sys_wait4 = 260;
+mut u64 runtime_sys_pipe2 = 59;
+mut u64 runtime_sys_dup3 = 24;
 @end
 
-@config.build.target = "riscv64-unknown-linux-gnu"
+@config.build.target matches "riscv64-*linux-gnu"
 @config.build.hosted = false
 @asm
 .text
@@ -329,10 +241,16 @@ mut u64 runtime_sys_shutdown = 210;
 mut u64 runtime_sys_bind = 200;
 mut u64 runtime_sys_listen = 201;
 mut u64 runtime_sys_fcntl = 25;
+mut u64 runtime_sys_ioctl = 29;
 mut u64 runtime_sys_clock_gettime = 113;
 mut u64 runtime_sys_nanosleep = 101;
 mut u64 runtime_sys_futex = 98;
 mut u64 runtime_sys_exit = 93;
+mut u64 runtime_sys_execv = 59;
+mut u64 runtime_sys_clone = 220;
+mut u64 runtime_sys_wait4 = 260;
+mut u64 runtime_sys_pipe2 = 59;
+mut u64 runtime_sys_dup3 = 24;
 @end
 
 cdec __shaft_syscall6(i64 number, i64 first, i64 second, i64 third, i64 fourth, i64 fifth, i64 sixth) -> i64;
@@ -353,6 +271,16 @@ class RuntimeTimeSpec
     mut i64 nanoseconds;
 }
 
+class RuntimeTermios
+{
+    mut u32 input_flags;
+    mut u32 output_flags;
+    mut u32 control_flags;
+    mut u32 local_flags;
+    mut u8 line_discipline;
+    mut u8[19] control_characters;
+}
+
 class RuntimeSockaddrIn
 {
     mut u16 family;
@@ -371,6 +299,8 @@ mut u64 runtime_stdin_offset = 0;
 mut u64 runtime_stdin_length = 0;
 mut *u8 runtime_null;
 mut *u32 runtime_null_u32;
+mut RuntimeTermios runtime_saved_terminal;
+mut bool runtime_terminal_active = false;
 
 cdef memcpy(*u8 destination, *u8 source, u64 count) -> *u8
 {
@@ -498,6 +428,7 @@ cdef __shaft_free(*u8 pointer)
 
 cdef __sys_exit(i32 status)
 {
+    __sys_restore_terminal();
     __shaft_syscall6(runtime_sys_exit, status, 0, 0, 0, 0, 0);
     while (true) {}
 }
@@ -525,6 +456,263 @@ cdef __sys_write(i64 descriptor, *i8 buffer, u64 count) -> i64
 cdef __sys_read(i64 descriptor, *i8 buffer, u64 count) -> i64
 {
     return __shaft_syscall6(runtime_sys_read, descriptor, buffer, count, 0, 0, 0);
+}
+
+cdef __sys_execv(*i8 command, **i8 arguments) -> i64
+{
+    return __shaft_syscall6(runtime_sys_execv, command, arguments, runtime_null, 0, 0, 0);
+}
+
+cdef __sys_process_spawn(*i8 command, **i8 arguments, i64 stdout_descriptor, i64 stderr_descriptor) -> i64
+{
+    mut i64 pid = __shaft_syscall6(runtime_sys_clone, 17, 0, 0, 0, 0, 0);
+    if (pid == 0)
+    {
+        if (stdout_descriptor >= 0)
+        {
+            __shaft_syscall6(runtime_sys_dup3, stdout_descriptor, 1, 0, 0, 0, 0);
+            __shaft_syscall6(runtime_sys_close, stdout_descriptor, 0, 0, 0, 0, 0);
+        }
+        if (stderr_descriptor >= 0)
+        {
+            __shaft_syscall6(runtime_sys_dup3, stderr_descriptor, 2, 0, 0, 0, 0);
+            __shaft_syscall6(runtime_sys_close, stderr_descriptor, 0, 0, 0, 0, 0);
+        }
+        __sys_execv(command, arguments);
+        __sys_exit(127);
+    }
+    return pid;
+}
+
+cdef __sys_process_wait(i64 pid) -> i64
+{
+    mut i32 status = 0;
+    mut i64 result = __shaft_syscall6(runtime_sys_wait4, pid, &status, 0, 0, 0, 0);
+    if (result < 0)
+    {
+        return result;
+    }
+    return status;
+}
+
+cdef __sys_process_pipe(*i64 descriptors) -> i64
+{
+    mut i32[2] rawDescriptors;
+    mut i64 result = __shaft_syscall6(runtime_sys_pipe2, &rawDescriptors[0], 0, 0, 0, 0, 0);
+    if (result == 0)
+    {
+        descriptors[0] = rawDescriptors[0];
+        descriptors[1] = rawDescriptors[1];
+    }
+    return result;
+}
+
+cdef __sys_process_set_nonblocking(i64 descriptor) -> i64
+{
+    mut i64 flags = __shaft_syscall6(runtime_sys_fcntl, descriptor, 3, 0, 0, 0, 0);
+    if (flags < 0)
+    {
+        return flags;
+    }
+    return __shaft_syscall6(runtime_sys_fcntl, descriptor, 4, flags | 2048, 0, 0, 0);
+}
+
+cdef __sys_process_read(i64 descriptor, *i8 buffer, u64 count) -> i64
+{
+    mut i64 result = __sys_read(descriptor, buffer, count);
+    if (result == -11)
+    {
+        return -2;
+    }
+    return result;
+}
+
+cdef __sys_process_null() -> *i8
+{
+    return runtime_null;
+}
+
+cdef __sys_restore_terminal()
+{
+    if (runtime_terminal_active)
+    {
+        __shaft_syscall6(runtime_sys_ioctl, 0, 21506, &runtime_saved_terminal, 0, 0, 0);
+        runtime_terminal_active = false;
+    }
+}
+
+cdef __runtime_enable_key_input()
+{
+    if (runtime_terminal_active)
+    {
+        return;
+    }
+    mut RuntimeTermios terminal;
+    if (__shaft_syscall6(runtime_sys_ioctl, 0, 21505, &terminal, 0, 0, 0) != 0)
+    {
+        return;
+    }
+    runtime_saved_terminal = terminal;
+    terminal.input_flags = terminal.input_flags & 4294965965;
+    terminal.output_flags = terminal.output_flags & 4294967294;
+    terminal.control_flags = (terminal.control_flags & 4294967247) | 48;
+    terminal.local_flags = terminal.local_flags & 4294934516;
+    terminal.control_characters[5] = 0;
+    terminal.control_characters[6] = 1;
+    if (__shaft_syscall6(runtime_sys_ioctl, 0, 21506, &terminal, 0, 0, 0) == 0)
+    {
+        runtime_terminal_active = true;
+    }
+}
+
+cdef __runtime_read_key_byte() -> i32
+{
+    mut i32 available = 0;
+    if (__shaft_syscall6(runtime_sys_ioctl, 0, 21531, &available, 0, 0, 0) != 0 || available <= 0)
+    {
+        return -1;
+    }
+    mut i8 byte = 0;
+    if (__sys_read(0, &byte, 1) != 1)
+    {
+        return -1;
+    }
+    mut i32 value = byte;
+    if (value < 0)
+    {
+        value = value + 256;
+    }
+    return value;
+}
+
+cdef __runtime_key_with_modifier(i32 key, i32 modifier) -> i32
+{
+    if (key == 0)
+    {
+        return 0;
+    }
+    return key + modifier * 4096;
+}
+
+cdef __runtime_key_from_byte(i32 byte) -> i32
+{
+    if (byte == 10 || byte == 13)
+    {
+        return 13;
+    }
+    if (byte >= 1 && byte <= 26)
+    {
+        return __runtime_key_with_modifier(byte + 64, 4);
+    }
+    if (byte >= 97 && byte <= 122)
+    {
+        return byte - 32;
+    }
+    if (byte == 127)
+    {
+        return 8;
+    }
+    return byte;
+}
+
+cdef __runtime_key_from_final(i32 final) -> i32
+{
+    if (final == 65) { return 257; }
+    if (final == 66) { return 258; }
+    if (final == 67) { return 259; }
+    if (final == 68) { return 260; }
+    if (final == 72) { return 261; }
+    if (final == 70) { return 262; }
+    if (final == 80) { return 272; }
+    if (final == 81) { return 273; }
+    if (final == 82) { return 274; }
+    if (final == 83) { return 275; }
+    return 0;
+}
+
+cdef __runtime_key_from_number(i32 number) -> i32
+{
+    if (number == 1 || number == 7) { return 261; }
+    if (number == 2) { return 265; }
+    if (number == 3) { return 266; }
+    if (number == 4 || number == 8) { return 262; }
+    if (number == 5) { return 263; }
+    if (number == 6) { return 264; }
+    if (number >= 11 && number <= 15) { return 272 + number - 11; }
+    if (number >= 17 && number <= 21) { return 278 + number - 17; }
+    if (number >= 23 && number <= 24) { return 283 + number - 23; }
+    return 0;
+}
+
+cdef __runtime_read_csi_key() -> i32
+{
+    mut i32 current = __runtime_read_key_byte();
+    if (current < 0)
+    {
+        return 0;
+    }
+    mut i32 number = 0;
+    while (current >= 48 && current <= 57)
+    {
+        number = number * 10 + current - 48;
+        current = __runtime_read_key_byte();
+        if (current < 0)
+        {
+            return 0;
+        }
+    }
+    mut i32 modifier = 0;
+    if (current == 59)
+    {
+        current = __runtime_read_key_byte();
+        while (current >= 48 && current <= 57)
+        {
+            modifier = modifier * 10 + current - 48;
+            current = __runtime_read_key_byte();
+        }
+        if (current < 0)
+        {
+            return 0;
+        }
+        if (modifier > 0)
+        {
+            modifier = modifier - 1;
+        }
+    }
+    mut i32 key = __runtime_key_from_final(current);
+    if (key == 0 && current == 126)
+    {
+        key = __runtime_key_from_number(number);
+    }
+    return __runtime_key_with_modifier(key, modifier);
+}
+
+cdef __sys_read_key() -> i32
+{
+    __runtime_enable_key_input();
+    mut i32 first = __runtime_read_key_byte();
+    if (first < 0)
+    {
+        return 0;
+    }
+    if (first != 27)
+    {
+        return __runtime_key_from_byte(first);
+    }
+    mut i32 next = __runtime_read_key_byte();
+    if (next < 0)
+    {
+        return 27;
+    }
+    if (next == 91)
+    {
+        return __runtime_read_csi_key();
+    }
+    if (next == 79)
+    {
+        return __runtime_key_from_final(__runtime_read_key_byte());
+    }
+    return __runtime_key_with_modifier(__runtime_key_from_byte(next), 2);
 }
 
 cdef __sys_readline(*u8 buffer, u64 capacity) -> i64

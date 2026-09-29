@@ -38,4 +38,29 @@ function resolveCompilerSettings(settings = {}, options = {}) {
   return { ...settings, compilerPath: 'shaftc', source: 'PATH' };
 }
 
-module.exports = { registrationPath, readRegistration, resolveCompilerSettings };
+function createLiveDiagnosticsOptions(settings = {}, options = {}) {
+  const resolved = resolveCompilerSettings(settings, options);
+  const compilerPath = resolved.compilerPath;
+  if (!path.isAbsolute(compilerPath) || !fs.existsSync(compilerPath)) return { options: {}, directory: '' };
+  try {
+    const directory = fs.mkdtempSync(path.join(options.temporaryDirectory || os.tmpdir(), 'shaftls-'));
+    return {
+      options: { compilerPath, diagnosticPath: path.join(directory, 'document.shaft') },
+      directory,
+    };
+  } catch {
+    return { options: {}, directory: '' };
+  }
+}
+
+function removeLiveDiagnosticsDirectory(directory) {
+  if (directory) fs.rmSync(directory, { recursive: true, force: true });
+}
+
+module.exports = {
+  registrationPath,
+  readRegistration,
+  resolveCompilerSettings,
+  createLiveDiagnosticsOptions,
+  removeLiveDiagnosticsDirectory,
+};

@@ -147,9 +147,6 @@ def matches_at(*String text, u64 offset, *String expected) -> bool matches
     tunnel equal -> bool matches;
 }
 
-
-// Decode a JSON string after its exact key prefix. The stored text is therefore
-// the document content, not an LSP request body or a precomputed token stream.
 def json_string(*String message, *String marker) -> String result
 {
     reserve mut String value = String::with_capacity(message.length);
@@ -201,8 +198,6 @@ def json_string(*String message, *String marker) -> String result
 }
 
 
-// Extract a numeric JSON field by occurrence. Ranged didChange payloads have
-// two `character` fields, hence the explicit occurrence parameter.
 def json_number(*String message, *String marker, u64 occurrence) -> u64 result
 {
     mut u64 search = 0;
@@ -421,8 +416,29 @@ def is_assembly_name_part(u8 byte) -> bool result
 }
 
 
-// Highlight declaration syntax from actual source lines. Meta directives are
-// treated as keyword tokens so they use the editor's standard keyword color.
+def matches_config_directive(*String text, u64 offset, *String directive) -> bool matches
+{
+    mut bool complete = matches_at(text, offset, directive);
+    if (complete)
+    {
+        complete = offset + directive.length < text.length && text.data[offset + directive.length] == 46;
+    }
+    tunnel complete -> bool matches;
+}
+
+
+def matches_line_directive(*String text, u64 offset, u64 lineEnd, *String directive) -> bool matches
+{
+    mut bool complete = matches_at(text, offset, directive);
+    if (complete && offset + directive.length < lineEnd)
+    {
+        mut u8 following = text.data[offset + directive.length];
+        complete = is_space(following) || following == 40 || following == 34;
+    }
+    tunnel complete -> bool matches;
+}
+
+
 def append_assembly_tokens(*String text, u64 offset, u64 lineEnd, u64 line, *String output,
                            *u64 previousLine, *u64 previousStart, *bool first)
 {
@@ -486,10 +502,293 @@ def append_assembly_tokens(*String text, u64 offset, u64 lineEnd, u64 line, *Str
 }
 
 
+def word_in_list(*String text, u64 startOffset, u64 endOffset, *String words) -> bool found
+{
+    mut bool present = false;
+    mut u64 offset = 0;
+    while (!present && offset < words.length)
+    {
+        mut u64 wordStart = offset;
+        while (offset < words.length && words.data[offset] != 124)
+        {
+            offset = offset + 1;
+        }
+        if (endOffset - startOffset == offset - wordStart)
+        {
+            mut u64 character = 0;
+            mut bool equal = true;
+            while (equal && character < endOffset - startOffset)
+            {
+                if (text.data[startOffset + character] != words.data[wordStart + character])
+                {
+                    equal = false;
+                }
+                character = character + 1;
+            }
+            present = equal;
+        }
+        offset = offset + 1;
+    }
+    tunnel present -> bool found;
+}
+
+
+def is_declared_custom_type(*String text, u64 candidateStart, u64 candidateEnd) -> bool found
+{
+    reserve String declarations = String::from_str("class|enum|struct");
+    mut u64 cursor = 0;
+    mut bool declared = false;
+    while (!declared && cursor < text.length)
+    {
+        if (cursor + 1 < text.length && text.data[cursor] == 47 && text.data[cursor + 1] == 47)
+        {
+            while (cursor < text.length && text.data[cursor] != 10)
+            {
+                cursor = cursor + 1;
+            }
+        }
+        else if (text.data[cursor] == 34 || text.data[cursor] == 39)
+        {
+            reserve u8 delimiter = text.data[cursor];
+            cursor = cursor + 1;
+            mut bool escaped = false;
+            while (cursor < text.length)
+            {
+                if (!escaped && text.data[cursor] == delimiter)
+                {
+                    cursor = cursor + 1;
+                    break;
+                }
+                if (!escaped && text.data[cursor] == 92)
+                {
+                    escaped = true;
+                }
+                else
+                {
+                    escaped = false;
+                }
+                cursor = cursor + 1;
+            }
+        }
+        else if (is_assembly_name_start(text.data[cursor]))
+        {
+            mut u64 wordEnd = cursor + 1;
+            while (wordEnd < text.length && is_assembly_name_part(text.data[wordEnd]))
+            {
+                wordEnd = wordEnd + 1;
+            }
+            if (word_in_list(text, cursor, wordEnd, &declarations))
+            {
+                cursor = wordEnd;
+                while (cursor < text.length && is_space(text.data[cursor]))
+                {
+                    cursor = cursor + 1;
+                }
+                while (cursor < text.length && text.data[cursor] == 60)
+                {
+                    cursor = cursor + 1;
+                    while (cursor < text.length && text.data[cursor] != 62)
+                    {
+                        cursor = cursor + 1;
+                    }
+                    if (cursor < text.length)
+                    {
+                        cursor = cursor + 1;
+                    }
+                    while (cursor < text.length && is_space(text.data[cursor]))
+                    {
+                        cursor = cursor + 1;
+                    }
+                }
+                if (cursor < text.length && is_assembly_name_start(text.data[cursor]))
+                {
+                    mut u64 nameEnd = cursor + 1;
+                    while (nameEnd < text.length && is_assembly_name_part(text.data[nameEnd]))
+                    {
+                        nameEnd = nameEnd + 1;
+                    }
+                    if (nameEnd - cursor == candidateEnd - candidateStart)
+                    {
+                        mut u64 character = 0;
+                        mut bool equal = true;
+                        while (equal && character < nameEnd - cursor)
+                        {
+                            if (text.data[cursor + character] != text.data[candidateStart + character])
+                            {
+                                equal = false;
+                            }
+                            character = character + 1;
+                        }
+                        declared = equal;
+                    }
+                    cursor = nameEnd;
+                }
+            }
+            else
+            {
+                cursor = wordEnd;
+            }
+        }
+        else
+        {
+            cursor = cursor + 1;
+        }
+    }
+    tunnel declared -> bool found;
+}
+
+
+def append_config_condition_tokens(*String text, u64 startOffset, u64 lineEnd, u64 line, u64 lineStart,
+                                   *String output, *u64 previousLine, *u64 previousStart, *bool first)
+{
+    reserve String conditions = String::from_str("in|matches");
+    mut u64 cursor = startOffset;
+    while (cursor < lineEnd && !is_space(text.data[cursor]) && text.data[cursor] != 61)
+    {
+        cursor = cursor + 1;
+    }
+    while (cursor < lineEnd && is_space(text.data[cursor]))
+    {
+        cursor = cursor + 1;
+    }
+    if (cursor < lineEnd && is_assembly_name_start(text.data[cursor]))
+    {
+        mut u64 end = cursor + 1;
+        while (end < lineEnd && is_assembly_name_part(text.data[end]))
+        {
+            end = end + 1;
+        }
+        if (word_in_list(text, cursor, end, &conditions))
+        {
+            append_token(output, line, cursor - lineStart, end - cursor, 0, previousLine, previousStart, first);
+        }
+    }
+}
+
+
+def append_source_tokens(*String text, u64 offset, u64 lineEnd, u64 line, *String output,
+                         *u64 previousLine, *u64 previousStart, *bool first)
+{
+    reserve String keywords = String::from_str("align|async|await|break|case|cdec|cdef|class|continue|dec|default|def|else|enum|export|for|foreach|global|if|import|index|init|inline|match|move|mut|naked|namespace|raw|ref|reserve|return|self|sizeof|start|struct|tunnel|using|valid|while");
+    reserve String types = String::from_str("bool|char|State|Thread|u8|u16|u32|u64|usize|i8|i16|i32|i64|f32|f64");
+    mut u64 cursor = offset;
+    while (cursor < lineEnd)
+    {
+        mut u8 byte = text.data[cursor];
+        if (cursor + 1 < lineEnd && byte == 47 && text.data[cursor + 1] == 47)
+        {
+            append_token(output, line, cursor - offset, lineEnd - cursor, 5, previousLine, previousStart, first);
+            cursor = lineEnd;
+        }
+        else if (byte == 34 || byte == 39)
+        {
+            mut u64 end = cursor + 1;
+            mut bool escaped = false;
+            while (end < lineEnd)
+            {
+                if (!escaped && text.data[end] == byte)
+                {
+                    end = end + 1;
+                    break;
+                }
+                if (!escaped && text.data[end] == 92)
+                {
+                    escaped = true;
+                }
+                else
+                {
+                    escaped = false;
+                }
+                end = end + 1;
+            }
+            append_token(output, line, cursor - offset, end - cursor, 4, previousLine, previousStart, first);
+            cursor = end;
+        }
+        else if (is_assembly_name_start(byte))
+        {
+            mut u64 end = cursor + 1;
+            while (end < lineEnd && is_assembly_name_part(text.data[end]))
+            {
+                end = end + 1;
+            }
+            mut u64 kind = 8;
+            if (word_in_list(text, cursor, end, &keywords))
+            {
+                kind = 0;
+            }
+            else if (word_in_list(text, cursor, end, &types) ||
+                     is_declared_custom_type(text, cursor, end) ||
+                     (text.data[cursor] >= 65 && text.data[cursor] <= 90))
+            {
+                kind = 1;
+            }
+            else
+            {
+                mut u64 following = end;
+                while (following < lineEnd && is_space(text.data[following]))
+                {
+                    following = following + 1;
+                }
+                if (following < lineEnd && text.data[following] == 40)
+                {
+                    kind = 2;
+                }
+            }
+            append_token(output, line, cursor - offset, end - cursor, kind, previousLine, previousStart, first);
+            cursor = end;
+        }
+        else if (byte >= 48 && byte <= 57)
+        {
+            mut u64 end = cursor + 1;
+            while (end < lineEnd && ((text.data[end] >= 48 && text.data[end] <= 57) ||
+                                     (text.data[end] >= 65 && text.data[end] <= 70) ||
+                                     (text.data[end] >= 97 && text.data[end] <= 102) ||
+                                     text.data[end] == 95 || text.data[end] == 46 || text.data[end] == 120 || text.data[end] == 98))
+            {
+                end = end + 1;
+            }
+            append_token(output, line, cursor - offset, end - cursor, 3, previousLine, previousStart, first);
+            cursor = end;
+        }
+        else
+        {
+            mut u64 operatorLength = 0;
+            if (byte == 45 && cursor + 1 < lineEnd && text.data[cursor + 1] == 62)
+            {
+                operatorLength = 2;
+            }
+            else if (byte == 60 && cursor + 1 < lineEnd && text.data[cursor + 1] == 45)
+            {
+                operatorLength = 2;
+            }
+            else if ((byte == 58 || byte == 61 || byte == 33 || byte == 60 || byte == 62 || byte == 38 || byte == 124 || byte == 60 || byte == 62) && cursor + 1 < lineEnd && text.data[cursor + 1] == byte)
+            {
+                operatorLength = 2;
+            }
+            else if (byte == 43 || byte == 45 || byte == 42 || byte == 47 || byte == 37 || byte == 61 || byte == 60 || byte == 62 || byte == 33 || byte == 38 || byte == 124 || byte == 94 || byte == 40 || byte == 41 || byte == 123 || byte == 125 || byte == 91 || byte == 93)
+            {
+                operatorLength = 1;
+            }
+            if (operatorLength != 0)
+            {
+                append_token(output, line, cursor - offset, operatorLength, 6, previousLine, previousStart, first);
+                cursor = cursor + operatorLength;
+            }
+            else
+            {
+                cursor = cursor + 1;
+            }
+        }
+    }
+}
+
+
 def semantic_tokens(*String text) -> String result
 {
     reserve String importWord = String::from_str("import");
     reserve String configWord = String::from_str("@config");
+    reserve String negatedConfigWord = String::from_str("@!config");
+    reserve String errorWord = String::from_str("@error");
     reserve String asmWord = String::from_str("@asm");
     reserve String endWord = String::from_str("@end");
     reserve mut String output = String::with_capacity(text.length * 4 + 32);
@@ -546,16 +845,26 @@ def semantic_tokens(*String text) -> String result
                 append_token(&output, line, code - offset, end - code, 4, &previousLine, &previousStart, &first);
             }
         }
-        else if (!comment && matches_at(text, code, &configWord))
+        else if (!comment && matches_config_directive(text, code, &configWord))
         {
             append_token(&output, line, code - offset, configWord.length, 0, &previousLine, &previousStart, &first);
+            append_config_condition_tokens(text, code + configWord.length, lineEnd, line, offset, &output, &previousLine, &previousStart, &first);
         }
-        else if (!comment && matches_at(text, code, &asmWord))
+        else if (!comment && matches_config_directive(text, code, &negatedConfigWord))
+        {
+            append_token(&output, line, code - offset, negatedConfigWord.length, 0, &previousLine, &previousStart, &first);
+            append_config_condition_tokens(text, code + negatedConfigWord.length, lineEnd, line, offset, &output, &previousLine, &previousStart, &first);
+        }
+        else if (!comment && matches_line_directive(text, code, lineEnd, &errorWord))
+        {
+            append_token(&output, line, code - offset, errorWord.length, 9, &previousLine, &previousStart, &first);
+        }
+        else if (!comment && matches_line_directive(text, code, lineEnd, &asmWord))
         {
             append_token(&output, line, code - offset, asmWord.length, 0, &previousLine, &previousStart, &first);
             inAssembly = true;
         }
-        else if (!comment && matches_at(text, code, &endWord))
+        else if (!comment && matches_line_directive(text, code, lineEnd, &endWord))
         {
             append_token(&output, line, code - offset, endWord.length, 0, &previousLine, &previousStart, &first);
             inAssembly = false;
@@ -563,6 +872,10 @@ def semantic_tokens(*String text) -> String result
         else if (!comment && inAssembly)
         {
             append_assembly_tokens(text, offset, lineEnd, line, &output, &previousLine, &previousStart, &first);
+        }
+        else if (!comment)
+        {
+            append_source_tokens(text, offset, lineEnd, line, &output, &previousLine, &previousStart, &first);
         }
 
         if (lineEnd < text.length)
@@ -580,7 +893,59 @@ def semantic_tokens(*String text) -> String result
 }
 
 
-def append_diagnostic(*String output, u64 line, u64 column, *String message, *bool first)
+def append_json_escaped(*String output, *String value)
+{
+    mut u64 offset = 0;
+    while (offset < value.length)
+    {
+        mut u8 byte = value.data[offset];
+        if (byte == 27)
+        {
+            while (offset + 1 < value.length && value.data[offset + 1] != 109)
+            {
+                offset = offset + 1;
+            }
+            if (offset + 1 < value.length)
+            {
+                offset = offset + 1;
+            }
+        }
+        else if (byte == 34)
+        {
+            output.append("\\\"");
+        }
+        else if (byte == 92)
+        {
+            output.append("\\\\");
+        }
+        else if (byte == 10)
+        {
+            output.append("\\n");
+        }
+        else if (byte == 13)
+        {
+            output.append("\\r");
+        }
+        else if (byte == 9)
+        {
+            output.append("\\t");
+        }
+        else if (byte < 32)
+        {
+            output.append("?");
+        }
+        else
+        {
+            output.data[output.length] = byte;
+            output.length = output.length + 1;
+        }
+        offset = offset + 1;
+    }
+    output.data[output.length] = 0;
+}
+
+
+def append_diagnostic(*String output, u64 line, u64 column, *String message, *String source, *bool first)
 {
     if (!first[0])
     {
@@ -594,23 +959,170 @@ def append_diagnostic(*String output, u64 line, u64 column, *String message, *bo
     append_number(output, line);
     output.append(",\"character\":");
     append_number(output, column + 1);
-    output.append("}},\"severity\":1,\"source\":\"shaftls\",\"message\":\"");
-    output.append(message.get_view());
+    output.append("}},\"severity\":1,\"source\":\"");
+    append_json_escaped(output, source);
+    output.append("\",\"message\":\"");
+    append_json_escaped(output, message);
     output.append("\"}");
     first[0] = false;
 }
 
 
+def publish_empty_diagnostics(*String uri, *String notificationMethod)
+{
+    reserve mut String params = String::with_capacity(uri.length + 32);
+    params.append("{\"uri\":\"");
+    append_json_escaped(&params, uri);
+    params.append("\",\"diagnostics\":[]}");
+    send_notification(notificationMethod, &params);
+}
+
+
+def find_text(*String text, *String needle, u64 startOffset) -> u64 result
+{
+    mut u64 offset = startOffset;
+    mut bool found = false;
+    while (!found && offset + needle.length <= text.length)
+    {
+        if (matches_at(text, offset, needle))
+        {
+            found = true;
+        }
+        else
+        {
+            offset = offset + 1;
+        }
+    }
+    if (!found)
+    {
+        offset = text.length;
+    }
+    tunnel offset -> u64 result;
+}
+
+
+// `shaftc` colors diagnostics even when stderr is redirected. Remove CSI
+// sequences before parsing or serializing a diagnostic for JSON-RPC.
+def strip_ansi(*String input) -> String result
+{
+    reserve mut String clean = String::with_capacity(input.length);
+    mut u64 offset = 0;
+    while (offset < input.length)
+    {
+        if (input.data[offset] == 27 && offset + 1 < input.length && input.data[offset + 1] == 91)
+        {
+            offset = offset + 2;
+            while (offset < input.length && (input.data[offset] < 64 || input.data[offset] > 126))
+            {
+                offset = offset + 1;
+            }
+            if (offset < input.length)
+            {
+                offset = offset + 1;
+            }
+        }
+        else
+        {
+            clean.data[clean.length] = input.data[offset];
+            clean.length = clean.length + 1;
+            offset = offset + 1;
+        }
+    }
+    clean.data[clean.length] = 0;
+    tunnel clean -> String result;
+}
+
+
+// The launcher provisions an isolated snapshot path. The server writes only
+// that path, never the user's on-disk source file.
+def append_compiler_diagnostic(*String output, *String text, *String compilerPath, *String diagnosticPath, *bool first)
+{
+    if (compilerPath.length != 0 && diagnosticPath.length != 0 &&
+        File::write(diagnosticPath.get_view(), text.get_view()) == text.length)
+    {
+        reserve mut Process::Command command = Process::Command::new(compilerPath.get_view());
+        command.arg("--check-only");
+        command.arg(diagnosticPath.get_view());
+        reserve Process::Output compilerOutput = command.output();
+        if (compilerOutput.status != 0)
+        {
+            reserve String compilerError = strip_ansi(&compilerOutput.stderr);
+            reserve String errorMarker = String::from_str("error: ");
+            reserve String locationMarker = String::from_str("--> ");
+            reserve String compilerSource = String::from_str("shaftc");
+            reserve u64 errorStart = find_text(&compilerError, &errorMarker, 0);
+            reserve u64 locationStart = find_text(&compilerError, &locationMarker, 0);
+            if (errorStart < compilerError.length &&
+                locationStart + locationMarker.length + diagnosticPath.length < compilerError.length &&
+                matches_at(&compilerError, locationStart + locationMarker.length, diagnosticPath) &&
+                compilerError.data[locationStart + locationMarker.length + diagnosticPath.length] == 58)
+            {
+                mut u64 messageEnd = errorStart + errorMarker.length;
+                while (messageEnd < compilerError.length && compilerError.data[messageEnd] != 10)
+                {
+                    messageEnd = messageEnd + 1;
+                }
+                reserve mut String message = String::with_capacity(messageEnd - errorStart - errorMarker.length);
+                mut u64 character = errorStart + errorMarker.length;
+                while (character < messageEnd)
+                {
+                    message.data[message.length] = compilerError.data[character];
+                    message.length = message.length + 1;
+                    character = character + 1;
+                }
+                message.data[message.length] = 0;
+
+                mut u64 cursor = locationStart + locationMarker.length + diagnosticPath.length;
+                mut u64 diagnosticLine = 0;
+                mut u64 diagnosticColumn = 0;
+                mut bool hasLocation = false;
+                while (!hasLocation && cursor + 1 < compilerError.length)
+                {
+                    if (compilerError.data[cursor] == 58 && compilerError.data[cursor + 1] >= 48 && compilerError.data[cursor + 1] <= 57)
+                    {
+                        cursor = cursor + 1;
+                        while (cursor < compilerError.length && compilerError.data[cursor] >= 48 && compilerError.data[cursor] <= 57)
+                        {
+                            diagnosticLine = diagnosticLine * 10 + compilerError.data[cursor] - 48;
+                            cursor = cursor + 1;
+                        }
+                        if (cursor + 1 < compilerError.length && compilerError.data[cursor] == 58 && compilerError.data[cursor + 1] >= 48 && compilerError.data[cursor + 1] <= 57)
+                        {
+                            cursor = cursor + 1;
+                            while (cursor < compilerError.length && compilerError.data[cursor] >= 48 && compilerError.data[cursor] <= 57)
+                            {
+                                diagnosticColumn = diagnosticColumn * 10 + compilerError.data[cursor] - 48;
+                                cursor = cursor + 1;
+                            }
+                            hasLocation = diagnosticLine > 0 && diagnosticColumn > 0;
+                        }
+                    }
+                    if (!hasLocation)
+                    {
+                        cursor = cursor + 1;
+                    }
+                }
+                if (hasLocation)
+                {
+                    append_diagnostic(output, diagnosticLine - 1, diagnosticColumn - 1, &message, &compilerSource, first);
+                }
+            }
+        }
+    }
+}
+
+
 // Braces in strings and line comments do not participate in structure. Every
 // unmatched close and every remaining open is reported at its source position.
-def publish_structure_diagnostics(*String uri, *String text, *String notificationMethod, *String unmatchedMessage, *String unclosedMessage)
+def publish_structure_diagnostics(*String uri, *String text, *String compilerPath, *String diagnosticPath, *String notificationMethod, *String unmatchedMessage, *String unclosedMessage)
 {
     // A source byte can produce one complete diagnostic object, not merely one
     // output byte (for example, a document of unmatched closing braces).
     reserve mut String params = String::with_capacity(text.length * 160 + uri.length + 128);
     params.append("{\"uri\":\"");
-    params.append(uri.get_view());
+    append_json_escaped(&params, uri);
     params.append("\",\"diagnostics\":[");
+    reserve String structureSource = String::from_str("shaftls");
     mut bool first = true;
     mut u64[] braceLines = __shaft_alloc_or_exit((text.length + 1) * 8);
     mut u64[] braceColumns = __shaft_alloc_or_exit((text.length + 1) * 8);
@@ -621,6 +1133,9 @@ def publish_structure_diagnostics(*String uri, *String text, *String notificatio
     mut bool inString = false;
     mut bool escaped = false;
     mut bool comment = false;
+    mut u8 stringDelimiter = 0;
+    mut u64 stringLine = 0;
+    mut u64 stringColumn = 0;
 
     while (offset < text.length)
     {
@@ -634,7 +1149,7 @@ def publish_structure_diagnostics(*String uri, *String text, *String notificatio
         }
         else if (inString)
         {
-            if (!escaped && byte == 34)
+            if (!escaped && byte == stringDelimiter)
             {
                 inString = false;
             }
@@ -651,10 +1166,13 @@ def publish_structure_diagnostics(*String uri, *String text, *String notificatio
         {
             comment = true;
         }
-        else if (byte == 34)
+        else if (byte == 34 || byte == 39)
         {
             inString = true;
             escaped = false;
+            stringDelimiter = byte;
+            stringLine = line;
+            stringColumn = column;
         }
         else if (byte == 123)
         {
@@ -666,7 +1184,7 @@ def publish_structure_diagnostics(*String uri, *String text, *String notificatio
         {
             if (depth == 0)
             {
-                append_diagnostic(&params, line, column, unmatchedMessage, &first);
+                append_diagnostic(&params, line, column, unmatchedMessage, &structureSource, &first);
             }
             else
             {
@@ -685,10 +1203,19 @@ def publish_structure_diagnostics(*String uri, *String text, *String notificatio
         }
         offset = offset + 1;
     }
+    if (inString)
+    {
+        reserve String unterminatedStringMessage = String::from_str("Unterminated string literal");
+        append_diagnostic(&params, stringLine, stringColumn, &unterminatedStringMessage, &structureSource, &first);
+    }
     while (depth > 0)
     {
         depth = depth - 1;
-        append_diagnostic(&params, braceLines[depth], braceColumns[depth], unclosedMessage, &first);
+        append_diagnostic(&params, braceLines[depth], braceColumns[depth], unclosedMessage, &structureSource, &first);
+    }
+    if (first)
+    {
+        append_compiler_diagnostic(&params, text, compilerPath, diagnosticPath, &first);
     }
     params.append("]}");
     send_notification(notificationMethod, &params);
@@ -702,6 +1229,7 @@ def main(String[] args)
     reserve String exitMarker = String::from_str("\"method\":\"exit\"");
     reserve String didOpenMarker = String::from_str("\"method\":\"textDocument/didOpen\"");
     reserve String didChangeMarker = String::from_str("\"method\":\"textDocument/didChange\"");
+    reserve String didCloseMarker = String::from_str("\"method\":\"textDocument/didClose\"");
     reserve String semanticMarker = String::from_str("\"method\":\"textDocument/semanticTokens/full\"");
     reserve String uriMarker = String::from_str("\"uri\":\"");
     reserve String textMarker = String::from_str("\"text\":\"");
@@ -709,13 +1237,17 @@ def main(String[] args)
     reserve String startLineMarker = String::from_str("\"start\":{\"line\":");
     reserve String endLineMarker = String::from_str("\"end\":{\"line\":");
     reserve String characterMarker = String::from_str("\"character\":");
+    reserve String compilerPathMarker = String::from_str("\"compilerPath\":\"");
+    reserve String diagnosticPathMarker = String::from_str("\"diagnosticPath\":\"");
     reserve String diagnosticsMethod = String::from_str("textDocument/publishDiagnostics");
     reserve String unmatchedMessage = String::from_str("Unmatched closing brace");
     reserve String unclosedMessage = String::from_str("Unclosed opening brace");
-    reserve String initializeResult = String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\",\"macro\",\"variable\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
+    reserve String initializeResult = String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\",\"macro\",\"variable\",\"error\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
     reserve String nullResult = String::from_str("null");
     reserve mut String documentUri = String::with_capacity(1);
     reserve mut String documentText = String::with_capacity(1);
+    reserve mut String compilerPath = String::with_capacity(1);
+    reserve mut String diagnosticPath = String::with_capacity(1);
     mut bool running = true;
     mut bool shutdownRequested = false;
     mut bool exitReceived = false;
@@ -729,6 +1261,16 @@ def main(String[] args)
         }
         else if (contains(&message, &initializeMarker))
         {
+            reserve String configuredCompilerPath = json_string(&message, &compilerPathMarker);
+            if (configuredCompilerPath.length != 0)
+            {
+                compilerPath = String::from_str(configuredCompilerPath.get_view());
+            }
+            reserve String configuredDiagnosticPath = json_string(&message, &diagnosticPathMarker);
+            if (configuredDiagnosticPath.length != 0)
+            {
+                diagnosticPath = String::from_str(configuredDiagnosticPath.get_view());
+            }
             send_response(request_id(&message), &initializeResult);
         }
         else if (contains(&message, &shutdownMarker))
@@ -745,7 +1287,7 @@ def main(String[] args)
         {
             documentUri = json_string(&message, &uriMarker);
             documentText = json_string(&message, &textMarker);
-            publish_structure_diagnostics(&documentUri, &documentText, &diagnosticsMethod, &unmatchedMessage, &unclosedMessage);
+            publish_structure_diagnostics(&documentUri, &documentText, &compilerPath, &diagnosticPath, &diagnosticsMethod, &unmatchedMessage, &unclosedMessage);
         }
         else if (contains(&message, &didChangeMarker))
         {
@@ -766,7 +1308,12 @@ def main(String[] args)
             {
                 documentUri = changedUri;
             }
-            publish_structure_diagnostics(&documentUri, &documentText, &diagnosticsMethod, &unmatchedMessage, &unclosedMessage);
+            publish_structure_diagnostics(&documentUri, &documentText, &compilerPath, &diagnosticPath, &diagnosticsMethod, &unmatchedMessage, &unclosedMessage);
+        }
+        else if (contains(&message, &didCloseMarker))
+        {
+            reserve String closedUri = json_string(&message, &uriMarker);
+            publish_empty_diagnostics(&closedUri, &diagnosticsMethod);
         }
         else if (contains(&message, &semanticMarker))
         {

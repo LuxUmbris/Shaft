@@ -4,13 +4,14 @@
 #include "parser.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -49,10 +50,14 @@ namespace
     {
         switch (level)
         {
-        case OptimizationLevel::O0: return "O0";
-        case OptimizationLevel::O1: return "O1";
-        case OptimizationLevel::O2: return "O2";
-        case OptimizationLevel::O3: return "O3";
+        case OptimizationLevel::O0:
+            return "O0";
+        case OptimizationLevel::O1:
+            return "O1";
+        case OptimizationLevel::O2:
+            return "O2";
+        case OptimizationLevel::O3:
+            return "O3";
         }
         return "O0";
     }
@@ -142,11 +147,20 @@ namespace
                 throw std::runtime_error(location + " has an incomplete string escape");
             switch (value[index])
             {
-            case '\\': result += '\\'; break;
-            case '"': result += '"'; break;
-            case 'n': result += '\n'; break;
-            case 't': result += '\t'; break;
-            default: throw std::runtime_error(location + " has an unsupported string escape");
+            case '\\':
+                result += '\\';
+                break;
+            case '"':
+                result += '"';
+                break;
+            case 'n':
+                result += '\n';
+                break;
+            case 't':
+                result += '\t';
+                break;
+            default:
+                throw std::runtime_error(location + " has an unsupported string escape");
             }
         }
         return result;
@@ -265,29 +279,27 @@ namespace
                                          ": expected a non-empty key and value");
             const std::string field = section + "." + key;
             if (!fields.emplace(field, std::make_pair(value, lineNumber)).second)
-                throw std::runtime_error(buildPath.string() + ":" + std::to_string(lineNumber) +
-                                         ": duplicate key '" + field + "'");
+                throw std::runtime_error(buildPath.string() + ":" + std::to_string(lineNumber) + ": duplicate key '" +
+                                         field + "'");
         }
 
-        const auto location = [&buildPath, &fields](const std::string &field) {
-            return buildPath.string() + ":" + std::to_string(fields.at(field).second) + ": " + field;
-        };
-        const auto stringField = [&fields, &location](const std::string &field) {
-            return parse_toml_string(fields.at(field).first, location(field));
-        };
-        const auto boolField = [&fields, &location](const std::string &field) {
-            return parse_toml_bool(fields.at(field).first, location(field));
-        };
-        const auto stringArrayField = [&fields, &location](const std::string &field) {
-            return parse_toml_string_array(fields.at(field).first, location(field));
-        };
-        const auto require_known = [&fields, &location](const std::string &field) {
+        const auto location = [&buildPath, &fields](const std::string &field)
+        { return buildPath.string() + ":" + std::to_string(fields.at(field).second) + ": " + field; };
+        const auto stringField = [&fields, &location](const std::string &field)
+        { return parse_toml_string(fields.at(field).first, location(field)); };
+        const auto boolField = [&fields, &location](const std::string &field)
+        { return parse_toml_bool(fields.at(field).first, location(field)); };
+        const auto stringArrayField = [&fields, &location](const std::string &field)
+        { return parse_toml_string_array(fields.at(field).first, location(field)); };
+        const auto require_known = [&fields, &location](const std::string &field)
+        {
             const bool known = field == "package.name" || field == "package.version" || field == "build.entry" ||
                                field == "build.output" || field == "build.emit" || field == "build.optimization" ||
                                field == "build.target" || field == "build.stdlib" || field == "build.runtime" ||
                                field == "build.resources" || field == "build.native" || field == "build.no_std" ||
                                field == "build.check_only" || field == "build.verbose" || field == "build.hosted" ||
-                               field == "build.link_dirs" || field == "build.link_directories" || field == "build.links";
+                               field == "build.link_dirs" || field == "build.link_directories" ||
+                               field == "build.links";
             if (!known)
                 throw std::runtime_error(location(field) + ": unknown configuration key");
         };
@@ -299,7 +311,8 @@ namespace
         const std::filesystem::path base = buildPath.parent_path();
         Options options;
         options.inputPath = resolve_build_path(base, stringField("build.entry"));
-        const auto setPath = [&fields, &stringField, &base](const std::string &field, std::string &destination) {
+        const auto setPath = [&fields, &stringField, &base](const std::string &field, std::string &destination)
+        {
             if (fields.find(field) != fields.end())
                 destination = resolve_build_path(base, stringField(field));
         };
@@ -335,10 +348,10 @@ namespace
         if (fields.find("build.hosted") != fields.end())
             options.hosted = boolField("build.hosted");
         if (fields.find("build.link_dirs") != fields.end() && fields.find("build.link_directories") != fields.end())
-            throw std::runtime_error(buildPath.string() + ": specify only one of build.link_dirs or build.link_directories");
-        const std::string linkDirectoriesField = fields.find("build.link_directories") != fields.end()
-                                                    ? "build.link_directories"
-                                                    : "build.link_dirs";
+            throw std::runtime_error(buildPath.string() +
+                                     ": specify only one of build.link_dirs or build.link_directories");
+        const std::string linkDirectoriesField =
+            fields.find("build.link_directories") != fields.end() ? "build.link_directories" : "build.link_dirs";
         if (fields.find(linkDirectoriesField) != fields.end())
             for (const std::string &directory : stringArrayField(linkDirectoriesField))
                 options.linkDirectories.emplace_back(resolve_build_path(base, directory));
@@ -509,11 +522,8 @@ namespace
 
     class ProjectModuleLoader
     {
-    public:
-        explicit ProjectModuleLoader(Lexer::Configuration configuration)
-            : configuration(std::move(configuration))
-        {
-        }
+      public:
+        explicit ProjectModuleLoader(Lexer::Configuration configuration) : configuration(std::move(configuration)) {}
 
         std::vector<ImportedSource> load(const std::filesystem::path &entry)
         {
@@ -521,7 +531,7 @@ namespace
             return std::move(modules);
         }
 
-    private:
+      private:
         Lexer::Configuration configuration;
         std::vector<ImportedSource> modules;
         std::unordered_set<std::string> visited;
@@ -532,8 +542,8 @@ namespace
             std::error_code error;
             const std::filesystem::path path = std::filesystem::canonical(requestedPath, error);
             if (error)
-                throw std::runtime_error("failed to resolve source module '" + requestedPath.string() + "': " +
-                                         error.message());
+                throw std::runtime_error("failed to resolve source module '" + requestedPath.string() +
+                                         "': " + error.message());
             const std::string key = path.string();
             if (visited.find(key) != visited.end())
                 return;
@@ -551,7 +561,7 @@ namespace
     };
 
     std::vector<ImportedSource> load_project_modules(const std::string &entryPath,
-                                                      const Lexer::Configuration &configuration)
+                                                     const Lexer::Configuration &configuration)
     {
         ProjectModuleLoader loader(configuration);
         return loader.load(entryPath);
@@ -561,12 +571,18 @@ namespace
     {
         switch (emit)
         {
-        case EmitKind::LLVM: return "llvm";
-        case EmitKind::Object: return "object";
-        case EmitKind::Assembly: return "asm";
-        case EmitKind::StaticLibrary: return "staticlib";
-        case EmitKind::DynamicLibrary: return "dynamiclib";
-        case EmitKind::Binary: return "binary";
+        case EmitKind::LLVM:
+            return "llvm";
+        case EmitKind::Object:
+            return "object";
+        case EmitKind::Assembly:
+            return "asm";
+        case EmitKind::StaticLibrary:
+            return "staticlib";
+        case EmitKind::DynamicLibrary:
+            return "dynamiclib";
+        case EmitKind::Binary:
+            return "binary";
         }
         return "binary";
     }
@@ -594,10 +610,14 @@ namespace
         const std::filesystem::path base = path.parent_path() / path.stem();
         switch (emit)
         {
-        case EmitKind::LLVM: return base.string() + ".ll";
-        case EmitKind::Object: return base.string() + ".o";
-        case EmitKind::Assembly: return base.string() + ".s";
-        case EmitKind::StaticLibrary: return base.string() + ".a";
+        case EmitKind::LLVM:
+            return base.string() + ".ll";
+        case EmitKind::Object:
+            return base.string() + ".o";
+        case EmitKind::Assembly:
+            return base.string() + ".s";
+        case EmitKind::StaticLibrary:
+            return base.string() + ".a";
         case EmitKind::DynamicLibrary:
 #if defined(_WIN32)
             return base.string() + ".dll";
@@ -632,8 +652,8 @@ namespace
     bool is_raw_link_input(const std::string &path)
     {
         const std::string extension = std::filesystem::path(path).extension().string();
-        return extension == ".o" || extension == ".a" || extension == ".bc" ||
-               extension == ".ll" || extension == ".llvm";
+        return extension == ".o" || extension == ".a" || extension == ".bc" || extension == ".ll" ||
+               extension == ".llvm";
     }
 
     Options parse_options(int argc, char **argv)
@@ -658,22 +678,23 @@ namespace
             }
             if (argument == "--help" || argument == "-h")
             {
-                std::cout << "Usage: shaftc [OPTIONS] INPUT\n"
-                             "       shaftc --build [Shaft.build] [OPTIONS]\n"
-                             "--build reads a TOML-like Shaft.build file (or an explicit path)\n"
-                             "--emit KIND: llvm, object, asm, staticlib, dynamiclib, binary\n"
-                             "-O0, -O1, -O2, or -O3 select LLVM optimization level (default: -O2)\n"
-                             "--native tunes native object, assembly, and binary output for this CPU\n"
-                             "--target TRIPLE selects an LLVM target triple; Linux binary targets link through LLD (set SHAFT_LLD if needed)\n"
-                             "--hosted links a host C runtime (required for --link C libraries)\n"
-                             "--link NAME or -lNAME links libNAME; --link-dir PATH adds a C-library search directory\n"
-                             "raw .o, .a, .ll, .llvm, and .bc linker inputs may follow the .shaft input\n"
-                             "--check-only runs lexing, parsing, and checking without emitting an artifact\n"
-                             "--verbose reports compilation stages to stderr\n"
-                             "--version prints the compiler version\n"
-                             "--no-std disables the automatic standard prelude\n"
-                             "--std PATH, --runtime PATH, and --resources PATH override bundled resources\n"
-                             "--dump-ast outputs ast as string";
+                std::cout
+                    << "Usage: shaftc [OPTIONS] INPUT\n"
+                       "       shaftc --build [Shaft.build] [OPTIONS]\n"
+                       "--build reads a TOML-like Shaft.build file (or an explicit path)\n"
+                       "--emit KIND: llvm, object, asm, staticlib, dynamiclib, binary\n"
+                       "-O0, -O1, -O2, or -O3 select LLVM optimization level (default: -O2)\n"
+                       "--native tunes native object, assembly, and binary output for this CPU\n"
+                       "--target TRIPLE selects an LLVM target triple; Linux binary targets link through baked-in LLD\n"
+                       "--hosted links a host C runtime (required for --link C libraries)\n"
+                       "--link NAME or -lNAME links libNAME; --link-dir PATH adds a C-library search directory\n"
+                       "raw .o, .a, .ll, .llvm, and .bc linker inputs may follow the .shaft input\n"
+                       "--check-only runs lexing, parsing, and checking without emitting an artifact\n"
+                       "--verbose reports compilation stages to stderr\n"
+                       "--version prints the compiler version\n"
+                       "--no-std disables the automatic standard prelude\n"
+                       "--std PATH, --runtime PATH, and --resources PATH override bundled resources\n"
+                       "--dump-ast outputs ast as string";
                 std::exit(0);
             }
             if (argument == "--emit" || argument == "-emit")
@@ -699,6 +720,10 @@ namespace
             {
                 options.verbose = true;
                 continue;
+            }
+            if (argument == "--stop-on-error")
+            {
+                global_stop_on_error = true;
             }
             if (argument == "--check-only")
             {
@@ -779,7 +804,8 @@ namespace
                 continue;
             }
             if (!options.inputPath.empty())
-                throw std::runtime_error("shaftc: only one .shaft input file is supported; use imports for additional Shaft modules");
+                throw std::runtime_error(
+                    "shaftc: only one .shaft input file is supported; use imports for additional Shaft modules");
             options.inputPath = argument;
         }
         if (options.version)
@@ -792,12 +818,15 @@ namespace
             if (options.targetTriple != host)
                 throw std::runtime_error("shaftc --native cannot be combined with an explicit cross target");
         }
-        const bool hasCLinkLibrary = std::any_of(options.linkArguments.begin(), options.linkArguments.end(),
-                                                 [](const std::string &argument) { return argument.rfind("-l", 0) == 0; });
-        const bool hasRawLinkInput = std::any_of(options.linkArguments.begin(), options.linkArguments.end(),
-                                                 [](const std::string &argument) { return is_raw_link_input(argument); });
+        const bool hasCLinkLibrary =
+            std::any_of(options.linkArguments.begin(), options.linkArguments.end(),
+                        [](const std::string &argument) { return argument.rfind("-l", 0) == 0; });
+        const bool hasRawLinkInput =
+            std::any_of(options.linkArguments.begin(), options.linkArguments.end(),
+                        [](const std::string &argument) { return is_raw_link_input(argument); });
         if ((hasCLinkLibrary || !options.linkDirectories.empty()) && !options.hosted)
-            throw std::runtime_error("--link, -l, and --link-dir require --hosted so linked C libraries receive a C runtime");
+            throw std::runtime_error(
+                "--link, -l, and --link-dir require --hosted so linked C libraries receive a C runtime");
         if (hasRawLinkInput && options.emit != EmitKind::Binary && options.emit != EmitKind::DynamicLibrary)
             throw std::runtime_error("raw linker inputs require --emit binary or --emit dynamiclib");
         if (options.hosted && !options.targetTriple.empty())
@@ -898,8 +927,7 @@ namespace
                                  "'; use --resources to set its directory");
     }
 
-    std::filesystem::path bundled_runtime(const Options &options, const char *argv0,
-                                          const std::string &targetTriple);
+    std::filesystem::path bundled_runtime(const Options &options, const char *argv0, const std::string &targetTriple);
     std::string selected_target_triple(const Options &options);
 
     std::vector<ImportedSource> source_modules_with_stdlib(const Options &options, const char *argv0,
@@ -907,9 +935,8 @@ namespace
     {
         if (options.noStd)
             return projectModules;
-        const std::filesystem::path stdlib = options.stdlibPath.empty()
-                                                 ? find_resource(options, argv0, "std/std.shaft")
-                                                 : std::filesystem::path(options.stdlibPath);
+        const std::filesystem::path stdlib = options.stdlibPath.empty() ? find_resource(options, argv0, "std/std.shaft")
+                                                                        : std::filesystem::path(options.stdlibPath);
         if (!std::filesystem::is_regular_file(stdlib))
             throw std::runtime_error("failed to read standard library '" + stdlib.string() + "'");
         if (std::filesystem::equivalent(stdlib, options.inputPath))
@@ -929,20 +956,14 @@ namespace
         return modules;
     }
 
-    bool target_is_linux(const std::string &triple)
-    {
-        return triple.find("linux") != std::string::npos;
-    }
+    bool target_is_linux(const std::string &triple) { return triple.find("linux") != std::string::npos; }
 
-    std::filesystem::path bundled_runtime(const Options &options, const char *argv0,
-                                          const std::string &targetTriple)
+    std::filesystem::path bundled_runtime(const Options &options, const char *argv0, const std::string &targetTriple)
     {
         if (!options.runtimePath.empty())
             return options.runtimePath;
         if (target_is_linux(targetTriple))
             return find_resource(options, argv0, "std/runtime/linux.shaft");
-        if (targetTriple.find("macos") != std::string::npos)
-            return find_resource(options, argv0, "std/runtime/macos.shaft");
         if (targetTriple.find("darwin") != std::string::npos || targetTriple.find("apple") != std::string::npos)
             return find_resource(options, argv0, "std/runtime/darwin.shaft");
         if (targetTriple.find("windows") != std::string::npos || targetTriple.find("mingw") != std::string::npos)
@@ -950,25 +971,26 @@ namespace
         throw std::runtime_error("no bundled runtime matches target '" + targetTriple + "'; use --runtime");
     }
 
-    std::string lld_for_linking()
+    void link_with_baked_lld(const std::vector<std::string> &arguments)
     {
-        if (const char *overridePath = std::getenv("SHAFT_LLD"); overridePath && *overridePath)
-        {
-            if (!std::filesystem::is_regular_file(overridePath))
-                throw std::runtime_error("SHAFT_LLD does not name an LLD executable: '" + std::string(overridePath) + "'");
-            return overridePath;
-        }
-        const std::string configured = SHAFT_LLD_PATH;
-        if (!configured.empty() && configured.find("NOTFOUND") == std::string::npos &&
-            std::filesystem::is_regular_file(configured))
-            return configured;
-        throw std::runtime_error("linking requires LLD; install ld.lld or set SHAFT_LLD to its absolute path");
+        std::vector<const char *> argv;
+        argv.reserve(arguments.size());
+        for (const std::string &argument : arguments)
+            argv.push_back(argument.c_str());
+        if (!lld_elf_link(argv.data(), argv.size()))
+            throw std::runtime_error("baked-in LLD failed while producing the requested artifact");
     }
 
     std::string selected_target_triple(const Options &options)
     {
         if (!options.targetTriple.empty())
-            return options.targetTriple;
+        {
+            std::string targetTriple = options.targetTriple;
+            const std::size_t macos = targetTriple.find("macos");
+            if (macos != std::string::npos)
+                targetTriple.replace(macos, std::string("macos").size(), "darwin");
+            return targetTriple;
+        }
         char *triple = LLVMGetDefaultTargetTriple();
         const std::string result = triple ? triple : "";
         LLVMDisposeMessage(triple);
@@ -1047,16 +1069,14 @@ namespace
         return config;
     }
 
-    LLVMTargetMachineRef create_target_machine(LLVMTargetRef target, const std::string &triple,
-                                               const Options &options)
+    LLVMTargetMachineRef create_target_machine(LLVMTargetRef target, const std::string &triple, const Options &options)
     {
         const TargetMachineConfig config = selected_target_machine_config(options);
         return LLVMCreateTargetMachine(target, triple.c_str(), config.cpu.c_str(), config.features.c_str(),
                                        LLVMCodeGenLevelDefault, LLVMRelocPIC, LLVMCodeModelDefault);
     }
 
-    unsigned target_pointer_width_bits(LLVMContextRef llvmContext, const std::string &triple,
-                                       const Options &options)
+    unsigned target_pointer_width_bits(LLVMContextRef llvmContext, const std::string &triple, const Options &options)
     {
         initialize_targets();
         LLVMTargetRef target = nullptr;
@@ -1082,10 +1102,14 @@ namespace
     {
         switch (level)
         {
-        case OptimizationLevel::O1: return "default<O1>";
-        case OptimizationLevel::O2: return "default<O2>";
-        case OptimizationLevel::O3: return "default<O3>";
-        case OptimizationLevel::O0: return nullptr;
+        case OptimizationLevel::O1:
+            return "default<O1>";
+        case OptimizationLevel::O2:
+            return "default<O2>";
+        case OptimizationLevel::O3:
+            return "default<O3>";
+        case OptimizationLevel::O0:
+            return nullptr;
         }
         return nullptr;
     }
@@ -1215,7 +1239,8 @@ namespace
                         assemblyLine.substr(assemblyTextStart) == diagnosticText)
                     {
                         sourcePosition = assemblyOffset + lineStart + assemblyTextStart;
-                        const size_t caretLineStart = diagnosticLineEnd == std::string_view::npos ? description.size() : diagnosticLineEnd + 1;
+                        const size_t caretLineStart =
+                            diagnosticLineEnd == std::string_view::npos ? description.size() : diagnosticLineEnd + 1;
                         const size_t caret = description.find('^', caretLineStart);
                         if (caret != std::string::npos && caret >= diagnosticLineStart + diagnosticTextStart)
                         {
@@ -1272,19 +1297,17 @@ namespace
                 run_command({SHAFT_LLVM_AR_PATH, "rcs", options.outputPath, objectPath.string()});
             else if (options.emit == EmitKind::DynamicLibrary)
             {
-                const std::string lld = lld_for_linking();
-                std::vector<std::string> linker{SHAFT_CLANG_PATH, "-fuse-ld=" + lld, "-shared", "-nostdlib", objectPath.string()};
+                std::vector<std::string> linker{"shaftc", "-shared", "-nostdlib", objectPath.string()};
                 linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
                 linker.emplace_back("-o");
                 linker.emplace_back(options.outputPath);
-                run_command(linker);
+                link_with_baked_lld(linker);
             }
             else
             {
-                const std::string lld = lld_for_linking();
                 if (options.hosted)
                 {
-                    std::vector<std::string> linker{SHAFT_CLANG_PATH, "-fuse-ld=" + lld, objectPath.string()};
+                    std::vector<std::string> linker{SHAFT_CLANG_PATH, objectPath.string()};
                     if (options.noStd)
                     {
                         LLVMValueRef entry = LLVMGetNamedFunction(module, "__main");
@@ -1307,7 +1330,8 @@ namespace
                         std::ofstream bridge(hostedBridge);
                         if (!bridge)
                             throw std::runtime_error("failed to create hosted C entry bridge");
-                        bridge << "extern int __shaft_entry(int, char **); int main(int argc, char **argv) { return __shaft_entry(argc, argv); }\n";
+                        bridge << "extern int __shaft_entry(int, char **); int main(int argc, char **argv) { return "
+                                  "__shaft_entry(argc, argv); }\n";
                         linker.emplace_back(hostedBridge.string());
                     }
                     for (const std::string &directory : options.linkDirectories)
@@ -1325,25 +1349,25 @@ namespace
                     if (!options.targetTriple.empty())
                     {
                         if (!target_is_linux(targetTriple))
-                            throw std::runtime_error("cross-target binary linking currently supports Linux targets; emit an object for other targets");
-                        std::vector<std::string> linker{SHAFT_CLANG_PATH, "--target=" + targetTriple, "-fuse-ld=" + lld,
-                                                        "-nostdlib", "-static", "-ffreestanding", "-fno-stack-protector", "-fno-builtin-strlen",
-                                                        objectPath.string()};
+                            throw std::runtime_error("cross-target binary linking currently supports Linux targets; "
+                                                     "emit an object for other targets");
+                        std::vector<std::string> linker{"shaftc", "-nostdlib", "-static", objectPath.string()};
                         linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
-                        linker.emplace_back("-Wl,-e,_start");
+                        linker.emplace_back("-e");
+                        linker.emplace_back("_start");
                         linker.emplace_back("-o");
                         linker.emplace_back(options.outputPath);
-                        run_command(linker);
+                        link_with_baked_lld(linker);
                     }
                     else
                     {
-                        std::vector<std::string> linker{SHAFT_CLANG_PATH, "-fuse-ld=" + lld, "-nostdlib", "-static",
-                                                        "-ffreestanding", "-fno-stack-protector", "-fno-builtin-strlen", objectPath.string()};
+                        std::vector<std::string> linker{"shaftc", "-nostdlib", "-static", objectPath.string()};
                         linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
-                        linker.emplace_back("-Wl,-e,_start");
+                        linker.emplace_back("-e");
+                        linker.emplace_back("_start");
                         linker.emplace_back("-o");
                         linker.emplace_back(options.outputPath);
-                        run_command(linker);
+                        link_with_baked_lld(linker);
                     }
                 }
             }
@@ -1363,15 +1387,29 @@ namespace
 
 int main(int argc, char **argv)
 {
-    Codegen::Context context;
+    std::optional<Codegen::Context> contextStorage;
 
-    auto dispose_context = [&context]() {
-        if (context.builder)
-            LLVMDisposeBuilder(context.builder);
-        if (context.module)
-            LLVMDisposeModule(context.module);
-        if (context.llvmCtx)
-            LLVMContextDispose(context.llvmCtx);
+    auto dispose_context = [&contextStorage]()
+    {
+        if (!contextStorage)
+            return;
+        auto &ctx = *contextStorage;
+
+        if (ctx.builder)
+        {
+            LLVMDisposeBuilder(ctx.builder);
+            ctx.builder = nullptr;
+        }
+        if (ctx.module)
+        {
+            LLVMDisposeModule(ctx.module);
+            ctx.module = nullptr;
+        }
+        if (ctx.llvmCtx)
+        {
+            LLVMContextDispose(ctx.llvmCtx);
+            ctx.llvmCtx = nullptr;
+        }
     };
 
     try
@@ -1396,8 +1434,7 @@ int main(int argc, char **argv)
 
         const Lexer::Configuration configuration = lexer_configuration(options);
         const std::vector<ImportedSource> projectModules = load_project_modules(options.inputPath, configuration);
-        const std::vector<ImportedSource> sourceModules =
-            source_modules_with_stdlib(options, argv[0], projectModules);
+        const std::vector<ImportedSource> sourceModules = source_modules_with_stdlib(options, argv[0], projectModules);
 
         verbose(options, "lexing and parsing");
         std::vector<Lexer::Module> raw_modules;
@@ -1413,26 +1450,27 @@ int main(int argc, char **argv)
         if (options.checkOnly)
         {
             verbose(options, "check completed");
-            if (options.dump_ast) Parser::dump_ast(Parser::ast);
+            if (options.dump_ast)
+                Parser::dump_ast(Parser::ast);
             dispose_context();
             return 0;
         }
 
-        const std::filesystem::path outputParent =
-            std::filesystem::path(options.outputPath).parent_path();
+        const std::filesystem::path outputParent = std::filesystem::path(options.outputPath).parent_path();
 
         if (!outputParent.empty())
         {
             std::error_code error;
             std::filesystem::create_directories(outputParent, error);
             if (error)
-                throw std::runtime_error(
-                    "failed to create output directory '" +
-                    outputParent.string() + "': " + error.message());
+                throw std::runtime_error("failed to create output directory '" + outputParent.string() +
+                                         "': " + error.message());
         }
 
         verbose(options, "generating LLVM IR...");
-        context = Codegen::create_context(options.inputPath.c_str());
+        contextStorage.emplace(Codegen::create_context(options.inputPath.c_str()));
+        Codegen::Context &context = *contextStorage;
+
         LLVMContextSetDiagnosticHandler(context.llvmCtx, inline_assembly_diagnostic_handler, &context);
         context.stdlibEnabled = !options.noStd;
         context.targetPointerWidthBits =
@@ -1452,8 +1490,7 @@ int main(int argc, char **argv)
 
         if (options.optimization != OptimizationLevel::O0)
         {
-            verbose(options, "optimizing LLVM IR at -" +
-                             std::string(optimization_name(options.optimization)));
+            verbose(options, "optimizing LLVM IR at -" + std::string(optimization_name(options.optimization)));
 
             optimize_module(module, options);
 
@@ -1462,18 +1499,15 @@ int main(int argc, char **argv)
             {
                 const std::string message = diagnostic ? diagnostic : "invalid optimized LLVM IR";
                 LLVMDisposeMessage(diagnostic);
-                throw std::runtime_error(
-                    "optimization produced invalid LLVM IR: " + message);
+                throw std::runtime_error("optimization produced invalid LLVM IR: " + message);
             }
             if (diagnostic)
                 LLVMDisposeMessage(diagnostic);
-
-            verbose(options, "emitting " +
-                             std::string(emit_name(options.emit)) +
-                             " to " + options.outputPath);
-
-            emit_artifact(module, options, argv[0]);
         }
+
+        verbose(options, "emitting " + std::string(emit_name(options.emit)) + " to " + options.outputPath);
+
+        emit_artifact(module, options, argv[0]);
 
         if (options.dump_ast)
             Parser::dump_ast(Parser::ast);
@@ -1494,4 +1528,3 @@ int main(int argc, char **argv)
         return 1;
     }
 }
-

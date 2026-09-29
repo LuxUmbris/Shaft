@@ -596,6 +596,13 @@ class String
         tunnel true -> bool result;
     }
 
+    def append_string(&mut self, &String other) -> bool result
+    {
+        str buffer = {other.length, other.data};
+        self.append(buffer);
+        tunnel true -> bool result;
+    }
+
     def append_cstr(&mut self, cstr value) -> bool result
     {
         mut u64 valueLength = 0;
@@ -776,6 +783,11 @@ def vector_init(*Vector<T> vector, u64 requested)<T> -> bool result
     tunnel true -> bool result;
 }
 
+def vector_data(*Vector<T> vector)<T> -> *T result
+{
+    tunnel vector.data -> *T result;
+}
+
 def vector_push(*Vector<T> vector, T value)<T> -> bool result
 {
     if (vector.length == vector.capacity)
@@ -793,7 +805,7 @@ def vector_push(*Vector<T> vector, T value)<T> -> bool result
         mut u64 offset = 0;
         while (offset < vector.length)
         {
-            newData[offset] = vector.data[offset];
+            newData[offset] = move vector.data[offset];
             offset = offset + 1;
         }
         __shaft_free(vector.data);
@@ -1790,6 +1802,140 @@ namespace Time
     }
 }
 
+enum Key : i32
+{
+    None = 0,
+    Backspace = 8,
+    Tab = 9,
+    Enter = 13,
+    Escape = 27,
+    Space = 32,
+    Digit0 = 48,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
+    A = 65,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    ArrowUp = 257,
+    ArrowDown,
+    ArrowRight,
+    ArrowLeft,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+    F1 = 272,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+
+    ShiftArrowUp = 4353,
+    ShiftArrowDown,
+    ShiftArrowRight,
+    ShiftArrowLeft,
+    AltArrowUp = 8449,
+    AltArrowDown,
+    AltArrowRight,
+    AltArrowLeft,
+    ControlArrowUp = 16641,
+    ControlArrowDown,
+    ControlArrowRight,
+    ControlArrowLeft,
+
+    AltA = 8257,
+    AltB,
+    AltC,
+    AltD,
+    AltE,
+    AltF,
+    AltG,
+    AltH,
+    AltI,
+    AltJ,
+    AltK,
+    AltL,
+    AltM,
+    AltN,
+    AltO,
+    AltP,
+    AltQ,
+    AltR,
+    AltS,
+    AltT,
+    AltU,
+    AltV,
+    AltW,
+    AltX,
+    AltY,
+    AltZ,
+    ControlA = 16449,
+    ControlB,
+    ControlC,
+    ControlD,
+    ControlE,
+    ControlF,
+    ControlG,
+    ControlH,
+    ControlI,
+    ControlJ,
+    ControlK,
+    ControlL,
+    ControlM,
+    ControlN,
+    ControlO,
+    ControlP,
+    ControlQ,
+    ControlR,
+    ControlS,
+    ControlT,
+    ControlU,
+    ControlV,
+    ControlW,
+    ControlX,
+    ControlY,
+    ControlZ,
+}
+
 def write(i32 descriptor, str content) -> i64 result
 {
     tunnel __sys_write(descriptor, content.data, content.length) -> i64 result;
@@ -1835,6 +1981,7 @@ cdec __sys_thread_join(*i32 tid) -> i32;
 cdec exit(i32 status);
 cdec __sys_gettime_parts(*i64 seconds, *i64 nanoseconds) -> i32;
 cdec __sys_sleep_ms(u64 milliseconds) -> i32;
+cdec __sys_restore_terminal();
 cdec __cstr_strlen(*i8 text) -> u64;
 cdec __main(String[] args);
 
@@ -1852,7 +1999,8 @@ cdef __shaft_entry(i32 argc, **i8 argv) -> i32
         memcpy(args[argumentIndex].data, text, length);
         argumentIndex = argumentIndex + 1;
     }
-    __main(args);
+    __main(args, argc);
+    __sys_restore_terminal();
     return 0;
 }
 
@@ -1991,6 +2139,183 @@ namespace File
         tunnel File::write_at_mode(pathname, content, 3) -> i64 result;
     }
 }
+
+namespace Process
+{
+    def read_key() -> Key result // returns immediately
+    {
+        tunnel __sys_read_key() -> Key result;
+    }
+
+    cdec __sys_read_key() -> i32;
+    cdec __sys_execv(*i8 command, **i8 arguments) -> i64;
+    cdec __sys_process_spawn(*i8 command, **i8 arguments, i64 stdoutDescriptor, i64 stderrDescriptor) -> i64;
+    cdec __sys_process_wait(i64 pid) -> i64;
+    cdec __sys_process_pipe(*i64 descriptors) -> i64;
+    cdec __sys_process_set_nonblocking(i64 descriptor) -> i64;
+    cdec __sys_process_read(i64 descriptor, *i8 buffer, u64 count) -> i64;
+    cdec __sys_process_null() -> *i8;
+
+    class Child
+    {
+        mut i64 pid;
+
+        def wait(&mut self) -> i32 result
+        {
+            mut i64 rawStatus = -1;
+            if (self.pid >= 0)
+            {
+                rawStatus = __sys_process_wait(self.pid);
+                self.pid = -1;
+            }
+            if (rawStatus < 0)
+            {
+                tunnel -1 -> i32 result;
+            }
+            else
+            {
+                tunnel (rawStatus >> 8) & 255 -> i32 result;
+            }
+        }
+    }
+
+    struct Output
+    {
+        mut i32 status;
+        mut String stdout;
+        mut String stderr;
+    }
+
+    class Command
+    {
+        mut String program;
+        mut Vector<String> arguments;
+
+        def new(str program) -> Process::Command result
+        {
+            reserve mut Process::Command command;
+            command.program = String::from_str(program);
+            vector_init::<String>(&command.arguments, 4);
+            tunnel command -> Process::Command result;
+        }
+
+        def arg(&mut self, str value) -> bool result
+        {
+            reserve String argument = String::from_str(value);
+            tunnel self.arguments.push(argument) -> bool result;
+        }
+
+        def spawn_with_redirects(&self, i64 stdoutDescriptor, i64 stderrDescriptor) -> i64 result
+        {
+            mut u64 count = self.arguments.length + 2;
+            mut **i8 arguments = __shaft_alloc_or_exit(count * 8);
+            arguments[0] = self.program.data;
+            mut *String argumentData = vector_data::<String>(&self.arguments);
+            mut u64 argumentIndex = 0;
+            while (argumentIndex < self.arguments.length)
+            {
+                arguments[argumentIndex + 1] = argumentData[argumentIndex].data;
+                argumentIndex = argumentIndex + 1;
+            }
+            arguments[count - 1] = __sys_process_null();
+            tunnel __sys_process_spawn(self.program.data, arguments, stdoutDescriptor, stderrDescriptor) -> i64 result;
+        }
+
+        def spawn(&self) -> Process::Child result
+        {
+            reserve mut Process::Child child;
+            child.pid = self.spawn_with_redirects(-1, -1);
+            tunnel child -> Process::Child result;
+        }
+
+        def status(&self) -> i32 result
+        {
+            reserve mut Process::Child child = self.spawn();
+            tunnel child.wait() -> i32 result;
+        }
+
+        def output(&self) -> Process::Output result
+        {
+            reserve mut Process::Output output;
+            output.status = -1;
+            output.stdout = String::with_capacity(256);
+            output.stderr = String::with_capacity(256);
+            mut i64[2] stdoutPipe;
+            mut i64[2] stderrPipe;
+            if (__sys_process_pipe(&stdoutPipe[0]) == 0)
+            {
+                if (__sys_process_pipe(&stderrPipe[0]) == 0)
+                {
+                    reserve i64 child = self.spawn_with_redirects(stdoutPipe[1], stderrPipe[1]);
+                    __sys_close(stdoutPipe[1]);
+                    __sys_close(stderrPipe[1]);
+                    if (child >= 0)
+                    {
+                        __sys_process_set_nonblocking(stdoutPipe[0]);
+                        __sys_process_set_nonblocking(stderrPipe[0]);
+                        mut bool stdoutOpen = true;
+                        mut bool stderrOpen = true;
+                        mut u8[256] buffer;
+                        while (stdoutOpen || stderrOpen)
+                        {
+                            if (stdoutOpen)
+                            {
+                                reserve i64 received = __sys_process_read(stdoutPipe[0], &buffer[0], 256);
+                                if (received > 0)
+                                {
+                                    mut str chunk;
+                                    chunk.data = &buffer[0];
+                                    chunk.length = received;
+                                    output.stdout.append(chunk);
+                                }
+                                else if (received == 0)
+                                {
+                                    __sys_close(stdoutPipe[0]);
+                                    stdoutOpen = false;
+                                }
+                            }
+                            if (stderrOpen)
+                            {
+                                reserve i64 received = __sys_process_read(stderrPipe[0], &buffer[0], 256);
+                                if (received > 0)
+                                {
+                                    mut str chunk;
+                                    chunk.data = &buffer[0];
+                                    chunk.length = received;
+                                    output.stderr.append(chunk);
+                                }
+                                else if (received == 0)
+                                {
+                                    __sys_close(stderrPipe[0]);
+                                    stderrOpen = false;
+                                }
+                            }
+                        }
+                        reserve mut Process::Child waited;
+                        waited.pid = child;
+                        output.status = waited.wait();
+                    }
+                    else
+                    {
+                        __sys_close(stdoutPipe[0]);
+                        __sys_close(stderrPipe[0]);
+                    }
+                }
+                else
+                {
+                    __sys_close(stdoutPipe[0]);
+                    __sys_close(stdoutPipe[1]);
+                }
+            }
+            tunnel output -> Process::Output result;
+        }
+    }
+
+
+}
+
+
+
 
 namespace Network
 {

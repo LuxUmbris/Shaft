@@ -38,10 +38,8 @@ extern "C"
     void LLVMInitializeRISCVAsmParser();
     void LLVMInitializeRISCVAsmPrinter();
 
-    // LLD wrappers
+    // Baked-in ELF LLD wrapper
     bool lld_elf_link(const char **args, size_t count);
-    bool lld_coff_link(const char **args, size_t count);
-    bool lld_macho_link(const char **args, size_t count);
 
 #ifdef __cplusplus
 }

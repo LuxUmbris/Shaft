@@ -37,20 +37,21 @@ namespace Lexer
     static std::string trim_directive(std::string_view text)
     {
         size_t first = 0;
-        while (first < text.size() && (text[first] == ' ' || text[first] == '\t' || text[first] == '\r' ||
-                                       text[first] == '\n'))
+        while (first < text.size() &&
+               (text[first] == ' ' || text[first] == '\t' || text[first] == '\r' || text[first] == '\n'))
             ++first;
         size_t last = text.size();
-        while (last > first && (text[last - 1] == ' ' || text[last - 1] == '\t' ||
-                                text[last - 1] == '\r' || text[last - 1] == '\n'))
+        while (last > first &&
+               (text[last - 1] == ' ' || text[last - 1] == '\t' || text[last - 1] == '\r' || text[last - 1] == '\n'))
             --last;
         return std::string(text.substr(first, last - first));
     }
 
-    [[noreturn]] static void config_macro_error(const std::string &path, size_t lineNumber,
-                                                 const std::string &message)
+    [[noreturn]] static void config_macro_error(const std::string &path, size_t lineNumber, const std::string &message,
+                                                bool is_macro_error = false)
     {
-        throw std::runtime_error(path + ":" + std::to_string(lineNumber) + ": " + message);
+        Error err = {message, path, lineNumber, 0, is_macro_error};
+        panic(err);
     }
 
     static std::string decode_config_value(std::string value, const std::string &path, size_t lineNumber)
@@ -75,36 +76,226 @@ namespace Lexer
                 config_macro_error(path, lineNumber, "@config string value has an incomplete escape");
             switch (value[index])
             {
-            case '\\': decoded += '\\'; break;
-            case '"': decoded += '"'; break;
-            case 'n': decoded += '\n'; break;
-            case 't': decoded += '\t'; break;
-            default: config_macro_error(path, lineNumber, "@config string value has an unsupported escape");
+            case '\\':
+                decoded += '\\';
+                break;
+            case '"':
+                decoded += '"';
+                break;
+            case 'n':
+                decoded += '\n';
+                break;
+            case 't':
+                decoded += '\t';
+                break;
+            default:
+                config_macro_error(path, lineNumber, "@config string value has an unsupported escape");
             }
         }
         return decoded;
     }
 
-    static bool parse_config_header(std::string_view lineText, const std::string &path, size_t lineNumber,
-                                    std::string &field, std::string &value)
+    static size_t skip_blanks(const std::string &text, size_t index)
+    {
+        while (index < text.size() && (text[index] == ' ' || text[index] == '\t'))
+            ++index;
+        return index;
+    }
+
+    static std::string parse_quoted_value(const std::string &text, size_t &index, const std::string &path,
+                                          size_t lineNumber)
+    {
+        if (index >= text.size() || text[index] != '"')
+            config_macro_error(path, lineNumber, "@config expected a quoted string");
+        const size_t start = index++;
+        while (index < text.size() && text[index] != '"')
+            index += text[index] == '\\' ? 2 : 1;
+        if (index >= text.size())
+            config_macro_error(path, lineNumber, "@config string value is not terminated");
+        ++index;
+        return decode_config_value(text.substr(start, index - start), path, lineNumber);
+    }
+
+    static bool parse_config_condition(std::string_view lineText, const std::string &path, size_t lineNumber,
+                                       ConfigCondition &condition, bool &negated)
     {
         const std::string directive = trim_directive(lineText);
-        constexpr std::string_view prefix = "@config.";
+        size_t index;
+        if (directive.rfind("@config.", 0) == 0)
+        {
+            negated = false;
+            index = 8;
+        }
+        else if (directive.rfind("@!config.", 0) == 0)
+        {
+            negated = true;
+            index = 9;
+        }
+        else
+            return false;
+        const std::string name = negated ? "@!config" : "@config";
+
+        const size_t fieldStart = index;
+        while (index < directive.size() && directive[index] != '=' && directive[index] != ' ' &&
+               directive[index] != '\t')
+            ++index;
+        condition.field = directive.substr(fieldStart, index - fieldStart);
+        const size_t dot = condition.field.find('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 == condition.field.size() ||
+            condition.field.find('.', dot + 1) != std::string::npos)
+            config_macro_error(path, lineNumber, name + " requires " + name + ".<build|package>.<field>");
+        const std::string table = condition.field.substr(0, dot);
+        if (table != "build" && table != "package")
+            config_macro_error(path, lineNumber, name + " table must be 'build' or 'package'");
+
+        index = skip_blanks(directive, index);
+        if (index < directive.size() && directive[index] == '=')
+        {
+            condition.kind = ConfigCondition::Kind::Equals;
+            condition.values = {decode_config_value(directive.substr(index + 1), path, lineNumber)};
+            return true;
+        }
+
+        const auto is_word = [&](std::string_view word)
+        {
+            if (directive.compare(index, word.size(), word) != 0)
+                return false;
+            const size_t after = index + word.size();
+            return after < directive.size() && (directive[after] == ' ' || directive[after] == '\t' ||
+                                                directive[after] == '[' || directive[after] == '"');
+        };
+
+        if (is_word("in"))
+        {
+            condition.kind = ConfigCondition::Kind::In;
+            index = skip_blanks(directive, index + 2);
+            if (index >= directive.size() || directive[index] != '[')
+                config_macro_error(path, lineNumber, name + " 'in' requires a list like [\"a\", \"b\"]");
+            ++index;
+            while (true)
+            {
+                index = skip_blanks(directive, index);
+                if (index < directive.size() && directive[index] == ']')
+                    break; // empty list or trailing comma
+                condition.values.push_back(parse_quoted_value(directive, index, path, lineNumber));
+                index = skip_blanks(directive, index);
+                if (index < directive.size() && directive[index] == ',')
+                {
+                    ++index;
+                    continue;
+                }
+                if (index < directive.size() && directive[index] == ']')
+                    break;
+                config_macro_error(path, lineNumber, name + " expected ',' or ']' in list");
+            }
+            ++index; // ']'
+            if (condition.values.empty())
+                config_macro_error(path, lineNumber, name + " 'in' list cannot be empty");
+        }
+        else if (is_word("matches"))
+        {
+            condition.kind = ConfigCondition::Kind::Matches;
+            index = skip_blanks(directive, index + 7);
+            condition.values.push_back(parse_quoted_value(directive, index, path, lineNumber));
+        }
+        else
+            config_macro_error(path, lineNumber, name + " requires '=', 'in' or 'matches' after the field");
+
+        if (skip_blanks(directive, index) != directive.size())
+            config_macro_error(path, lineNumber, name + " has unexpected text after the condition");
+        return true;
+    }
+
+    static bool glob_match(std::string_view pattern, std::string_view text)
+    {
+        size_t p = 0, t = 0, star = std::string_view::npos, mark = 0;
+        while (t < text.size())
+        {
+            if (p < pattern.size() && pattern[p] == '*')
+            {
+                star = p++;
+                mark = t;
+            }
+            else if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == text[t]))
+            {
+                ++p;
+                ++t;
+            }
+            else if (star != std::string_view::npos)
+            {
+                p = star + 1;
+                t = ++mark;
+            }
+            else
+                return false;
+        }
+        while (p < pattern.size() && pattern[p] == '*')
+            ++p;
+        return p == pattern.size();
+    }
+
+    static bool condition_matches(const ConfigCondition &condition, const Configuration &configuration)
+    {
+        const auto configured = configuration.values.find(condition.field);
+        if (configured == configuration.values.end())
+            return false;
+        const std::string &actual = configured->second;
+        switch (condition.kind)
+        {
+        case ConfigCondition::Kind::Equals:
+            return actual == condition.values.front();
+        case ConfigCondition::Kind::In:
+            return std::find(condition.values.begin(), condition.values.end(), actual) != condition.values.end();
+        case ConfigCondition::Kind::Matches:
+            return glob_match(condition.values.front(), actual);
+        }
+        return false;
+    }
+
+    static bool parse_negated_config_header(std::string_view lineText, const std::string &path, size_t lineNumber,
+                                            std::string &field, std::string &value)
+    {
+        const std::string directive = trim_directive(lineText);
+        constexpr std::string_view prefix = "@!config.";
         if (directive.rfind(prefix, 0) != 0)
             return false;
         const size_t equals = directive.find('=');
         if (equals == std::string::npos)
-            config_macro_error(path, lineNumber, "@config requires '= value'");
+            config_macro_error(path, lineNumber, "@!config requires '= value'");
         field = trim_directive(std::string_view(directive).substr(prefix.size(), equals - prefix.size()));
         const size_t dot = field.find('.');
         if (dot == std::string::npos || dot == 0 || dot + 1 == field.size() ||
             field.find('.', dot + 1) != std::string::npos)
-            config_macro_error(path, lineNumber, "@config requires @config.<build|package>.<field> = value");
+            config_macro_error(path, lineNumber, "@!config requires @config.<build|package>.<field> = value");
         const std::string table = field.substr(0, dot);
         if (table != "build" && table != "package")
-            config_macro_error(path, lineNumber, "@config table must be 'build' or 'package'");
+            config_macro_error(path, lineNumber, "@!config table must be 'build' or 'package'");
         value = decode_config_value(directive.substr(equals + 1), path, lineNumber);
         return true;
+    }
+
+    static bool is_error_macro(std::string_view lineText)
+    {
+        const std::string directive = trim_directive(lineText);
+        constexpr std::string_view name = "@error";
+        if (directive.rfind(name, 0) != 0)
+            return false;
+        return directive.size() == name.size() || directive[name.size()] == '(' ||
+               std::isspace(static_cast<unsigned char>(directive[name.size()]));
+    }
+
+    static std::string parse_error_message(std::string_view lineText, const std::string &path, size_t lineNumber)
+    {
+        std::string rest = trim_directive(trim_directive(lineText).substr(6));
+        if (!rest.empty() && rest.front() == '(')
+        {
+            if (rest.back() != ')')
+                config_macro_error(path, lineNumber, "@error is missing a closing ')'");
+            rest = trim_directive(std::string_view(rest).substr(1, rest.size() - 2));
+        }
+        if (rest.empty() || rest.front() != '"')
+            config_macro_error(path, lineNumber, "@error requires a quoted message string");
+        return decode_config_value(rest, path, lineNumber);
     }
 
     static bool is_asm_header(std::string_view lineText)
@@ -112,14 +303,10 @@ namespace Lexer
         const std::string directive = trim_directive(lineText);
         if (directive.rfind("@asm", 0) != 0)
             return false;
-        return directive.size() == 4 || directive[4] == '(' ||
-               std::isspace(static_cast<unsigned char>(directive[4]));
+        return directive.size() == 4 || directive[4] == '(' || std::isspace(static_cast<unsigned char>(directive[4]));
     }
 
-    static bool is_end_directive(std::string_view lineText)
-    {
-        return trim_directive(lineText) == "@end";
-    }
+    static bool is_end_directive(std::string_view lineText) { return trim_directive(lineText) == "@end"; }
 
     static std::string blank_directive_range(std::string_view text)
     {
@@ -147,7 +334,7 @@ namespace Lexer
             const size_t end = line_end(text, cursor);
             const std::string_view lineText(text.data() + cursor, end - cursor);
             const std::string directive = trim_directive(lineText);
-            if (directive.rfind("@config.", 0) == 0 || is_asm_header(lineText))
+            if (directive.rfind("@config.", 0) == 0 || directive.rfind("@!config.", 0) == 0 || is_asm_header(lineText))
                 ++depth;
             else if (is_end_directive(lineText) && --depth == 0)
                 return cursor;
@@ -169,13 +356,15 @@ namespace Lexer
             const std::string_view lineText(text.data() + cursor, end - cursor);
             std::string field;
             std::string value;
-            if (parse_config_header(lineText, path, lineNumber, field, value))
+            ConfigCondition condition;
+            bool negated = false;
+            if (parse_config_condition(lineText, path, lineNumber, condition, negated))
             {
                 const size_t bodyStart = end;
                 const size_t closeStart = matching_macro_end(text, bodyStart, path, lineNumber);
                 const size_t closeEnd = line_end(text, closeStart);
-                const auto configured = configuration.values.find(field);
-                const bool enabled = configured != configuration.values.end() && configured->second == value;
+                const bool matches = condition_matches(condition, configuration);
+                const bool enabled = negated ? !matches : matches;
                 filtered += blank_directive_range(lineText);
                 if (enabled)
                 {
@@ -184,8 +373,8 @@ namespace Lexer
                 }
                 else
                 {
-                    filtered += blank_directive_range(
-                        std::string_view(text.data() + bodyStart, closeStart - bodyStart));
+                    filtered +=
+                        blank_directive_range(std::string_view(text.data() + bodyStart, closeStart - bodyStart));
                 }
                 filtered += blank_directive_range(std::string_view(text.data() + closeStart, closeEnd - closeStart));
                 lineNumber += static_cast<size_t>(std::count(text.begin() + cursor, text.begin() + closeEnd, '\n'));
@@ -194,6 +383,9 @@ namespace Lexer
             }
             if (is_end_directive(lineText))
                 config_macro_error(path, lineNumber, "@end has no matching @config or @asm block");
+            if (is_error_macro(lineText))
+                config_macro_error(path, lineNumber,
+                                   "\x1b[34m@error:\x1b[0m " + parse_error_message(lineText, path, lineNumber), true);
             if (is_asm_header(lineText))
             {
                 const size_t closeStart = matching_macro_end(text, end, path, lineNumber);
@@ -212,10 +404,7 @@ namespace Lexer
 
     inline bool is_whitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
     inline bool is_digit(char c) { return c >= '0' && c <= '9'; }
-    inline bool is_alpha(char c)
-    {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
-    }
+    inline bool is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
 
     static inline char peek(uint64_t offset = 0)
     {
@@ -246,7 +435,8 @@ namespace Lexer
                 line++;
                 column = 1;
             }
-            else column++;
+            else
+                column++;
         }
     }
 
@@ -302,8 +492,7 @@ namespace Lexer
 
             const uint64_t digitsStart = pos;
 
-            while (is_digit(peek()) || (peek() >= 'a' && peek() <= 'f') ||
-                   (peek() >= 'A' && peek() <= 'F'))
+            while (is_digit(peek()) || (peek() >= 'a' && peek() <= 'f') || (peek() >= 'A' && peek() <= 'F'))
                 advance();
 
             if (pos == digitsStart)
@@ -312,8 +501,7 @@ namespace Lexer
                 panic(err);
             }
 
-            std::string_view num_view =
-                std::string_view(source).substr(start + 2, pos - (start + 2));
+            std::string_view num_view = std::string_view(source).substr(start + 2, pos - (start + 2));
             integerValue = std::stoull(std::string(num_view), nullptr, 16);
             return false;
         }
@@ -437,10 +625,8 @@ namespace Lexer
         while (peek() != '\0')
         {
             const bool delimiter_at_line_start =
-                (pos == start || source[pos - 1] == '\n') &&
-                source.compare(pos, delimiter.size(), delimiter) == 0 &&
-                (peek(delimiter.size()) == '\n' || peek(delimiter.size()) == '\r' ||
-                 peek(delimiter.size()) == '\0');
+                (pos == start || source[pos - 1] == '\n') && source.compare(pos, delimiter.size(), delimiter) == 0 &&
+                (peek(delimiter.size()) == '\n' || peek(delimiter.size()) == '\r' || peek(delimiter.size()) == '\0');
             if (delimiter_at_line_start)
             {
                 const uint64_t length = pos - start;
@@ -535,14 +721,12 @@ namespace Lexer
 
     static bool is_semicolon_token(const Token &token)
     {
-        return token.type == TokenType::Operator &&
-               std::get<Operator>(token.value) == Operator::SEMICOLON;
+        return token.type == TokenType::Operator && std::get<Operator>(token.value) == Operator::SEMICOLON;
     }
 
     static bool is_right_arrow_token(const Token &token)
     {
-        return token.type == TokenType::Operator &&
-               std::get<Operator>(token.value) == Operator::RIGHT_ARROW;
+        return token.type == TokenType::Operator && std::get<Operator>(token.value) == Operator::RIGHT_ARROW;
     }
 
     struct FunctionMacro
@@ -567,22 +751,19 @@ namespace Lexer
         return token.type == TokenType::Operator && std::get<Operator>(token.value) == expected;
     }
 
-    static const std::vector<Token> *find_macro(const Token &token,
-                                                const std::vector<MacroScope> &scopes)
+    static const std::vector<Token> *find_macro(const Token &token, const std::vector<MacroScope> &scopes)
     {
         for (auto scope = scopes.rbegin(); scope != scopes.rend(); ++scope)
         {
             if (token.type == TokenType::Identifier)
             {
-                const auto found = scope->identifierRules.find(
-                    std::string(std::get<std::string_view>(token.value)));
+                const auto found = scope->identifierRules.find(std::string(std::get<std::string_view>(token.value)));
                 if (found != scope->identifierRules.end())
                     return &found->second;
             }
             else if (token.type == TokenType::StringLiteral)
             {
-                const auto found = scope->stringRules.find(
-                    std::string(std::get<std::string_view>(token.value)));
+                const auto found = scope->stringRules.find(std::string(std::get<std::string_view>(token.value)));
                 if (found != scope->stringRules.end())
                     return &found->second;
             }
@@ -591,7 +772,7 @@ namespace Lexer
     }
 
     static const std::vector<FunctionMacro> *find_function_macros(const Token &token,
-                                                                 const std::vector<MacroScope> &scopes)
+                                                                  const std::vector<MacroScope> &scopes)
     {
         if (token.type != TokenType::Identifier)
             return nullptr;
@@ -678,7 +859,8 @@ namespace Lexer
                             if (argument.empty())
                             {
                                 update_line_and_column();
-                                Error err = {"Function-like using macro arguments cannot be empty.", current_mod_path, line, column};
+                                Error err = {"Function-like using macro arguments cannot be empty.", current_mod_path,
+                                             line, column};
                                 panic(err);
                             }
                             arguments.push_back(std::move(argument));
@@ -692,7 +874,8 @@ namespace Lexer
                     if (nesting != 0)
                     {
                         update_line_and_column();
-                        Error err = {"Function-like using macro invocation was never terminated.", current_mod_path, line, column};
+                        Error err = {"Function-like using macro invocation was never terminated.", current_mod_path,
+                                     line, column};
                         panic(err);
                     }
                     if (!argument.empty())
@@ -709,7 +892,8 @@ namespace Lexer
                     if (!macro)
                     {
                         update_line_and_column();
-                        Error err = {"Function-like using macro argument count does not match any declaration.", current_mod_path, line, column};
+                        Error err = {"Function-like using macro argument count does not match any declaration.",
+                                     current_mod_path, line, column};
                         panic(err);
                     }
 
@@ -726,7 +910,8 @@ namespace Lexer
                     if (expandedTokenCount > maximum_expanded_tokens)
                     {
                         update_line_and_column();
-                        Error err = {"Using macro expansion exceeds the token safety limit.", current_mod_path, line, column};
+                        Error err = {"Using macro expansion exceeds the token safety limit.", current_mod_path, line,
+                                     column};
                         panic(err);
                     }
                     resolved.insert(resolved.end(), expansion.begin(), expansion.end());
@@ -738,7 +923,9 @@ namespace Lexer
                     is_operator_token(tokens[i + 2], Operator::LEFT_PAREN))
                 {
                     update_line_and_column();
-                    Error err = {"Unknown using macro invocation '" + std::string(std::get<std::string_view>(token.value)) + "!'", current_mod_path, line, column};
+                    Error err = {"Unknown using macro invocation '" +
+                                     std::string(std::get<std::string_view>(token.value)) + "!'",
+                                 current_mod_path, line, column};
                     panic(err);
                 }
 
@@ -749,7 +936,8 @@ namespace Lexer
                     if (expandedTokenCount > maximum_expanded_tokens)
                     {
                         update_line_and_column();
-                        Error err = {"Using macro expansion exceeds the token safety limit", current_mod_path, line, column};
+                        Error err = {"Using macro expansion exceeds the token safety limit", current_mod_path, line,
+                                     column};
                         panic(err);
                     }
                     resolved.insert(resolved.end(), replacement->begin(), replacement->end());
@@ -772,21 +960,20 @@ namespace Lexer
                 ++i;
             if (i >= tokens.size() ||
                 (tokens[i].type != TokenType::Identifier && tokens[i].type != TokenType::StringLiteral))
-                {
-                    update_line_and_column();
-                    Error err = {"Using macro requires an identifier or a string alias.", current_mod_path, line, column};
-                    panic(err);
-                }
+            {
+                update_line_and_column();
+                Error err = {"Using macro requires an identifier or a string alias.", current_mod_path, line, column};
+                panic(err);
+            }
             const Token alias = tokens[i++];
             const TokenType aliasType = alias.type;
             const std::string aliasKey = std::string(std::get<std::string_view>(alias.value));
-            if (aliasType == TokenType::StringLiteral &&
-                (aliasKey.empty() || aliasKey.back() != '!'))
-                {
-                    update_line_and_column();
-                    Error err = {"String using macro aliases must end with '!'.", current_mod_path, line, column};
-                    panic(err);
-                }
+            if (aliasType == TokenType::StringLiteral && (aliasKey.empty() || aliasKey.back() != '!'))
+            {
+                update_line_and_column();
+                Error err = {"String using macro aliases must end with '!'.", current_mod_path, line, column};
+                panic(err);
+            }
 
             FunctionMacro functionMacro;
             const bool functionLike = aliasType == TokenType::Identifier && i < tokens.size() &&
@@ -808,7 +995,8 @@ namespace Lexer
                         if (i >= tokens.size() || tokens[i].type != TokenType::Identifier)
                         {
                             update_line_and_column();
-                            Error err = {"Function-like using macro parameters must be identifiers.", current_mod_path, line, column};
+                            Error err = {"Function-like using macro parameters must be identifiers.", current_mod_path,
+                                         line, column};
                             panic(err);
                         }
                         const std::string parameter = std::string(std::get<std::string_view>(tokens[i++].value));
@@ -817,7 +1005,8 @@ namespace Lexer
                             if (existing == parameter)
                             {
                                 update_line_and_column();
-                                Error err = {"Duplicate function-like using macro parameter '" + parameter + "'.", current_mod_path, line, column};
+                                Error err = {"Duplicate function-like using macro parameter '" + parameter + "'.",
+                                             current_mod_path, line, column};
                                 panic(err);
                             }
                         }
@@ -833,7 +1022,8 @@ namespace Lexer
                 if (i >= tokens.size() || !is_operator_token(tokens[i], Operator::RIGHT_PAREN))
                 {
                     update_line_and_column();
-                    Error err = {"Function-like using macro requires ')' after its parameters", current_mod_path, line, column};
+                    Error err = {"Function-like using macro requires ')' after its parameters", current_mod_path, line,
+                                 column};
                     panic(err);
                 }
                 ++i;
@@ -858,7 +1048,8 @@ namespace Lexer
                 if (is_unsafe_macro_replacement_token(tokens[i]))
                 {
                     update_line_and_column();
-                    Error err = {"Using macro replacements cannot contain ';', '{', or '}'.", current_mod_path, line, column};
+                    Error err = {"Using macro replacements cannot contain ';', '{', or '}'.", current_mod_path, line,
+                                 column};
                     panic(err);
                 }
                 if (const std::vector<Token> *expanded = find_macro(tokens[i], scopes))
@@ -868,7 +1059,8 @@ namespace Lexer
                 if (replacement.size() > maximum_macro_replacement_tokens)
                 {
                     update_line_and_column();
-                    Error err = {"Using macro replacement exceeds the token safety limit.", current_mod_path, line, column};
+                    Error err = {"Using macro replacement exceeds the token safety limit.", current_mod_path, line,
+                                 column};
                     panic(err);
                 }
                 ++i;
@@ -896,7 +1088,8 @@ namespace Lexer
                         is_operator_token(replacement[replacementIndex + 1], Operator::EXLAMATION_MARK))
                     {
                         update_line_and_column();
-                        Error err = {"Recursive function-like using macro alias '" + aliasKey + "'", current_mod_path, line, column};
+                        Error err = {"Recursive function-like using macro alias '" + aliasKey + "'", current_mod_path,
+                                     line, column};
                         panic(err);
                     }
                 }
@@ -906,7 +1099,8 @@ namespace Lexer
                     if (existing.parameters.size() == functionMacro.parameters.size())
                     {
                         update_line_and_column();
-                        Error err = {"Duplicate function-like using macro alias '" + aliasKey + "' for this arity.", current_mod_path, line, column};
+                        Error err = {"Duplicate function-like using macro alias '" + aliasKey + "' for this arity.",
+                                     current_mod_path, line, column};
                         panic(err);
                     }
                 }
@@ -948,9 +1142,8 @@ namespace Lexer
         const size_t closeStart = matching_macro_end(source, headerEnd, current_mod_path, line);
         const size_t closeEnd = line_end(source, closeStart);
         pos = closeEnd;
-        return Token{TokenType::InlineAsm, start,
-                     std::string_view(source).substr(start + 4, closeStart - (start + 4)), &source,
-                     &current_mod_path};
+        return Token{TokenType::InlineAsm, start, std::string_view(source).substr(start + 4, closeStart - (start + 4)),
+                     &source, &current_mod_path};
     }
 
     Token next_token()
@@ -983,8 +1176,7 @@ namespace Lexer
                 if (it->second == Keyword::RAW)
                 {
                     std::string_view literal = parse_raw_string();
-                    return Token{TokenType::StringLiteral, start,
-                                 literal, &source, &current_mod_path};
+                    return Token{TokenType::StringLiteral, start, literal, &source, &current_mod_path};
                 }
                 return Token{TokenType::Keyword, start, it->second, &source, &current_mod_path};
             }
@@ -1042,7 +1234,7 @@ namespace Lexer
         LexedModule module;
         module.path = mod.path;
         module.tokens.reserve(source.size() / 3 < maximum_initial_token_capacity ? source.size() / 3
-                                                                           : maximum_initial_token_capacity);
+                                                                                 : maximum_initial_token_capacity);
         Token token = next_token();
         while (token.type != TokenType::EndOfFile)
         {
@@ -1083,8 +1275,7 @@ namespace Lexer
         return module;
     }
 
-    std::vector<LexedModule> tokenize_modules(const std::vector<Module> &modules,
-                                              const Configuration &configuration)
+    std::vector<LexedModule> tokenize_modules(const std::vector<Module> &modules, const Configuration &configuration)
     {
         activeConfiguration = configuration;
         globalMacroScope = MacroScope{};

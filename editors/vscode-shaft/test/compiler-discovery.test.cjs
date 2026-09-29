@@ -36,6 +36,29 @@ test('keeps an explicit VS Code compiler setting ahead of installer registration
   assert.equal(resolved.source, 'VS Code setting');
 });
 
+test('creates and cleans an isolated live-diagnostics snapshot for an absolute compiler', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shaft-diagnostics-'));
+  try {
+    const compiler = path.join(directory, 'bin', 'shaftc');
+    fs.mkdirSync(path.dirname(compiler), { recursive: true });
+    fs.writeFileSync(compiler, 'compiler');
+
+    const live = discovery.createLiveDiagnosticsOptions(
+      { compilerPath: compiler },
+      { temporaryDirectory: directory },
+    );
+    assert.equal(live.options.compilerPath, compiler);
+    assert.equal(path.basename(live.options.diagnosticPath), 'document.shaft');
+    assert.equal(path.dirname(live.options.diagnosticPath), live.directory);
+    assert.ok(fs.existsSync(live.directory));
+
+    discovery.removeLiveDiagnosticsDirectory(live.directory);
+    assert.ok(!fs.existsSync(live.directory));
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('computes config paths for supported operating systems', () => {
   assert.equal(discovery.registrationPath({ platform: 'linux', env: { XDG_CONFIG_HOME: '/config' }, home: '/home/test' }), '/config/shaft/compiler.json');
   assert.equal(discovery.registrationPath({ platform: 'darwin', env: {}, home: '/Users/test' }), '/Users/test/Library/Application Support/Shaft/compiler.json');

@@ -51,6 +51,11 @@ mut u64 runtime_sys_fcntl = 92;
 mut u64 runtime_sys_clock_gettime = 116;
 mut u64 runtime_sys_nanosleep = 240;
 mut u64 runtime_sys_exit = 1;
+mut u64 runtime_sys_execv = 59;
+mut u64 runtime_sys_fork = 2;
+mut u64 runtime_sys_wait4 = 7;
+mut u64 runtime_sys_pipe = 42;
+mut u64 runtime_sys_dup2 = 90;
 @end
 
 @config.build.target = "x86_64-unsupported-darwin"
@@ -102,6 +107,11 @@ mut u64 runtime_sys_fcntl = 92;
 mut u64 runtime_sys_clock_gettime = 116;
 mut u64 runtime_sys_nanosleep = 240;
 mut u64 runtime_sys_exit = 1;
+mut u64 runtime_sys_execv = 59;
+mut u64 runtime_sys_fork = 2;
+mut u64 runtime_sys_wait4 = 7;
+mut u64 runtime_sys_pipe = 42;
+mut u64 runtime_sys_dup2 = 90;
 @end
 
 @config.build.target = "aarch64-apple-darwin"
@@ -150,6 +160,11 @@ mut u64 runtime_sys_fcntl = 92;
 mut u64 runtime_sys_clock_gettime = 116;
 mut u64 runtime_sys_nanosleep = 240;
 mut u64 runtime_sys_exit = 1;
+mut u64 runtime_sys_execv = 59;
+mut u64 runtime_sys_fork = 2;
+mut u64 runtime_sys_wait4 = 7;
+mut u64 runtime_sys_pipe = 42;
+mut u64 runtime_sys_dup2 = 90;
 @end
 
 @config.build.target = "riscv64-unsupported-darwin"
@@ -196,8 +211,14 @@ mut u64 runtime_sys_fcntl = 92;
 mut u64 runtime_sys_clock_gettime = 116;
 mut u64 runtime_sys_nanosleep = 240;
 mut u64 runtime_sys_exit = 1;
+mut u64 runtime_sys_execv = 59;
+mut u64 runtime_sys_fork = 2;
+mut u64 runtime_sys_wait4 = 7;
+mut u64 runtime_sys_pipe = 42;
+mut u64 runtime_sys_dup2 = 90;
 @end
 
+mut u64 runtime_sys_ioctl = 54;
 cdec __shaft_syscall6(i64 number, i64 first, i64 second, i64 third, i64 fourth, i64 fifth, i64 sixth) -> i64;
 
 class RuntimeAllocation
@@ -212,6 +233,17 @@ class RuntimeTimeSpec
 {
     mut i64 seconds;
     mut i64 nanoseconds;
+}
+
+class RuntimeTermios
+{
+    mut u64 input_flags;
+    mut u64 output_flags;
+    mut u64 control_flags;
+    mut u64 local_flags;
+    mut u8[20] control_characters;
+    mut u64 input_speed;
+    mut u64 output_speed;
 }
 
 class RuntimeSockaddrIn
@@ -231,6 +263,8 @@ mut u64 runtime_stdin_offset = 0;
 mut u64 runtime_stdin_length = 0;
 mut *u8 runtime_null;
 mut *u32 runtime_null_u32;
+mut RuntimeTermios runtime_saved_terminal;
+mut bool runtime_terminal_active = false;
 
 cdef memcpy(*u8 destination, *u8 source, u64 count) -> *u8
 {
@@ -351,6 +385,7 @@ cdef __shaft_free(*u8 pointer)
 
 cdef __sys_exit(i32 status)
 {
+    __sys_restore_terminal();
     __shaft_syscall6(runtime_sys_exit, status, 0, 0, 0, 0, 0);
     while (true) {}
 }
@@ -378,6 +413,168 @@ cdef __sys_write(i64 descriptor, *i8 buffer, u64 count) -> i64
 cdef __sys_read(i64 descriptor, *i8 buffer, u64 count) -> i64
 {
     return __shaft_syscall6(runtime_sys_read, descriptor, buffer, count, 0, 0, 0);
+}
+
+cdef __sys_execv(*i8 command, **i8 arguments) -> i64
+{
+    return __shaft_syscall6(runtime_sys_execv, command, arguments, runtime_null, 0, 0, 0);
+}
+
+cdef __sys_process_spawn(*i8 command, **i8 arguments, i64 stdout_descriptor, i64 stderr_descriptor) -> i64
+{
+    mut i64 pid = __shaft_syscall6(runtime_sys_fork, 0, 0, 0, 0, 0, 0);
+    if (pid == 0)
+    {
+        if (stdout_descriptor >= 0)
+        {
+            __shaft_syscall6(runtime_sys_dup2, stdout_descriptor, 1, 0, 0, 0, 0);
+            __shaft_syscall6(runtime_sys_close, stdout_descriptor, 0, 0, 0, 0, 0);
+        }
+        if (stderr_descriptor >= 0)
+        {
+            __shaft_syscall6(runtime_sys_dup2, stderr_descriptor, 2, 0, 0, 0, 0);
+            __shaft_syscall6(runtime_sys_close, stderr_descriptor, 0, 0, 0, 0, 0);
+        }
+        __sys_execv(command, arguments);
+        __sys_exit(127);
+    }
+    return pid;
+}
+
+cdef __sys_process_wait(i64 pid) -> i64
+{
+    mut i32 status = 0;
+    mut i64 result = __shaft_syscall6(runtime_sys_wait4, pid, &status, 0, 0, 0, 0);
+    if (result < 0)
+    {
+        return result;
+    }
+    return status;
+}
+
+cdef __sys_process_pipe(*i64 descriptors) -> i64
+{
+    mut i32[2] rawDescriptors;
+    mut i64 result = __shaft_syscall6(runtime_sys_pipe, &rawDescriptors[0], 0, 0, 0, 0, 0);
+    if (result == 0)
+    {
+        descriptors[0] = rawDescriptors[0];
+        descriptors[1] = rawDescriptors[1];
+    }
+    return result;
+}
+
+cdef __sys_process_set_nonblocking(i64 descriptor) -> i64
+{
+    mut i64 flags = __shaft_syscall6(runtime_sys_fcntl, descriptor, 3, 0, 0, 0, 0);
+    if (flags < 0)
+    {
+        return flags;
+    }
+    return __shaft_syscall6(runtime_sys_fcntl, descriptor, 4, flags | 4, 0, 0, 0);
+}
+
+cdef __sys_process_read(i64 descriptor, *i8 buffer, u64 count) -> i64
+{
+    mut i64 result = __sys_read(descriptor, buffer, count);
+    if (result == -35)
+    {
+        return -2;
+    }
+    return result;
+}
+
+cdef __sys_process_null() -> *i8
+{
+    return runtime_null;
+}
+
+cdef __sys_restore_terminal()
+{
+    if (runtime_terminal_active)
+    {
+        __shaft_syscall6(runtime_sys_ioctl, 0, 2152231956, &runtime_saved_terminal, 0, 0, 0);
+        runtime_terminal_active = false;
+    }
+}
+
+cdef __runtime_enable_key_input()
+{
+    if (runtime_terminal_active)
+    {
+        return;
+    }
+    mut RuntimeTermios terminal;
+    if (__shaft_syscall6(runtime_sys_ioctl, 0, 1078490131, &terminal, 0, 0, 0) != 0)
+    {
+        return;
+    }
+    runtime_saved_terminal = terminal;
+    terminal.input_flags = terminal.input_flags & 18446744073709550848;
+    terminal.output_flags = terminal.output_flags & 18446744073709551614;
+    terminal.local_flags = terminal.local_flags & 18446744073709550200;
+    terminal.control_characters[16] = 1;
+    terminal.control_characters[17] = 0;
+    if (__shaft_syscall6(runtime_sys_ioctl, 0, 2152231956, &terminal, 0, 0, 0) == 0)
+    {
+        runtime_terminal_active = true;
+    }
+}
+
+cdef __runtime_read_key_byte() -> i32
+{
+    mut i32 available = 0;
+    if (__shaft_syscall6(runtime_sys_ioctl, 0, 1074030207, &available, 0, 0, 0) != 0 || available <= 0)
+    {
+        return -1;
+    }
+    mut i8 byte = 0;
+    if (__sys_read(0, &byte, 1) != 1)
+    {
+        return -1;
+    }
+    mut i32 value = byte;
+    if (value < 0) { value = value + 256; }
+    return value;
+}
+
+cdef __runtime_key_from_byte(i32 byte) -> i32
+{
+    if (byte == 10 || byte == 13) { return 13; }
+    if (byte >= 1 && byte <= 26) { return byte + 16448; }
+    if (byte >= 97 && byte <= 122) { return byte - 32; }
+    if (byte == 127) { return 8; }
+    return byte;
+}
+
+cdef __runtime_key_from_final(i32 final) -> i32
+{
+    if (final == 65) { return 257; }
+    if (final == 66) { return 258; }
+    if (final == 67) { return 259; }
+    if (final == 68) { return 260; }
+    if (final == 72) { return 261; }
+    if (final == 70) { return 262; }
+    if (final == 80) { return 272; }
+    if (final == 81) { return 273; }
+    if (final == 82) { return 274; }
+    if (final == 83) { return 275; }
+    return 0;
+}
+
+cdef __sys_read_key() -> i32
+{
+    __runtime_enable_key_input();
+    mut i32 first = __runtime_read_key_byte();
+    if (first < 0) { return 0; }
+    if (first != 27) { return __runtime_key_from_byte(first); }
+    mut i32 next = __runtime_read_key_byte();
+    if (next < 0) { return 27; }
+    if (next == 91 || next == 79)
+    {
+        return __runtime_key_from_final(__runtime_read_key_byte());
+    }
+    return __runtime_key_from_byte(next) + 8192;
 }
 
 cdef __sys_readline(*u8 buffer, u64 capacity) -> i64

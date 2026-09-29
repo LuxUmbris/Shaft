@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -141,10 +142,18 @@ class ShaftLsProtocolTests(unittest.TestCase):
                 body, output = output[:length], output[length:]
                 responses.append(json.loads(body.decode("utf-8")))
             initialized = next(response["result"] for response in responses if response.get("id") == 1)
-            self.assertEqual(initialized["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"], ["keyword", "type", "function", "number", "string", "comment", "operator", "macro", "variable"])
+            self.assertEqual(initialized["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"], ["keyword", "type", "function", "number", "string", "comment", "operator", "macro", "variable", "error"])
             tokens = next(response["result"]["data"] for response in responses if response.get("id") == 2)
             self.assertEqual(tokens, [
-                2, 4, 4, 0, 0,    # @asm
+                0, 0, 4, 0, 0,    # cdef
+                0, 5, 5, 0, 0,    # naked
+                0, 6, 6, 2, 0,    # answer
+                0, 6, 1, 6, 0,    # (
+                0, 1, 1, 6, 0,    # )
+                0, 2, 2, 6, 0,    # ->
+                0, 3, 3, 1, 0,    # i32
+                1, 0, 1, 6, 0,    # {
+                1, 4, 4, 0, 0,    # @asm
                 1, 8, 4, 7, 0,    # addl
                 0, 6, 1, 3, 0,    # 2
                 0, 3, 6, 8, 0,    # $value
@@ -153,6 +162,50 @@ class ShaftLsProtocolTests(unittest.TestCase):
                 0, 5, 4, 8, 0,    # %eax
                 0, 6, 4, 8, 0,    # %ebx
                 1, 4, 4, 0, 0,    # @end
+                1, 0, 1, 6, 0,    # }
+            ])
+        finally:
+            if server.poll() is None:
+                server.kill()
+                server.wait()
+            server.stdin.close()
+            server.stdout.close()
+            server.stderr.close()
+
+    def test_semantic_tokens_highlight_live_shaft_declarations_expressions_and_comments(self):
+        build = subprocess.run([str(SHAFTC), "--build", "Shaft.build"], cwd=PROJECT, text=True, capture_output=True, check=False)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        server = subprocess.Popen([str(BINARY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            uri = "file:///workspace/source-highlighting.shaft"
+            messages = [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "shaft", "version": 1, "text": "export def add(i32 value) -> i32 result\n{\n    reserve mut i32 answer = value + 1; // answer\n    return answer;\n}\n"}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "textDocument/semanticTokens/full", "params": {"textDocument": {"uri": uri}}},
+                {"jsonrpc": "2.0", "method": "exit", "params": {}},
+            ]
+            for message in messages:
+                server.stdin.write(frame(message))
+            server.stdin.flush()
+            output, error = server.communicate(timeout=3)
+            self.assertEqual(server.returncode, 1, error.decode())
+            responses = []
+            while output:
+                header, output = output.split(b"\r\n\r\n", 1)
+                length = int(next(line.split(b":", 1)[1].strip() for line in header.split(b"\r\n") if line.lower().startswith(b"content-length:")))
+                body, output = output[:length], output[length:]
+                responses.append(json.loads(body.decode("utf-8")))
+            tokens = next(response["result"]["data"] for response in responses if response.get("id") == 2)
+            self.assertEqual(tokens, [
+                0, 0, 6, 0, 0, 0, 7, 3, 0, 0, 0, 4, 3, 2, 0, 0, 3, 1, 6, 0,
+                0, 1, 3, 1, 0, 0, 4, 5, 8, 0, 0, 5, 1, 6, 0, 0, 2, 2, 6, 0,
+                0, 3, 3, 1, 0, 0, 4, 6, 8, 0,
+                1, 0, 1, 6, 0,
+                1, 4, 7, 0, 0, 0, 8, 3, 0, 0, 0, 4, 3, 1, 0, 0, 4, 6, 8, 0,
+                0, 7, 1, 6, 0, 0, 2, 5, 8, 0, 0, 6, 1, 6, 0, 0, 2, 1, 3, 0,
+                0, 3, 9, 5, 0,
+                1, 4, 6, 0, 0, 0, 7, 6, 8, 0,
+                1, 0, 1, 6, 0,
             ])
         finally:
             if server.poll() is None:
@@ -206,6 +259,7 @@ class ShaftLsProtocolTests(unittest.TestCase):
                 {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
                 {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "shaft", "version": 1, "text": "{\n}\n}\n"}}},
                 {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": uri, "version": 2}, "contentChanges": [{"text": "{\n"}]}},
+                {"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": uri}}},
                 {"jsonrpc": "2.0", "method": "exit", "params": {}},
             ]
             for message in messages:
@@ -239,6 +293,48 @@ class ShaftLsProtocolTests(unittest.TestCase):
                     "message": "Unclosed opening brace",
                 }],
             })
+            self.assertEqual(notifications[2], {"uri": uri, "diagnostics": []})
+        finally:
+            if server.poll() is None:
+                server.kill()
+                server.wait()
+            server.stdin.close()
+            server.stdout.close()
+            server.stderr.close()
+
+    def test_publish_diagnostics_reports_unterminated_string_literals_live(self):
+        build = subprocess.run([str(SHAFTC), "--build", "Shaft.build"], cwd=PROJECT, text=True, capture_output=True, check=False)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        server = subprocess.Popen([str(BINARY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            uri = "file:///workspace/unterminated-string.shaft"
+            messages = [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "shaft", "version": 1, "text": 'reserve String value = "unterminated\n'}}},
+                {"jsonrpc": "2.0", "method": "exit", "params": {}},
+            ]
+            for message in messages:
+                server.stdin.write(frame(message))
+            server.stdin.flush()
+            output, error = server.communicate(timeout=3)
+            self.assertEqual(server.returncode, 1, error.decode())
+            notifications = []
+            while output:
+                header, output = output.split(b"\r\n\r\n", 1)
+                length = int(next(line.split(b":", 1)[1].strip() for line in header.split(b"\r\n") if line.lower().startswith(b"content-length:")))
+                body, output = output[:length], output[length:]
+                message = json.loads(body.decode("utf-8"))
+                if message.get("method") == "textDocument/publishDiagnostics":
+                    notifications.append(message["params"])
+            self.assertEqual(notifications, [{
+                "uri": uri,
+                "diagnostics": [{
+                    "range": {"start": {"line": 0, "character": 23}, "end": {"line": 0, "character": 24}},
+                    "severity": 1,
+                    "source": "shaftls",
+                    "message": "Unterminated string literal",
+                }],
+            }])
         finally:
             if server.poll() is None:
                 server.kill()
@@ -256,7 +352,7 @@ class ShaftLsProtocolTests(unittest.TestCase):
             messages = [
                 {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
                 {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "shaft", "version": 1, "text": 'import "old.shaft";\n@asm\n@end\n'}}},
-                {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": uri, "version": 2}, "contentChanges": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 6}}, "text": "@config"}]}},
+                {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": uri, "version": 2}, "contentChanges": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 6}}, "text": "@config.build"}]}},
                 {"jsonrpc": "2.0", "id": 2, "method": "textDocument/semanticTokens/full", "params": {"textDocument": {"uri": uri}}},
                 {"jsonrpc": "2.0", "method": "exit", "params": {}},
             ]
@@ -280,6 +376,144 @@ class ShaftLsProtocolTests(unittest.TestCase):
             server.stdin.close()
             server.stdout.close()
             server.stderr.close()
+
+    def test_semantic_tokens_only_mark_complete_metaprogramming_directives(self):
+        build = subprocess.run([str(SHAFTC), "--build", "Shaft.build"], cwd=PROJECT, text=True, capture_output=True, check=False)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        server = subprocess.Popen([str(BINARY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            uri = "file:///workspace/directive-boundaries.shaft"
+            source = "@config.build.target matches \"x86_64\"\n@configurable = 1\n@!config.package.name = \"shaftls\"\n@endless\n@config.build.matches = \"matches\"\n"
+            for message in [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "shaft", "version": 1, "text": source}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "textDocument/semanticTokens/full", "params": {"textDocument": {"uri": uri}}},
+                {"jsonrpc": "2.0", "method": "exit", "params": {}},
+            ]:
+                server.stdin.write(frame(message))
+            server.stdin.flush()
+            output, error = server.communicate(timeout=3)
+            self.assertEqual(server.returncode, 1, error.decode())
+            responses = []
+            while output:
+                header, output = output.split(b"\r\n\r\n", 1)
+                length = int(next(line.split(b":", 1)[1].strip() for line in header.split(b"\r\n") if line.lower().startswith(b"content-length:")))
+                body, output = output[:length], output[length:]
+                responses.append(json.loads(body.decode("utf-8")))
+            tokens = next(response["result"]["data"] for response in responses if response.get("id") == 2)
+            self.assertEqual(tokens, [
+                0, 0, 7, 0, 0,
+                0, 21, 7, 0, 0,
+                1, 1, 12, 8, 0, 0, 13, 1, 6, 0, 0, 2, 1, 3, 0,
+                1, 0, 8, 0, 0,
+                1, 1, 7, 8, 0,
+                1, 0, 7, 0, 0,
+            ])
+        finally:
+            if server.poll() is None:
+                server.kill()
+                server.wait()
+            server.stdin.close()
+            server.stdout.close()
+            server.stderr.close()
+
+    def test_semantic_tokens_highlight_config_conditions_error_directives_and_lowercase_types(self):
+        build = subprocess.run([str(SHAFTC), "--build", "Shaft.build"], cwd=PROJECT, text=True, capture_output=True, check=False)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        server = subprocess.Popen([str(BINARY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            uri = "file:///workspace/config-and-types.shaft"
+            source = "@config.build.target in [\"linux\"]\n@!config.build.target matches \"linux\"\n@error \"unsupported target\"\nstruct packet\n{\n}\nreserve packet value;\n"
+            for message in [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "shaft", "version": 1, "text": source}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "textDocument/semanticTokens/full", "params": {"textDocument": {"uri": uri}}},
+                {"jsonrpc": "2.0", "method": "exit", "params": {}},
+            ]:
+                server.stdin.write(frame(message))
+            server.stdin.flush()
+            output, error = server.communicate(timeout=3)
+            self.assertEqual(server.returncode, 1, error.decode())
+            responses = []
+            while output:
+                header, output = output.split(b"\r\n\r\n", 1)
+                length = int(next(line.split(b":", 1)[1].strip() for line in header.split(b"\r\n") if line.lower().startswith(b"content-length:")))
+                body, output = output[:length], output[length:]
+                responses.append(json.loads(body.decode("utf-8")))
+            initialized = next(response["result"] for response in responses if response.get("id") == 1)
+            self.assertEqual(initialized["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"], ["keyword", "type", "function", "number", "string", "comment", "operator", "macro", "variable", "error"])
+            tokens = next(response["result"]["data"] for response in responses if response.get("id") == 2)
+            self.assertEqual(tokens, [
+                0, 0, 7, 0, 0,
+                0, 21, 2, 0, 0,
+                1, 0, 8, 0, 0,
+                0, 22, 7, 0, 0,
+                1, 0, 6, 9, 0,
+                1, 0, 6, 0, 0,
+                0, 7, 6, 1, 0,
+                1, 0, 1, 6, 0,
+                1, 0, 1, 6, 0,
+                1, 0, 7, 0, 0,
+                0, 8, 6, 1, 0,
+                0, 7, 5, 8, 0,
+            ])
+        finally:
+            if server.poll() is None:
+                server.kill()
+                server.wait()
+            server.stdin.close()
+            server.stdout.close()
+            server.stderr.close()
+
+    def test_publish_diagnostics_reports_compiler_parser_errors_for_live_documents(self):
+        build = subprocess.run([str(SHAFTC), "--build", "Shaft.build"], cwd=PROJECT, text=True, capture_output=True, check=False)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        server = subprocess.Popen([str(BINARY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        snapshot_directory = tempfile.TemporaryDirectory(prefix="shaftls-protocol-")
+        try:
+            uri = "file:///workspace/live-parser-error.shaft"
+            source = "def main()\n{\n    reserve i32 value = ;\n}\n"
+            valid_source = "def main()\n{\n}\n"
+            snapshot_path = Path(snapshot_directory.name) / "live-parser-error.shaft"
+            for message in [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"initializationOptions": {"compilerPath": str(SHAFTC), "diagnosticPath": str(snapshot_path)}}},
+                {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "shaft", "version": 1, "text": valid_source}}},
+                {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": uri, "version": 2}, "contentChanges": [{"text": source}]}},
+                {"jsonrpc": "2.0", "method": "exit", "params": {}},
+            ]:
+                server.stdin.write(frame(message))
+            server.stdin.flush()
+            output, error = server.communicate(timeout=5)
+            self.assertEqual(server.returncode, 1, error.decode())
+            self.assertEqual(snapshot_path.read_text(), source)
+            notifications = []
+            while output:
+                header, output = output.split(b"\r\n\r\n", 1)
+                length = int(next(line.split(b":", 1)[1].strip() for line in header.split(b"\r\n") if line.lower().startswith(b"content-length:")))
+                body, output = output[:length], output[length:]
+                message = json.loads(body.decode("utf-8"))
+                if message.get("method") == "textDocument/publishDiagnostics":
+                    notifications.append(message["params"])
+            self.assertEqual(notifications, [
+                {"uri": uri, "diagnostics": []},
+                {
+                    "uri": uri,
+                    "diagnostics": [{
+                        "range": {"start": {"line": 3, "character": 0}, "end": {"line": 3, "character": 1}},
+                        "severity": 1,
+                        "source": "shaftc",
+                        "message": "Expected an expression",
+                    }],
+                },
+            ])
+        finally:
+            if server.poll() is None:
+                server.kill()
+                server.wait()
+            server.stdin.close()
+            server.stdout.close()
+            server.stderr.close()
+            snapshot_directory.cleanup()
 
 
 if __name__ == "__main__":

@@ -139,6 +139,59 @@ namespace Codegen
         return generate_node(ctx, node);
     }
 
+    static LLVMValueRef generate_call_argument(Context &ctx, const Parser::ASTNode &node,
+                                               const CGType &parameterType)
+    {
+        const auto dereference_argument = [&](const CGType &referenceType, LLVMValueRef reference)
+        {
+            if (!referenceType.pointeeType)
+                throw std::runtime_error("reference argument has no pointee type");
+            LLVMValueRef value = LLVMBuildLoad2(ctx.builder, referenceType.pointeeType, reference,
+                                                "callargderef");
+            return cast_value(ctx.builder, value, parameterType.llvmType, parameterType.isSigned,
+                              "callargcast");
+        };
+
+        if (!parameterType.isReference)
+        {
+            if (node.type == Parser::NodeType::RefExpr && !node.children.empty())
+            {
+                CGType pointeeType = lvalue_type(ctx, node.children.front());
+                CGType referenceType;
+                referenceType.pointeeType = pointeeType.llvmType;
+                return dereference_argument(referenceType, generate_node(ctx, node));
+            }
+            try
+            {
+                const CGType argumentType = lvalue_type(ctx, node);
+                if (argumentType.isReference)
+                    return dereference_argument(argumentType, generate_node(ctx, node));
+            }
+            catch (const std::runtime_error &)
+            {
+                // Non-lvalue expressions retain ordinary by-value argument lowering.
+            }
+        }
+
+        if (parameterType.isReference && node.type != Parser::NodeType::RefExpr)
+        {
+            const CGType argumentType = lvalue_type(ctx, node);
+            if (!argumentType.isReference)
+            {
+                LLVMValueRef address = get_lvalue(ctx, node);
+                if (!address)
+                    throw std::runtime_error("reference parameter requires an addressable argument");
+                return address;
+            }
+        }
+
+        LLVMValueRef argument = generate_node(ctx, node);
+        if (!argument)
+            throw std::runtime_error("call argument did not produce a value");
+        return cast_value(ctx.builder, argument, parameterType.llvmType, parameterType.isSigned,
+                          "callargcast");
+    }
+
     static std::string decode_string_literal(std::string_view source)
     {
         const auto hex_digit = [](char character) -> unsigned
@@ -2889,10 +2942,16 @@ namespace Codegen
             if (node.isNaked)
             {
                 const unsigned nakedKind = LLVMGetEnumAttributeKindForName("naked", 5);
+                const unsigned noInlineKind = LLVMGetEnumAttributeKindForName("noinline", 8);
                 if (!nakedKind)
                     throw std::runtime_error("LLVM does not support the naked function attribute");
+                if (!noInlineKind)
+                    throw std::runtime_error("LLVM does not support the noinline function attribute");
                 LLVMAddAttributeAtIndex(func, LLVMAttributeFunctionIndex,
                                         LLVMCreateEnumAttribute(ctx.llvmCtx, nakedKind, 0));
+                // A naked assembly body returns through its target ABI and cannot safely be copied into a caller.
+                LLVMAddAttributeAtIndex(func, LLVMAttributeFunctionIndex,
+                                        LLVMCreateEnumAttribute(ctx.llvmCtx, noInlineKind, 0));
             }
 
             if (node.type == Parser::NodeType::CFunctionDecl)
@@ -3170,8 +3229,17 @@ namespace Codegen
             else if (node.children[0].type == Parser::NodeType::ScopeAccessExpr &&
                      !node.children[0].children.empty())
             {
-                const std::string className =
-                    std::string(std::get<std::string_view>(node.children[0].children[0].value));
+                auto qualified_scope_name = [&](const auto &self, const Parser::ASTNode &scope) -> std::string
+                {
+                    if (scope.type == Parser::NodeType::Identifier)
+                        return std::string(std::get<std::string_view>(scope.value));
+                    if (scope.type == Parser::NodeType::ScopeAccessExpr && !scope.children.empty())
+                        return self(self, scope.children.front()) + "::" +
+                               std::string(std::get<std::string_view>(scope.value));
+                    throw std::runtime_error("malformed scoped function call");
+                };
+                const std::string className = qualified_scope_name(
+                    qualified_scope_name, node.children[0].children[0]);
                 const std::string methodName = std::string(std::get<std::string_view>(node.children[0].value));
                 funcName = className + "." + methodName;
             }
@@ -3258,15 +3326,59 @@ namespace Codegen
                     const CGType callerReturnType = ctx.currentReturnType;
                     const auto callerTunnelSlots = ctx.tunnelSlots;
                     const std::string callerClassName = ctx.currentClassName;
+                    const std::string callerFunctionSpecializationName = ctx.functionSpecializationName;
+                    const auto callerScopes = ctx.scopes;
+                    const auto callerCleanupScopes = ctx.cleanupScopes;
+                    const auto callerPendingTunnelResultTargets = ctx.pendingTunnelResultTargets;
+                    const auto callerPendingTunnelPresenceTargets = ctx.pendingTunnelPresenceTargets;
+                    const auto callerPendingTunnelCleanupTargets = ctx.pendingTunnelCleanupTargets;
+                    const auto callerReservedTunnelTargetScopes = ctx.reservedTunnelTargetScopes;
+                    const auto callerReservedTunnelPresenceTargetScopes = ctx.reservedTunnelPresenceTargetScopes;
+                    const auto callerReservedTunnelCleanupTargetScopes = ctx.reservedTunnelCleanupTargetScopes;
+                    const auto callerStates = ctx.states;
+                    const auto callerScopedStateNames = ctx.scopedStateNames;
+                    const auto callerLoopStack = ctx.loopStack;
+                    const auto callerLoopCleanupDepths = ctx.loopCleanupDepths;
+                    const auto callerValidPayloadAddresses = ctx.validPayloadAddresses;
+                    // A specialization is emitted while lowering the caller, but its
+                    // locals and cleanup tokens belong solely to the specialization.
+                    // Keeping caller cleanup state here can emit a drop that refers to
+                    // an instruction in the wrong LLVM function after a move.
+                    ctx.scopes = {callerScopes.front()};
+                    ctx.cleanupScopes = {{}};
+                    ctx.pendingTunnelResultTargets.clear();
+                    ctx.pendingTunnelPresenceTargets.clear();
+                    ctx.pendingTunnelCleanupTargets.clear();
+                    ctx.reservedTunnelTargetScopes = {{}};
+                    ctx.reservedTunnelPresenceTargetScopes = {{}};
+                    ctx.reservedTunnelCleanupTargetScopes = {{}};
+                    ctx.states.clear();
+                    ctx.scopedStateNames = {{}};
+                    ctx.loopStack.clear();
+                    ctx.loopCleanupDepths.clear();
+                    ctx.validPayloadAddresses.clear();
                     ctx.functionSpecializationName = specializationName;
                     ctx.currentClassName = genericFunctionTemplateClasses[templateIt->first];
                     generate_node(ctx, *templateIt->second);
-                    ctx.functionSpecializationName.clear();
+                    ctx.functionSpecializationName = callerFunctionSpecializationName;
                     ctx.currentClassName = callerClassName;
                     ctx.currentFunction = caller;
                     ctx.isCFunction = callerIsCFunction;
                     ctx.currentReturnType = callerReturnType;
                     ctx.tunnelSlots = callerTunnelSlots;
+                    ctx.scopes = callerScopes;
+                    ctx.cleanupScopes = callerCleanupScopes;
+                    ctx.pendingTunnelResultTargets = callerPendingTunnelResultTargets;
+                    ctx.pendingTunnelPresenceTargets = callerPendingTunnelPresenceTargets;
+                    ctx.pendingTunnelCleanupTargets = callerPendingTunnelCleanupTargets;
+                    ctx.reservedTunnelTargetScopes = callerReservedTunnelTargetScopes;
+                    ctx.reservedTunnelPresenceTargetScopes = callerReservedTunnelPresenceTargetScopes;
+                    ctx.reservedTunnelCleanupTargetScopes = callerReservedTunnelCleanupTargetScopes;
+                    ctx.states = callerStates;
+                    ctx.scopedStateNames = callerScopedStateNames;
+                    ctx.loopStack = callerLoopStack;
+                    ctx.loopCleanupDepths = callerLoopCleanupDepths;
+                    ctx.validPayloadAddresses = callerValidPayloadAddresses;
                     LLVMPositionBuilderAtEnd(ctx.builder, callerBlock);
                 }
                 ctx.genericBindings = savedBindings;
@@ -3329,9 +3441,7 @@ namespace Codegen
                     }
                     else
                     {
-                        LLVMValueRef argument = generate_node(ctx, argumentNode);
-                        args.push_back(cast_value(ctx.builder, argument, parameterType.llvmType,
-                                                  parameterType.isSigned, "callargcast"));
+                        args.push_back(generate_call_argument(ctx, argumentNode, parameterType));
                     }
                 }
                 if (ctx.pendingTunnelResultTargets.empty() && !signature.tunnelSlotTypes.empty())
@@ -3479,6 +3589,13 @@ namespace Codegen
                     cstrType.llvmType = cstrInfo->second.llvmType;
                     cstrType.structName = "cstr";
                     args.push_back(generate_value_for_target(ctx, argumentNode, cstrType));
+                    continue;
+                }
+                if (normalFunction != functions.end() &&
+                    parameterIndex < normalFunction->second.paramTypes.size())
+                {
+                    args.push_back(generate_call_argument(ctx, argumentNode,
+                                                         normalFunction->second.paramTypes[parameterIndex]));
                     continue;
                 }
                 LLVMValueRef argument = generate_node(ctx, argumentNode);

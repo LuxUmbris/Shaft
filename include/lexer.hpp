@@ -254,13 +254,20 @@ namespace Lexer
         {"}", Operator::RIGHT_BRACE},
         {"?", Operator::QUESTION_MARK}};
 
+    struct ConfigCondition
+    {
+        enum class Kind { Equals, In, Matches };
+        Kind kind = Kind::Equals;
+        std::string field;
+        std::vector<std::string> values;
+    };
+
     struct Module
     {
         std::string path;
         std::string source;
     };
 
-    // Values visible to source-level @config blocks for this compilation.
     struct Configuration
     {
         std::unordered_map<std::string, std::string> values;

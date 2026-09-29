@@ -129,6 +129,7 @@ class CompilerFlagsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = pathlib.Path(directory) / "naked-and-operand-asm.shaft"
             binary = pathlib.Path(directory) / "naked-and-operand-asm"
+            assembly = pathlib.Path(directory) / "naked-and-operand-asm.s"
             source.write_text(
                 "cdef add_two() -> i32\n"
                 "{\n"
@@ -152,6 +153,17 @@ class CompilerFlagsTests(unittest.TestCase):
             compilation = self.run_compiler("--no-std", "--hosted", "-o", str(binary), str(source))
             self.assertEqual(compilation.returncode, 0, compilation.stdout + compilation.stderr)
             self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 42)
+            assembly_compilation = self.run_compiler(
+                "--no-std", "--hosted", "--emit", "asm", str(source), "-o", str(assembly)
+            )
+            self.assertEqual(
+                assembly_compilation.returncode,
+                0,
+                assembly_compilation.stdout + assembly_compilation.stderr,
+            )
+            self.assertRegex(
+                assembly.read_text(encoding="utf-8"), r"\b(?:callq|j[a-z]+)\s+answer(?:@PLT)?\b"
+            )
 
     def test_optimization_remarks_are_not_compiler_output(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1775,7 +1787,23 @@ class CompilerFlagsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 42)
 
-    def test_native_linking_rejects_an_invalid_lld_override(self):
+    def test_dynamic_library_linking_uses_baked_lld_despite_an_invalid_external_override(self):
+        with tempfile.TemporaryDirectory(prefix="shaftc-dynamic-lld-") as directory:
+            source = pathlib.Path(directory) / "dynamic-lld.shaft"
+            library = pathlib.Path(directory) / "libdynamic-lld.so"
+            missing_lld = pathlib.Path(directory) / "missing-ld.lld"
+            source.write_text("cdef answer() -> i32 { return 42; }\n", encoding="utf-8")
+            result = subprocess.run(
+                [str(COMPILER), "--no-std", "--emit", "dynamiclib", "-o", str(library), str(source)],
+                text=True,
+                capture_output=True,
+                env=os.environ | {"SHAFT_LLD": str(missing_lld)},
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(library.is_file())
+
+    def test_native_linking_uses_baked_lld_despite_an_invalid_external_override(self):
         with tempfile.TemporaryDirectory(prefix="shaftc-native-lld-") as directory:
             source = pathlib.Path(directory) / "native-lld.shaft"
             binary = pathlib.Path(directory) / "native-lld"
@@ -1788,24 +1816,19 @@ class CompilerFlagsTests(unittest.TestCase):
                 env=os.environ | {"SHAFT_LLD": str(missing_lld)},
                 check=False,
             )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("SHAFT_LLD does not name an LLD executable", result.stdout + result.stderr)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(binary.is_file())
+            self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 0)
 
-    @unittest.skipUnless(os.environ.get("SHAFT_LLD"), "SHAFT_LLD is required for Linux cross-link validation")
-    def test_cross_links_aarch64_linux_binary_with_lld(self):
-        lld = pathlib.Path(os.environ["SHAFT_LLD"])
-        if not lld.is_file():
-            self.skipTest("SHAFT_LLD does not name an executable")
+    def test_cross_links_aarch64_linux_binary_with_baked_lld(self):
         with tempfile.TemporaryDirectory(prefix="shaftc-cross-lld-") as directory:
             source = pathlib.Path(directory) / "cross.shaft"
             binary = pathlib.Path(directory) / "cross-aarch64"
             source.write_text("def main(String[] args) { exit(0); }\n", encoding="utf-8")
-            environment = os.environ | {"SHAFT_LLD": str(lld)}
             result = subprocess.run(
                 [str(COMPILER), "--target", "aarch64-unknown-linux-gnu", "-o", str(binary), str(source)],
                 text=True,
                 capture_output=True,
-                env=environment,
                 check=False,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

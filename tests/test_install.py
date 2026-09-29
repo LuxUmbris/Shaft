@@ -157,7 +157,7 @@ class InstallerTests(unittest.TestCase):
             (build / "shaftls").write_bytes(elf(62))
             (source / "std" / "runtime").mkdir(parents=True)
             (source / "std" / "std.shaft").write_text("// std\n", encoding="utf-8")
-            for runtime in ("linux.shaft", "darwin.shaft", "macos.shaft", "windows.shaft"):
+            for runtime in ("linux.shaft", "darwin.shaft", "windows.shaft"):
                 (source / "std" / "runtime" / runtime).write_text("/* runtime */\n", encoding="utf-8")
 
             installer.install(build, source, prefix, installer.Target("linux", "x86_64"), force=False)
@@ -165,6 +165,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((prefix / "bin" / "shaftls").read_bytes(), elf(62))
             self.assertEqual((prefix / "share" / "shaft" / "std" / "std.shaft").read_text(encoding="utf-8"), "// std\n")
             self.assertTrue((prefix / "share" / "shaft" / "std" / "runtime" / "linux.shaft").is_file())
+            self.assertFalse((prefix / "share" / "shaft" / "std" / "runtime" / "macos.shaft").exists())
 
     def test_installs_vim_and_neovim_runtime_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -178,6 +179,7 @@ class InstallerTests(unittest.TestCase):
                 "editors/vim/plugin/shaft_lsp.vim": "plugin\n",
                 "editors/neovim/lua/shaft/init.lua": "return {}\n",
                 "editors/neovim/plugin/shaft.lua": "require('shaft').setup()\n",
+                "editors/neovim/syntax/shaft.vim": "syntax\n",
             }.items():
                 path = source / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,6 +193,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((vim_home / "plugin" / "shaft_lsp.vim").read_text(encoding="utf-8"), "plugin\n")
             self.assertEqual((nvim_config / "lua" / "shaft" / "init.lua").read_text(encoding="utf-8"), "return {}\n")
             self.assertEqual((nvim_config / "plugin" / "shaft.lua").read_text(encoding="utf-8"), "require('shaft').setup()\n")
+            self.assertEqual((nvim_config / "syntax" / "shaft.vim").read_text(encoding="utf-8"), "syntax\n")
     def test_cli_vim_and_neovim_flags_install_to_user_runtime_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -209,6 +212,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue((home / ".vim" / "plugin" / "shaft_lsp.vim").is_file())
             self.assertTrue((config / "nvim" / "plugin" / "shaft.lua").is_file())
+            self.assertTrue((config / "nvim" / "syntax" / "shaft.vim").is_file())
 
 
 if __name__ == "__main__":

@@ -43,6 +43,36 @@ class StdStringConversionTests(unittest.TestCase):
             self.assertEqual(execution.returncode, 0, execution.stderr)
             self.assertEqual(execution.stdout, b"")
 
+    def test_repeated_large_string_scope_cleanup_reuses_allocator_storage(self):
+        with tempfile.TemporaryDirectory(prefix="shaftc-string-cleanup-") as directory:
+            work = Path(directory)
+            source = work / "string-cleanup.shaft"
+            binary = work / "string-cleanup"
+            source.write_text(
+                "def main()\n"
+                "{\n"
+                "    mut u64 iteration = 0;\n"
+                "    while (iteration < 8)\n"
+                "    {\n"
+                "        {\n"
+                "            reserve String value = String::with_capacity(900000);\n"
+                "            if (value.capacity != 900000) { exit(1); }\n"
+                "        }\n"
+                "        iteration = iteration + 1;\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            compilation = subprocess.run(
+                [str(SHAFTC), "-O0", "-o", str(binary), str(source)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(compilation.returncode, 0, compilation.stdout + compilation.stderr)
+            execution = subprocess.run([str(binary)], capture_output=True, check=False)
+            self.assertEqual(execution.returncode, 0, execution.stderr)
+
     def test_string_parsers_return_numbers_and_reject_invalid_text(self):
         with tempfile.TemporaryDirectory(prefix="shaftc-string-parsers-") as directory:
             work = Path(directory)

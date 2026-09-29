@@ -13,6 +13,10 @@ cdec GetFileSizeEx(u64 file, *i64 size) -> i32;
 cdec SetFilePointerEx(u64 file, i64 distance, *i64 new_position, u32 move_method) -> i32;
 cdec GetSystemTimeAsFileTime(*u64 file_time);
 cdec Sleep(u32 milliseconds);
+cdec GetConsoleMode(u64 console, *u32 mode) -> i32;
+cdec SetConsoleMode(u64 console, u32 mode) -> i32;
+cdec PeekConsoleInputA(u64 console, *u8 records, u32 length, *u32 read) -> i32;
+cdec ReadConsoleInputA(u64 console, *u8 records, u32 length, *u32 read) -> i32;
 
 cdec WSAStartup(u16 version, *u8 data) -> i32;
 cdec WSACleanup() -> i32;
@@ -45,6 +49,18 @@ class RuntimeTimeSpec
     mut i64 nanoseconds;
 }
 
+class RuntimeInputRecord
+{
+    mut u16 event_type;
+    mut u16 padding;
+    mut i32 key_down;
+    mut u16 repeat_count;
+    mut u16 virtual_key;
+    mut u16 virtual_scan;
+    mut u16 character;
+    mut u32 control_state;
+}
+
 class RuntimeSockaddrIn
 {
     mut u16 family;
@@ -52,6 +68,50 @@ class RuntimeSockaddrIn
     mut u32 address;
     mut u8[8] padding;
 }
+
+class RuntimeSecurityAttributes
+{
+    mut u32 length;
+    mut *u8 descriptor;
+    mut i32 inherit;
+}
+
+class RuntimeStartupInfo
+{
+    mut u32 size;
+    mut *i8 reserved;
+    mut *i8 desktop;
+    mut *i8 title;
+    mut u32 x;
+    mut u32 y;
+    mut u32 x_size;
+    mut u32 y_size;
+    mut u32 x_count_chars;
+    mut u32 y_count_chars;
+    mut u32 fill_attribute;
+    mut u32 flags;
+    mut u16 show_window;
+    mut u16 reserved2_size;
+    mut *u8 reserved2;
+    mut u64 stdin_handle;
+    mut u64 stdout_handle;
+    mut u64 stderr_handle;
+}
+
+class RuntimeProcessInformation
+{
+    mut u64 process;
+    mut u64 thread;
+    mut u32 process_id;
+    mut u32 thread_id;
+}
+
+cdec CreatePipe(*u64 read_pipe, *u64 write_pipe, *RuntimeSecurityAttributes attributes, u32 size) -> i32;
+cdec SetHandleInformation(u64 object, u32 mask, u32 flags) -> i32;
+cdec CreateProcessA(*i8 application, *i8 command_line, *u8 process_attributes, *u8 thread_attributes, i32 inherit_handles, u32 creation_flags, *u8 environment, *i8 current_directory, *RuntimeStartupInfo startup, *RuntimeProcessInformation process) -> i32;
+cdec WaitForSingleObject(u64 object, u32 milliseconds) -> u32;
+cdec GetExitCodeProcess(u64 process, *u32 exit_code) -> i32;
+cdec PeekNamedPipe(u64 pipe, *i8 buffer, u32 count, *u32 bytes_read, *u32 bytes_available, *u32 bytes_left) -> i32;
 
 mut u8[1048576] runtime_heap;
 mut RuntimeAllocation[1024] runtime_allocations;
@@ -65,6 +125,9 @@ mut *u32 runtime_null_u32;
 mut *i64 runtime_null_i64;
 mut **i8 runtime_null_argv;
 mut bool runtime_network_initialized = false;
+mut u64 runtime_console_input;
+mut u32 runtime_console_mode;
+mut bool runtime_terminal_active = false;
 
 cdef memcpy(*u8 destination, *u8 source, u64 count) -> *u8
 {
@@ -185,6 +248,7 @@ cdef __shaft_free(*u8 pointer)
 
 cdef __sys_exit(i32 status)
 {
+    __sys_restore_terminal();
     ExitProcess(status);
     while (true) {}
 }
@@ -228,6 +292,231 @@ cdef __sys_read(i64 descriptor, *i8 buffer, u64 count) -> i64
     if (count > 4294967295) { size = 4294967295; }
     if (ReadFile(__runtime_standard_handle(descriptor), buffer, size, &read, runtime_null) == 0) { return -1; }
     return read;
+}
+
+cdef __runtime_process_command_line(**i8 arguments) -> *i8
+{
+    mut u64 length = 1;
+    mut u64 argument_index = 0;
+    while (arguments[argument_index] != runtime_null)
+    {
+        length = length + __cstr_strlen(arguments[argument_index]) + 3;
+        argument_index = argument_index + 1;
+    }
+    mut *i8 line = __shaft_alloc_or_exit(length);
+    mut u64 offset = 0;
+    argument_index = 0;
+    while (arguments[argument_index] != runtime_null)
+    {
+        if (argument_index != 0)
+        {
+            line[offset] = 32;
+            offset = offset + 1;
+        }
+        line[offset] = 34;
+        offset = offset + 1;
+        mut u64 argument_length = __cstr_strlen(arguments[argument_index]);
+        mut u64 character = 0;
+        while (character < argument_length)
+        {
+            line[offset] = arguments[argument_index][character];
+            offset = offset + 1;
+            character = character + 1;
+        }
+        line[offset] = 34;
+        offset = offset + 1;
+        argument_index = argument_index + 1;
+    }
+    line[offset] = 0;
+    return line;
+}
+
+cdef __sys_process_spawn(*i8 command, **i8 arguments, i64 stdout_descriptor, i64 stderr_descriptor) -> i64
+{
+    mut RuntimeStartupInfo startup;
+    startup.size = 104;
+    startup.flags = 0;
+    if (stdout_descriptor >= 0 && stderr_descriptor >= 0)
+    {
+        startup.flags = 256;
+        startup.stdin_handle = GetStdHandle(4294967286);
+        startup.stdout_handle = stdout_descriptor;
+        startup.stderr_handle = stderr_descriptor;
+    }
+    mut RuntimeProcessInformation process;
+    mut *i8 command_line = __runtime_process_command_line(arguments);
+    if (CreateProcessA(command, command_line, runtime_null, runtime_null, startup.flags, 0, runtime_null, runtime_null, &startup, &process) == 0)
+    {
+        return -1;
+    }
+    CloseHandle(process.thread);
+    return process.process;
+}
+
+cdef __sys_process_wait(i64 process) -> i64
+{
+    if (WaitForSingleObject(process, 4294967295) != 0)
+    {
+        CloseHandle(process);
+        return -1;
+    }
+    mut u32 status = 0;
+    if (GetExitCodeProcess(process, &status) == 0)
+    {
+        CloseHandle(process);
+        return -1;
+    }
+    CloseHandle(process);
+    return status * 256;
+}
+
+cdef __sys_process_pipe(*i64 descriptors) -> i64
+{
+    mut RuntimeSecurityAttributes attributes;
+    attributes.length = 24;
+    attributes.descriptor = runtime_null;
+    attributes.inherit = 1;
+    mut u64 read_pipe = 0;
+    mut u64 write_pipe = 0;
+    if (CreatePipe(&read_pipe, &write_pipe, &attributes, 0) == 0)
+    {
+        return -1;
+    }
+    if (SetHandleInformation(read_pipe, 1, 0) == 0)
+    {
+        CloseHandle(read_pipe);
+        CloseHandle(write_pipe);
+        return -1;
+    }
+    descriptors[0] = read_pipe;
+    descriptors[1] = write_pipe;
+    return 0;
+}
+
+cdef __sys_process_set_nonblocking(i64 descriptor) -> i64
+{
+    return 0;
+}
+
+cdef __sys_process_read(i64 descriptor, *i8 buffer, u64 count) -> i64
+{
+    mut u32 available = 0;
+    if (PeekNamedPipe(descriptor, runtime_null, 0, runtime_null_u32, &available, runtime_null_u32) == 0)
+    {
+        return -1;
+    }
+    if (available == 0)
+    {
+        return -2;
+    }
+    mut u32 size = available;
+    if (count < size)
+    {
+        size = count;
+    }
+    mut u32 read = 0;
+    if (ReadFile(descriptor, buffer, size, &read, runtime_null) == 0)
+    {
+        return -1;
+    }
+    return read;
+}
+
+cdef __sys_execv(*i8 command, **i8 arguments) -> i64
+{
+    mut i64 process = __sys_process_spawn(command, arguments, -1, -1);
+    if (process < 0)
+    {
+        return process;
+    }
+    mut i64 status = __sys_process_wait(process);
+    if (status < 0)
+    {
+        return status;
+    }
+    __sys_exit(status >> 8);
+    return -1;
+}
+
+cdef __sys_process_null() -> *i8
+{
+    return runtime_null;
+}
+
+cdef __sys_restore_terminal()
+{
+    if (runtime_terminal_active)
+    {
+        SetConsoleMode(runtime_console_input, runtime_console_mode);
+        runtime_terminal_active = false;
+    }
+}
+
+cdef __runtime_enable_key_input()
+{
+    if (runtime_terminal_active)
+    {
+        return;
+    }
+    mut u64 console = GetStdHandle(4294967286);
+    mut u32 mode = 0;
+    if (GetConsoleMode(console, &mode) == 0)
+    {
+        return;
+    }
+    runtime_console_input = console;
+    runtime_console_mode = mode;
+    if (SetConsoleMode(console, mode & 4294967288) != 0)
+    {
+        runtime_terminal_active = true;
+    }
+}
+
+cdef __runtime_key_from_virtual(i32 virtual_key, i32 control_state) -> i32
+{
+    mut i32 key = virtual_key;
+    if (virtual_key == 37) { key = 260; }
+    else if (virtual_key == 38) { key = 257; }
+    else if (virtual_key == 39) { key = 259; }
+    else if (virtual_key == 40) { key = 258; }
+    else if (virtual_key == 36) { key = 261; }
+    else if (virtual_key == 35) { key = 262; }
+    else if (virtual_key == 33) { key = 263; }
+    else if (virtual_key == 34) { key = 264; }
+    else if (virtual_key == 45) { key = 265; }
+    else if (virtual_key == 46) { key = 266; }
+    else if (virtual_key >= 112 && virtual_key <= 123) { key = 272 + virtual_key - 112; }
+    mut i32 modifier = 0;
+    if ((control_state & 16) != 0) { modifier = modifier + 1; }
+    if ((control_state & 3) != 0) { modifier = modifier + 2; }
+    if ((control_state & 12) != 0) { modifier = modifier + 4; }
+    if (key == 0) { return 0; }
+    return key + modifier * 4096;
+}
+
+cdef __sys_read_key() -> i32
+{
+    __runtime_enable_key_input();
+    if (!runtime_terminal_active)
+    {
+        return 0;
+    }
+    mut RuntimeInputRecord record;
+    mut u32 available = 0;
+    if (PeekConsoleInputA(runtime_console_input, &record, 1, &available) == 0 || available == 0)
+    {
+        return 0;
+    }
+    mut u32 consumed = 0;
+    if (ReadConsoleInputA(runtime_console_input, &record, 1, &consumed) == 0 || consumed == 0)
+    {
+        return 0;
+    }
+    if (record.event_type != 1 || record.key_down == 0)
+    {
+        return 0;
+    }
+    return __runtime_key_from_virtual(record.virtual_key, record.control_state);
 }
 
 cdef __sys_readline(*u8 buffer, u64 capacity) -> i64
@@ -636,8 +925,6 @@ cdef __sys_socket_try_recv(i64 descriptor, *u8 buffer, u64 length) -> i64
     return __runtime_normalize_would_block(__sys_recv(descriptor, buffer, length, 0));
 }
 
-// PE entry points supply no argv data, preserving the established Windows ABI.
-// Windows x86-64 requires 32 bytes of home space before each call.
 @config.build.target = "x86_64-w64-windows-gnu"
 @asm
 .text

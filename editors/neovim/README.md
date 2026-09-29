@@ -6,7 +6,7 @@ Install and automatically enable the built-in-LSP integration with:
 python3 install.py --neovim
 ```
 
-This writes only `lua/shaft/init.lua` and `plugin/shaft.lua` below the Neovim configuration directory (`~/.config/nvim` by default). Alternatively, add the repository `editors/neovim` directory to `runtimepath`, then configure built-in LSP:
+This writes `lua/shaft/init.lua`, `plugin/shaft.lua`, and `syntax/shaft.vim` below the Neovim configuration directory (`~/.config/nvim` by default). Alternatively, add the repository `editors/neovim` directory to `runtimepath`, then configure built-in LSP:
 
 ```lua
 require('shaft').setup({
@@ -14,4 +14,4 @@ require('shaft').setup({
 })
 ```
 
-With an installed `shaftls` on PATH, omit `cmd`. The integration uses Neovim's built-in `vim.lsp.start`; no plugin manager or `nvim-lspconfig` dependency is required.
+With an installed `shaftls` on PATH, omit `cmd`. The integration enables the installed full Shaft syntax runtime for every Shaft buffer, then uses Neovim's built-in `vim.lsp.start` for semantic highlighting and live diagnostics; no plugin manager or `nvim-lspconfig` dependency is required.

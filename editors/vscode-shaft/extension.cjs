@@ -3,6 +3,7 @@
 const childProcess = require('node:child_process');
 const path = require('node:path');
 const vscode = require('vscode');
+const compilerDiscovery = require('./server/lib/compiler-discovery.cjs');
 const extensionSettings = require('./server/lib/extension-settings.cjs');
 const serverCommand = require('./server/lib/server-command.cjs');
 
@@ -69,20 +70,30 @@ function processMessages() {
 }
 function config() {
   const values = vscode.workspace.getConfiguration('shaft.languageServer');
-  return { serverPath: extensionSettings.explicitValue(values.inspect('serverPath')) };
+  return {
+    serverPath: extensionSettings.explicitValue(values.inspect('serverPath')),
+    compilerPath: extensionSettings.explicitValue(values.inspect('compilerPath')),
+  };
 }
 async function startServer(context) {
   if (server) return;
-  const launch = serverCommand.resolveShaftlsCommand(config().serverPath);
+  const settings = config();
+  const launch = serverCommand.resolveShaftlsCommand(settings.serverPath);
+  const liveDiagnostics = compilerDiscovery.createLiveDiagnosticsOptions(settings);
   server = childProcess.spawn(launch.executable, launch.arguments, { stdio: ['pipe', 'pipe', 'pipe'] });
   server.stdout.on('data', (chunk) => { readBuffer = Buffer.concat([readBuffer, chunk]); processMessages(); });
   server.stderr.on('data', (chunk) => output.append(chunk.toString()));
-  server.on('exit', (code) => { output.appendLine(`Shaft language server stopped (${code ?? 'signal'}).`); server = undefined; });
+  server.on('exit', (code) => {
+    compilerDiscovery.removeLiveDiagnosticsDirectory(liveDiagnostics.directory);
+    output.appendLine(`Shaft language server stopped (${code ?? 'signal'}).`);
+    server = undefined;
+  });
+  server.on('error', () => compilerDiscovery.removeLiveDiagnosticsDirectory(liveDiagnostics.directory));
   const workspaceFolders = vscode.workspace.workspaceFolders || [];
   await request('initialize', {
     processId: process.pid, rootUri: workspaceFolders[0]?.uri.toString() || null,
     workspaceFolders: workspaceFolders.map((folder) => ({ uri: folder.uri.toString(), name: folder.name })),
-    capabilities: {}, initializationOptions: config(),
+    capabilities: {}, initializationOptions: liveDiagnostics.options,
   });
   notify('initialized', {});
 }
@@ -109,7 +120,7 @@ function activate(context) {
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => { if (isShaft(document)) notify('textDocument/didClose', { textDocument: { uri: document.uri.toString() } }); }));
   for (const document of vscode.workspace.textDocuments) if (isShaft(document)) notify('textDocument/didOpen', { textDocument: textDocument(document) });
 
-  const semanticLegend = new vscode.SemanticTokensLegend(['keyword', 'type', 'function', 'number', 'string', 'comment', 'operator', 'macro', 'variable'], []);
+  const semanticLegend = new vscode.SemanticTokensLegend(['keyword', 'type', 'function', 'number', 'string', 'comment', 'operator', 'macro', 'variable', 'error'], []);
   context.subscriptions.push(vscode.languages.registerDocumentSemanticTokensProvider({ language: 'shaft' }, {
     provideDocumentSemanticTokens(document) {
       return request('textDocument/semanticTokens/full', { textDocument: { uri: document.uri.toString() } }).then((result) => new vscode.SemanticTokens(new Uint32Array(result.data)));

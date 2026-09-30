@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-RUNTIME_NAMES = ("linux.shaft", "darwin.shaft", "macos.shaft", "windows.shaft")
+RUNTIME_NAMES = ("linux.shaft", "darwin.shaft", "windows.shaft")
 PATH_BLOCK_BEGIN = "# >>> Shaft compiler PATH >>>"
 PATH_BLOCK_END = "# <<< Shaft compiler PATH <<<"
 
@@ -196,7 +196,7 @@ def install_vim(source_root: Path, vim_home: Path) -> list[Path]:
 
 def install_neovim(source_root: Path, config_home: Path) -> list[Path]:
     return install_editor_files(source_root / "editors" / "neovim", config_home, (
-        "lua/shaft/init.lua", "plugin/shaft.lua",
+        "lua/shaft/init.lua", "plugin/shaft.lua", "syntax/shaft.vim",
     ))
 
 

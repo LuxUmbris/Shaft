@@ -3,6 +3,10 @@ import os
 import sys
 import subprocess
 import platform
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
 
 def run(cmd):
     print(">>", " ".join(cmd))
@@ -67,11 +71,11 @@ def build(target, mode):
         sys.exit(1)
 
     cfg = TARGETS[target]
-    build_dir = f"build-{OS}-{target}-{mode}"
+    build_dir = ROOT / f"build-{OS}-{target}-{mode}"
     os.makedirs(build_dir, exist_ok=True)
 
     cmake_cmd = [
-        "cmake", "-S", ".", "-B", build_dir,
+        "cmake", "-S", str(ROOT), "-B", str(build_dir),
         f"-DCMAKE_BUILD_TYPE={mode.capitalize()}",
         f"-DCMAKE_C_COMPILER={cfg['CC']}",
         f"-DCMAKE_CXX_COMPILER={cfg['CXX']}",
@@ -80,13 +84,13 @@ def build(target, mode):
         "-DLLVM_TARGETS_TO_BUILD=X86;AArch64;RISCV",
         "-DLLVM_ENABLE_RTTI=ON",
         "-DLLVM_ENABLE_EH=ON",
-        "-DLLVM_BUILD_LLVM_DYLIB=ON",
-        "-DLLVM_LINK_LLVM_DYLIB=ON",
-        "-DBUILD_SHARED_LIBS=ON"
+        "-DLLVM_BUILD_LLVM_DYLIB=OFF",
+        "-DLLVM_LINK_LLVM_DYLIB=OFF",
+        "-DBUILD_SHARED_LIBS=OFF"
     ]
 
     run(cmake_cmd)
-    run(["cmake", "--build", build_dir, "-j", str(os.cpu_count())])
+    run(["cmake", "--build", str(build_dir), "-j", str(os.cpu_count())])
 
 def main():
     if len(sys.argv) != 3:

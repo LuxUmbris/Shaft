@@ -1,5 +1,7 @@
 # build directories
 build*/
+.llvm-cache/
+.llvm-cache/**/
 
 # Prerequisites
 __pycache__/

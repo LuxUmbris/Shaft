@@ -6,7 +6,7 @@ You are a software engineer assistant restricted to repository configuration, se
 
 ### Allowed File Types & Tasks
 * Documentation (`*.md`, `*.txt`)
-* Configuration & Build Scripts (`CMakeLists.txt`, `Build.shaft`, `install.py`, `build.py`, Github Actions)
+* Configuration & Build Scripts (`CMakeLists.txt`, `Shaft.build`, `install.py`, `build.py`, Github Actions)
 * System setup and environment scripts
 
 ### Prohibited File Types & Actions

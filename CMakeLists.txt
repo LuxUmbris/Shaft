@@ -1,14 +1,49 @@
 cmake_minimum_required(VERSION 3.20)
-project(ShaftLLVM VERSION 0.1.0 LANGUAGES CXX)
+project(ShaftLLVM VERSION 0.1.0 LANGUAGES C CXX)
+
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "Using ccache: ${CCACHE_PROGRAM}")
+endif()
 
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(LLVM REQUIRED CONFIG)
+if(NOT FETCHCONTENT_BASE_DIR)
+    set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.llvm-cache" CACHE PATH "Directory for FetachContent dependencies")
+endif()
+
+set(LLVM_BUILD_LLVM_DYLIB OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(LLVM_ENABLE_PROJECTS "lld" CACHE STRING "" FORCE)
+set(LLVM_TARGETS_TO_BUILD "X86;AArch64;RISCV" CACHE STRING "" FORCE)
+set(LLVM_ENABLE_RTTI ON CACHE BOOL "" FORCE)
+set(LLVM_ENABLE_EH ON CACHE BOOL "" FORCE)
+set(LLVM_OPTIMIZED_TABLEGEN ON CACHE BOOL "" FORCE)
+
+set(LLVM_INCLUDE_TESTS OFF CACHE BOOL "" FORCE)
+set(LLVM_INCLUDE_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(LLVM_INCLUDE_DOCS OFF CACHE BOOL "" FORCE)
+set(LLVM_INCLUDE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLVM_ENABLE_BINDINGS OFF CACHE BOOL "" FORCE)
+
+include(FetchContent)
+FetchContent_Declare(
+    llvm-project
+    URL https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/llvm-project-21.1.8.src.tar.xz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR llvm
+    EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(llvm-project)
+
 find_program(SHAFT_CLANG NAMES clang REQUIRED)
 find_program(SHAFT_LLVM_AR NAMES llvm-ar-18 llvm-ar REQUIRED)
-find_program(SHAFT_LLD NAMES ld.lld lld ld.lld-${LLVM_VERSION_MAJOR} lld-${LLVM_VERSION_MAJOR})
+find_package(Threads REQUIRED)
 
 add_executable(shaftc
     src/main.cpp
@@ -17,16 +52,46 @@ add_executable(shaftc
     src/checker.cpp
     src/codegen.cpp
     src/error.cpp
+    src/thirdparty/llvm.cpp
 )
 
-target_include_directories(shaftc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
-target_compile_definitions(shaftc PRIVATE ${LLVM_DEFINITIONS}
+target_include_directories(shaftc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${llvm-project_SOURCE_DIR}/llvm/include
+    ${llvm-project_BINARY_DIR}/include
+    ${llvm-project_SOURCE_DIR}/lld/include
+    ${llvm-project_BINARY_DIR}/tools/lld/include
+)
+
+target_compile_definitions(shaftc PRIVATE 
     SHAFT_SOURCE_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     SHAFT_CLANG_PATH="${SHAFT_CLANG}"
-    SHAFT_LLD_PATH="${SHAFT_LLD}"
     SHAFT_LLVM_AR_PATH="${SHAFT_LLVM_AR}"
-    SHAFT_VERSION="alpha-0.1-bootstrap")
-target_link_libraries(shaftc PRIVATE LLVM)
+    SHAFT_VERSION="alpha-0.2-bootstrap"
+)
+
+target_link_libraries(shaftc PRIVATE
+    lldELF
+    lldCOFF
+    lldMachO
+    lldCommon
+    LLVMCore
+    LLVMAnalysis
+    LLVMBitReader
+    LLVMBitWriter
+    LLVMExecutionEngine
+    LLVMPasses
+    LLVMTarget
+    LLVMMC
+    LLVMSupport
+    LLVMX86CodeGen
+    LLVMX86AsmParser
+    LLVMAArch64CodeGen
+    LLVMAArch64AsmParser
+    LLVMRISCVCodeGen
+    LLVMRISCVAsmParser
+    Threads::Threads
+)
 
 add_custom_target(shaftls ALL
     COMMAND $<TARGET_FILE:shaftc> --build Shaft.build
@@ -45,93 +110,22 @@ install(FILES std/std.shaft DESTINATION ${CMAKE_INSTALL_DATADIR}/shaft/std)
 install(FILES
     std/runtime/linux.shaft
     std/runtime/darwin.shaft
-    std/runtime/macos.shaft
     std/runtime/windows.shaft
     DESTINATION ${CMAKE_INSTALL_DATADIR}/shaft/std/runtime)
 
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(SHAFT_TEST_ARGS
+        --shaftc $<TARGET_FILE:shaftc>
+        --build-dir ${CMAKE_CURRENT_BINARY_DIR})
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_program(SHAFT_LLVM_AS NAMES llvm-as-18 llvm-as REQUIRED)
+        list(APPEND SHAFT_TEST_ARGS --llvm-as ${SHAFT_LLVM_AS})
+    endif()
     add_test(
-        NAME shaftls-protocol
+        NAME shaft-all
         COMMAND ${CMAKE_COMMAND} -E env SHAFTC=$<TARGET_FILE:shaftc>
-            ${Python3_EXECUTABLE} -m unittest shaftls.tests.test_protocol)
-    set_tests_properties(shaftls-protocol PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-    add_test(
-        NAME shaft-installer
-        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_install.py)
-    add_test(
-        NAME shaftc-flags
-        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_compiler_flags.py)
-    add_test(
-        NAME shaftc-std-file-io
-        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_std_file_io.py)
-    add_test(
-        NAME shaftc-std-network
-        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_std_network.py)
-    add_test(
-        NAME shaftc-std-string-conversion
-        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_std_string_conversion.py)
-    add_test(
-        NAME shaftc-checker-codegen-guards
-        COMMAND ${CMAKE_COMMAND} -E env SHAFTC=$<TARGET_FILE:shaftc>
-            ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_checker_codegen_guards.py)
-    add_test(
-        NAME shaftc-std-rng-append
-        COMMAND ${CMAKE_COMMAND} -E env SHAFTC=$<TARGET_FILE:shaftc>
-            ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_std_rng_append.py)
-    add_test(
-        NAME shaftc-std-time
-        COMMAND ${CMAKE_COMMAND} -E env SHAFTC=$<TARGET_FILE:shaftc>
-            ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_std_time.py)
-    add_test(
-        NAME shaftc-native-threads
-        COMMAND ${CMAKE_COMMAND} -E env SHAFTC=$<TARGET_FILE:shaftc>
-            ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_native_threads.py)
-    add_test(
-        NAME shaftc-std-network-server
-        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_std_network_server.py)
-    add_test(
-        NAME shaft-runtime-safety
-        COMMAND ${CMAKE_COMMAND} -E env SHAFTC=$<TARGET_FILE:shaftc>
-            ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_runtime_safety.py)
-endif()
-
-if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    find_program(SHAFT_LLVM_AS NAMES llvm-as-18 llvm-as REQUIRED)
-
-    add_test(
-        NAME shaftc-smoke
-        COMMAND ${CMAKE_COMMAND}
-            -DSHAFTC=$<TARGET_FILE:shaftc>
-            -DSMOKE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.shaft
-            -DCLASS_INDEX_INIT_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/class-index-init.shaft
-            -DINVALID_CLASS_INDEX_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/invalid-class-index.shaft
-            -DORDERED_USING_MACRO_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/ordered-using-macro.shaft
-            -DFORWARD_USING_MACRO_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/forward-using-macro.shaft
-            -DDUPLICATE_USING_MACRO_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/duplicate-using-macro.shaft
-            -DRECURSIVE_USING_MACRO_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/recursive-using-macro.shaft
-            -DINVALID_STRING_USING_MACRO_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/invalid-string-using-macro.shaft
-            -DNESTED_TEMPLATE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/nested-template.shaft
-            -DMALFORMED_NESTED_TEMPLATE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/malformed-nested-template.shaft
-            -DSELF_TYPE_METHOD_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/self-type-method.shaft
-            -DQUALIFIED_TYPES_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/qualified-types.shaft
-            -DSTD_HASH_COLLECTIONS_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/std-hash-collections.shaft
-            -DSTD_ENTRY_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/std-entry.shaft
-            -DSTDLIB_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/std/std.shaft
-            -DUNKNOWN_CALL_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/unknown-call.shaft
-            -DDUPLICATE_DEFINITION_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/duplicate-definition.shaft
-            -DLLVM_AS=${SHAFT_LLVM_AS}
-            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tests/shaftc-smoke
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_smoke.cmake
-    )
-
-    add_test(
-        NAME shaft-runtime-cross-compile
-        COMMAND ${CMAKE_COMMAND}
-            -DSHAFTC=$<TARGET_FILE:shaftc>
-            -DRUNTIME_DIR=${CMAKE_CURRENT_SOURCE_DIR}/std/runtime
-            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tests/runtime-cross-compile
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_runtimes.cmake
-    )
+            ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test.py ${SHAFT_TEST_ARGS})
+    set_tests_properties(shaft-all PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

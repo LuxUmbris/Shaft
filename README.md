@@ -4,15 +4,18 @@ Shaft is a language designed to match Rust's safety while remaining readable and
 
 This branch contains the C++/LLVM bootstrap compiler.
 
-```
-def main(String[] args) {}
+```cpp
+def main(String[] args) 
+{
+    println("Hello, World!");
+}
 ```
 
 ## Build and run
 
 LLVM 18 development files, CMake 3.20+, Python 3.11 and a C++17 compiler are required.
 
-```
+```bash
 python3 build.py <architecture> <debug|release>
 python3 install.py
 # Installs shaftc and shaftls into the selected prefix's bin directory.
@@ -60,7 +63,7 @@ verbose = false
 
 By default, `shaftc` emits a freestanding binary using the runtime for its host OS. Select another artifact with `--emit`:
 
-```
+```bash
 ./build/shaftc --emit llvm -o program.ll program.shaft
 ./build/shaftc --emit object -o program.o program.shaft
 ./build/shaftc --emit asm -o program.s program.shaft
@@ -114,13 +117,13 @@ Source can select target- or package-specific text before it reaches the parser:
 
 ## Reproducible performance benchmarks
 
-`benchmarks/run.py` generates equivalent Shaft, C, and Rust workloads in a temporary directory, records source hashes/sizes, exact commands, tool versions, host metadata, warm-ups, samples, medians, binary sizes, and toolchain availability in JSON. It never installs a compiler. Run it after building `shaftc`:
+`benchmarks/run.py` runs the [Computer Language Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/mandelbrot-python3-2.html) `mandelbrot` escape-count kernel in equivalent Shaft, C, and Rust sources generated in a temporary directory. It records source hashes/sizes, exact commands, tool versions, host metadata, warm-ups, samples, medians, binary sizes, and toolchain availability in JSON. Every runtime sample must return the same checked escape-count checksum, so the measured work cannot be optimized away. It never installs a compiler. Run it after building `shaftc`:
 
 ```sh
-python3 benchmarks/run.py --iterations 7  —runtime-iterations 7 --output /tmp/shaft-benchmark-results.json
+python3 benchmarks/run.py --iterations 7 --size 512 --max-iterations 50 --output /tmp/shaft-benchmark-results.json
 ```
 
-The compile workload compares Shaft `--no-std -O2 --emit llvm`, Clang `-O2 -march=native -S -emit-llvm`, and—when present—rustc `-C opt-level=2 -C target-cpu=native --emit=llvm-ir`. The runtime workload uses the same xorshift recurrence and reports a deliberate `unavailable` Rust result when `rustc` is not on `PATH`, rather than fabricating a comparison.
+The compile workload compares Shaft `-O2 --emit llvm`, Clang `-O2 -march=native -S -emit-llvm`, and—when present—rustc `-C opt-level=2 -C target-cpu=native --emit=llvm-ir`. Native-build latency and the interleaved runtime samples are reported separately; missing Rust is recorded as `unavailable` rather than fabricating a comparison. The default size is deliberately practical for local runs; increase `--size` when comparing a machine-specific baseline.
 
 ## Installer package
 
@@ -161,7 +164,7 @@ The installed layout is:
 PREFIX/bin/shaftc
 PREFIX/bin/shaftls
 PREFIX/share/shaft/std/std.shaft
-PREFIX/share/shaft/std/runtime/{linux,darwin,macos,windows}.shaft
+PREFIX/share/shaft/std/runtime/{linux,darwin,windows}.shaft
 ```
 
 `install.py` will not overwrite an existing `PREFIX/bin/shaftc` or `PREFIX/bin/shaftls` unless `--force` is supplied. When several compatible build directories are present, automatic discovery selects the most recently modified compiler binary; pass a directory explicitly to override that choice.
@@ -190,7 +193,7 @@ python3 install.py --vscode --vim --neovim
 
 - `--vscode` packages a temporary VSIX and runs `code --install-extension … --force`. It requires `code`, `node`, and `zip` on `PATH`. The installed extension is `shaft-lang.shaft`.
 - `--vim` copies only `ftdetect/shaft.vim`, `syntax/shaft.vim`, and `plugin/shaft_lsp.vim` into `~/.vim` (`~/vimfiles` on Windows).
-- `--neovim` copies only `lua/shaft/init.lua` and `plugin/shaft.lua` into `~/.config/nvim` by default, or `$XDG_CONFIG_HOME/nvim`. Its plugin enables the built-in LSP client for Shaft buffers.
+- `--neovim` copies `lua/shaft/init.lua`, `plugin/shaft.lua`, and `syntax/shaft.vim` into `~/.config/nvim` by default, or `$XDG_CONFIG_HOME/nvim`. Its plugin enables the complete static Shaft syntax runtime and the built-in LSP client for Shaft buffers.
 
 The VS Code extension can use `shaft.languageServer.serverPath` to select an explicit `shaftls` executable. When that setting is empty, it uses `shaftls` from `PATH`. Vim honors `g:shaftls_cmd`; Neovim accepts `require('shaft').setup({ cmd = '/path/to/shaftls' })` if an override is needed.
 

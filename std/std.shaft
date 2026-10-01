@@ -1999,7 +1999,7 @@ cdef __shaft_entry(i32 argc, **i8 argv) -> i32
         memcpy(args[argumentIndex].data, text, length);
         argumentIndex = argumentIndex + 1;
     }
-    __main(args, argc);
+    __main(args);
     __sys_restore_terminal();
     return 0;
 }
@@ -2454,6 +2454,350 @@ namespace Network
             socket.descriptor = -1;
         }
         tunnel closed -> i64 result;
+    }
+
+}
+
+struct sockaddr_in
+{
+    mut u16 family;
+    mut u16 port;
+    mut u32 address;
+    mut u8[8] zero;
+}
+
+namespace DNS
+{
+    def read_u16(*u8 data, u64 offset) -> u16 result
+    {
+        tunnel
+            ((0 + data[offset]) << 8) |
+            (0 + data[offset + 1])
+        -> u16 result;
+    }
+
+    def read_u32(*u8 data, u64 offset) -> u32 result
+    {
+        tunnel
+            ((0 + data[offset]) << 24) |
+            ((0 + data[offset + 1]) << 16) |
+            ((0 + data[offset + 2]) << 8) |
+            (0 + data[offset + 3])
+        -> u32 result;
+    }
+
+    def write_u16(*u8 data, u64 offset, u16 value)
+    {
+        data[offset] = (value >> 8);
+        data[offset + 1] = value;
+    }
+
+    def encode_name(*u8 packet, u64 offset, str hostname) -> u64 result
+    {
+        mut u64 packet_offset = offset;
+        mut u64 label_start = 0;
+        mut u64 i = 0;
+
+        while (i <= hostname.length)
+        {
+            if (i == hostname.length || hostname.data[i] == '.')
+            {
+                mut u64 label_length = i - label_start;
+
+                packet[packet_offset] = label_length;
+                packet_offset = packet_offset + 1;
+
+                mut u64 j = 0;
+                while (j < label_length)
+                {
+                    packet[packet_offset] =
+                        hostname.data[label_start + j];
+
+                    packet_offset = packet_offset + 1;
+                    j = j + 1;
+                }
+
+                label_start = i + 1;
+            }
+
+            i = i + 1;
+        }
+
+        packet[packet_offset] = 0;
+        packet_offset = packet_offset + 1;
+
+        tunnel packet_offset -> u64 result;
+    }
+
+    def skip_name(*u8 packet, u64 offset, u64 packet_length) -> u64 result
+    {
+        mut u8 tunnel_type = 0;
+        mut u64 current = offset;
+
+        while (current < packet_length)
+        {
+            mut u8 length = packet[current];
+
+            if ((length & 0xC0) == 0xC0)
+            {
+                break;
+            }
+
+            if (length == 0)
+            {
+                tunnel_type = 1;
+                break;
+            }
+
+            current = current + 1 + length;
+        }
+
+        match (tunnel_type)
+        {
+            case 0
+            {
+                tunnel current + 2 -> u64 result;
+            } 
+            case 1
+            {
+                tunnel current + 1 -> u64 result;
+            }
+            default
+            {
+                tunnel packet_length -> u64 result;
+            }
+        }
+    }
+
+}
+
+class DNS
+{
+    mut u16 next_transaction_id = 1;
+    mut u32 dns_server = 0x08080808;
+    
+    def resolve(&mut self, str hostname) -> u32 result, -> bool error
+    {
+        mut u32 address = 0;
+        mut u8 tunnel_type = 0;
+        mut bool error = false;
+        reserve mut Network::Socket socket = Network::udp();
+
+        if (socket.descriptor < 0)
+        {
+            error = true;
+        }
+
+        mut u8[512] packet;
+
+        mut u16 transaction_id = self.next_transaction_id;
+        self.next_transaction_id = self.next_transaction_id + 1;
+
+        mut u64 offset = 0;
+
+        packet[offset] = (transaction_id >> 8);
+        packet[offset + 1] = transaction_id;
+        offset = offset + 2;
+
+        packet[offset] = 0x01;
+        packet[offset + 1] = 0x00;
+        offset = offset + 2;
+
+        packet[offset] = 0;
+        packet[offset + 1] = 1;
+        offset = offset + 2;
+
+        packet[offset] = 0;
+        packet[offset + 1] = 0;
+        offset = offset + 2;
+
+        packet[offset] = 0;
+        packet[offset + 1] = 0;
+        offset = offset + 2;
+
+        packet[offset] = 0;
+        packet[offset + 1] = 0;
+        offset = offset + 2;
+
+        offset = DNS::encode_name(&packet[0], offset, hostname);
+
+        packet[offset] = 0;
+        packet[offset + 1] = 1;
+        offset = offset + 2;
+
+        packet[offset] = 0;
+        packet[offset + 1] = 1;
+        offset = offset + 2;
+
+        reserve mut sockaddr_in destination;
+
+        destination.family = 2;
+        destination.port = 0x3500;
+        destination.address = self.dns_server;
+
+        mut i32 sent = __sys_sendto(
+            socket.descriptor,
+            &packet[0],
+            offset,
+            0,
+            &destination,
+            sizeof(sockaddr_in)
+        );
+
+        if (sent < 0)
+        {
+            Network::close(&socket);
+            error = true;
+        }
+
+        mut u8[512] response;
+
+        mut sockaddr_in source;
+        mut u32 source_length = sizeof(sockaddr_in);
+
+        if (!error)
+        {
+            mut i64 received = __sys_recvfrom(
+                socket.descriptor,
+                &response[0],
+                512,
+                0,
+                &source,
+                &source_length
+            );
+
+            Network::close(&socket);
+
+            if (received < 12)
+            {
+                error = true;
+            }
+        
+
+            reserve mut u16 response_id =
+                DNS::read_u16(&response[0], 0);
+
+            if (response_id != transaction_id)
+            {
+                error = true;
+            }
+
+            reserve mut u16 flags =
+                DNS::read_u16(&response[0], 2);
+
+            if ((flags & 0x8000) == 0)
+            {
+                error = true;
+            }
+
+            if ((flags & 0x000F) != 0)
+            {
+                error = true;
+            }
+
+
+            reserve mut u16 question_count =
+                DNS::read_u16(&response[0], 4);
+
+            reserve mut u16 answer_count =
+                DNS::read_u16(&response[0], 6);
+
+            if (question_count != 1)
+            {
+                error = true;
+            }
+
+
+            mut u64 response_offset = 12;
+
+            response_offset = DNS::skip_name(
+                &response[0],
+                response_offset,
+                received
+            );
+
+            response_offset = response_offset + 2;
+
+            response_offset = response_offset + 2;
+
+            mut u16 answer = 0;
+
+            while (answer < answer_count)
+            {
+                if (response_offset >= received)
+                {
+                    error = true;
+                }
+
+                response_offset = DNS::skip_name(
+                    &response[0],
+                    response_offset,
+                    received
+                );
+
+                if (response_offset + 10 > received)
+                {
+                    error = true;
+                }
+
+                reserve mut u16 record_type =
+                    DNS::read_u16(&response[0], response_offset);
+
+                response_offset = response_offset + 2;
+
+                reserve mut u16 record_class =
+                    DNS::read_u16(&response[0], response_offset);
+
+                response_offset = response_offset + 2;
+
+                reserve mut u32 ttl =
+                    DNS::read_u32(&response[0], response_offset);
+
+                response_offset = response_offset + 4;
+
+                reserve mut u16 data_length =
+                    DNS::read_u16(&response[0], response_offset);
+
+                response_offset = response_offset + 2;
+
+
+                if (response_offset + data_length > received)
+                {
+                    error = true;
+                }
+
+                if (record_type == 1 &&
+                    record_class == 1 &&
+                    data_length == 4)
+                {
+                    address =
+                        ((0 + response[response_offset]) << 24) |
+                        ((0 + response[response_offset + 1]) << 16) |
+                        ((0 + response[response_offset + 2]) << 8) |
+                        (0 + response[response_offset + 3]);
+
+                    tunnel_type = 1;
+                }
+
+                response_offset =
+                    response_offset + data_length;
+
+                answer = answer + 1;
+            }
+        }
+
+        match (tunnel_type)
+        {
+            case 1
+            {
+                tunnel address -> u32 result;
+            }
+            default
+            {
+                tunnel 0 -> u32 result;
+            }
+        }
+        tunnel error -> bool error;
     }
 }
 

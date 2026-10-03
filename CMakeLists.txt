@@ -52,6 +52,7 @@ add_executable(shaftc
     src/checker.cpp
     src/codegen.cpp
     src/error.cpp
+    src/toolchain.cpp
     src/thirdparty/llvm.cpp
 )
 
@@ -75,6 +76,8 @@ target_link_libraries(shaftc PRIVATE
     lldCOFF
     lldMachO
     lldCommon
+    lldMinGW
+    lldWasm
     LLVMCore
     LLVMAnalysis
     LLVMBitReader

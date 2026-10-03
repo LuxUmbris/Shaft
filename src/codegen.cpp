@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 
@@ -28,7 +29,7 @@ namespace Codegen
         ctx.builder = LLVMCreateBuilderInContext(ctx.llvmCtx);
         ctx.currentFunction = nullptr;
         ctx.isCFunction = false;
-        ctx.push_scope(); // root scope holds source-language globals
+        ctx.push_scope();
         return ctx;
     }
 
@@ -43,8 +44,8 @@ namespace Codegen
                             RuntimeArrayIndexCapture *runtimeIndex = nullptr);
     static CGType lvalue_type(Context &ctx, const Parser::ASTNode &node);
 
-    static LLVMValueRef cast_value(LLVMBuilderRef builder, LLVMValueRef value, LLVMTypeRef target,
-                                   bool isSigned, const char *name)
+    static LLVMValueRef cast_value(LLVMBuilderRef builder, LLVMValueRef value, LLVMTypeRef target, bool isSigned,
+                                   const char *name)
     {
         if (LLVMTypeOf(value) == target)
             return value;
@@ -71,15 +72,14 @@ namespace Codegen
 
         char *sourceText = LLVMPrintTypeToString(LLVMTypeOf(value));
         char *targetText = LLVMPrintTypeToString(target);
-        const std::string message = "cannot convert values between these LLVM types: " +
-                                    std::string(sourceText) + " -> " + std::string(targetText);
+        const std::string message = "cannot convert values between these LLVM types: " + std::string(sourceText) +
+                                    " -> " + std::string(targetText);
         LLVMDisposeMessage(sourceText);
         LLVMDisposeMessage(targetText);
         throw std::runtime_error(message);
     }
 
-    static LLVMValueRef materialize_value(Context &ctx, LLVMValueRef value, const CGType &target,
-                                            const char *name)
+    static LLVMValueRef materialize_value(Context &ctx, LLVMValueRef value, const CGType &target, const char *name)
     {
         if (!target.isOptional || LLVMTypeOf(value) == target.llvmType)
             return cast_value(ctx.builder, value, target.llvmType, target.isSigned, name);
@@ -88,17 +88,22 @@ namespace Codegen
         LLVMValueRef aggregate = LLVMConstNull(target.llvmType);
         LLVMValueRef present = LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 1, 0);
         aggregate = LLVMBuildInsertValue(ctx.builder, aggregate, present, 0, "optionalpresent");
-        LLVMValueRef payload = cast_value(ctx.builder, value, target.innerType->llvmType,
-                                          target.innerType->isSigned, name);
+        LLVMValueRef payload =
+            cast_value(ctx.builder, value, target.innerType->llvmType, target.innerType->isSigned, name);
         return LLVMBuildInsertValue(ctx.builder, aggregate, payload, 1, "optionalpayload");
     }
 
     static std::string decode_string_literal(std::string_view source);
 
-    static LLVMValueRef generate_value_for_target(Context &ctx, const Parser::ASTNode &node,
-                                                   const CGType &target)
+    static std::string std_base_name(const std::string &name)
     {
-        if ((target.structName == "str" || target.structName == "cstr") &&
+        static const std::string prefix = "std::";
+        return name.compare(0, prefix.size(), prefix) == 0 ? name.substr(prefix.size()) : name;
+    }
+
+    static LLVMValueRef generate_value_for_target(Context &ctx, const Parser::ASTNode &node, const CGType &target)
+    {
+        if ((std_base_name(target.structName) == "str" || target.structName == "cstr") &&
             node.type == Parser::NodeType::StringLiteral)
         {
             LLVMValueRef value = LLVMConstNull(target.llvmType);
@@ -124,9 +129,9 @@ namespace Codegen
                 LLVMValueRef field = generate_value_for_target(ctx, node.children[index], fieldType);
                 if (!field)
                     throw std::runtime_error("brace initializer field did not produce a value");
-                aggregate = LLVMBuildInsertValue(
-                    ctx.builder, aggregate, materialize_value(ctx, field, fieldType, "structinitcast"),
-                    static_cast<unsigned>(index), "structinitvalue");
+                aggregate = LLVMBuildInsertValue(ctx.builder, aggregate,
+                                                 materialize_value(ctx, field, fieldType, "structinitcast"),
+                                                 static_cast<unsigned>(index), "structinitvalue");
             }
             return aggregate;
         }
@@ -139,17 +144,14 @@ namespace Codegen
         return generate_node(ctx, node);
     }
 
-    static LLVMValueRef generate_call_argument(Context &ctx, const Parser::ASTNode &node,
-                                               const CGType &parameterType)
+    static LLVMValueRef generate_call_argument(Context &ctx, const Parser::ASTNode &node, const CGType &parameterType)
     {
         const auto dereference_argument = [&](const CGType &referenceType, LLVMValueRef reference)
         {
             if (!referenceType.pointeeType)
                 throw std::runtime_error("reference argument has no pointee type");
-            LLVMValueRef value = LLVMBuildLoad2(ctx.builder, referenceType.pointeeType, reference,
-                                                "callargderef");
-            return cast_value(ctx.builder, value, parameterType.llvmType, parameterType.isSigned,
-                              "callargcast");
+            LLVMValueRef value = LLVMBuildLoad2(ctx.builder, referenceType.pointeeType, reference, "callargderef");
+            return cast_value(ctx.builder, value, parameterType.llvmType, parameterType.isSigned, "callargcast");
         };
 
         if (!parameterType.isReference)
@@ -188,17 +190,19 @@ namespace Codegen
         LLVMValueRef argument = generate_node(ctx, node);
         if (!argument)
             throw std::runtime_error("call argument did not produce a value");
-        return cast_value(ctx.builder, argument, parameterType.llvmType, parameterType.isSigned,
-                          "callargcast");
+        return cast_value(ctx.builder, argument, parameterType.llvmType, parameterType.isSigned, "callargcast");
     }
 
     static std::string decode_string_literal(std::string_view source)
     {
         const auto hex_digit = [](char character) -> unsigned
         {
-            if (character >= '0' && character <= '9') return character - '0';
-            if (character >= 'a' && character <= 'f') return character - 'a' + 10;
-            if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+            if (character >= '0' && character <= '9')
+                return character - '0';
+            if (character >= 'a' && character <= 'f')
+                return character - 'a' + 10;
+            if (character >= 'A' && character <= 'F')
+                return character - 'A' + 10;
             throw std::runtime_error("invalid hexadecimal string escape");
         };
         const auto append_utf8 = [](std::string &output, unsigned codepoint)
@@ -228,13 +232,27 @@ namespace Codegen
             const char escaped = source[++index];
             switch (escaped)
             {
-            case 'n': result += '\n'; break;
-            case 'r': result += '\r'; break;
-            case 't': result += '\t'; break;
-            case '0': result += '\0'; break;
-            case '\\': result += '\\'; break;
-            case '"': result += '"'; break;
-            case '\'': result += '\''; break;
+            case 'n':
+                result += '\n';
+                break;
+            case 'r':
+                result += '\r';
+                break;
+            case 't':
+                result += '\t';
+                break;
+            case '0':
+                result += '\0';
+                break;
+            case '\\':
+                result += '\\';
+                break;
+            case '"':
+                result += '"';
+                break;
+            case '\'':
+                result += '\'';
+                break;
             case 'x':
                 if (index + 2 >= source.size())
                     throw std::runtime_error("incomplete hexadecimal string escape");
@@ -254,7 +272,9 @@ namespace Codegen
                 index += 4;
                 break;
             }
-            default: result += escaped; break;
+            default:
+                result += escaped;
+                break;
             }
         }
         return result;
@@ -262,17 +282,28 @@ namespace Codegen
 
     static std::string custom_type_name(const Parser::ASTNode &node)
     {
-        return node.inferredTypeName.empty()
-                   ? std::string(std::get<std::string_view>(node.value))
-                   : node.inferredTypeName;
+        return node.inferredTypeName.empty() ? std::string(std::get<std::string_view>(node.value))
+                                             : node.inferredTypeName;
+    }
+
+    static bool is_vector_template_name(const std::string &name)
+    {
+        static const std::string suffix = "::Vector";
+        return name == "Vector" ||
+               (name.size() > suffix.size() && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0);
+    }
+
+    static bool is_vector_specialization(const std::string &structName)
+    {
+        const size_t dot = structName.find('.');
+        return dot != std::string::npos && is_vector_template_name(structName.substr(0, dot));
     }
 
     static std::string generic_specialization_component(const CGType &type)
     {
         const LLVMTypeKind kind = LLVMGetTypeKind(type.llvmType);
         if (kind == LLVMIntegerTypeKind)
-            return std::string(type.isSigned ? "i" : "u") +
-                   std::to_string(LLVMGetIntTypeWidth(type.llvmType));
+            return std::string(type.isSigned ? "i" : "u") + std::to_string(LLVMGetIntTypeWidth(type.llvmType));
         if (kind == LLVMFloatTypeKind)
             return "f32";
         if (kind == LLVMDoubleTypeKind)
@@ -300,8 +331,8 @@ namespace Codegen
         if (node.type == Parser::NodeType::Identifier)
             return std::string(std::get<std::string_view>(node.value));
         if (node.type == Parser::NodeType::ScopeAccessExpr && !node.children.empty())
-            return scope_access_name(node.children.front()) + "::" +
-                   std::string(std::get<std::string_view>(node.value));
+            return scope_access_name(node.children.front()) +
+                   "::" + std::string(std::get<std::string_view>(node.value));
         throw std::runtime_error("malformed scope access");
     }
 
@@ -309,7 +340,7 @@ namespace Codegen
     {
         return node.type == Parser::NodeType::ArrayType && !node.children.empty() &&
                node.children.front().type == Parser::NodeType::CustomType &&
-               custom_type_name(node.children.front()) == "String";
+               std_base_name(custom_type_name(node.children.front())) == "String";
     }
 
     static void validate_normal_main_signature(const Parser::ASTNode &node, const std::string &name)
@@ -325,8 +356,7 @@ namespace Codegen
             if (child.type == Parser::NodeType::Param)
             {
                 ++parameters;
-                if (parameters != 1 || child.children.empty() ||
-                    !is_string_array_type(child.children.front()))
+                if (parameters != 1 || child.children.empty() || !is_string_array_type(child.children.front()))
                     throw std::runtime_error("main must take no arguments or String[] args");
             }
         }
@@ -367,9 +397,12 @@ namespace Codegen
             const int64_t rhs = evaluate_enum_constant(node.children[1], members);
             switch (std::get<Lexer::Operator>(node.value))
             {
-            case Lexer::Operator::PLUS: return lhs + rhs;
-            case Lexer::Operator::MINUS: return lhs - rhs;
-            case Lexer::Operator::MULTIPLY: return lhs * rhs;
+            case Lexer::Operator::PLUS:
+                return lhs + rhs;
+            case Lexer::Operator::MINUS:
+                return lhs - rhs;
+            case Lexer::Operator::MULTIPLY:
+                return lhs * rhs;
             case Lexer::Operator::DIVIDE:
                 if (rhs == 0)
                     throw std::runtime_error("enum constant expression divides by zero");
@@ -378,12 +411,18 @@ namespace Codegen
                 if (rhs == 0)
                     throw std::runtime_error("enum constant expression divides by zero");
                 return lhs % rhs;
-            case Lexer::Operator::LEFT_SHIFT: return lhs << rhs;
-            case Lexer::Operator::RIGHT_SHIFT: return lhs >> rhs;
-            case Lexer::Operator::PIPE: return lhs | rhs;
-            case Lexer::Operator::AMPERSAND: return lhs & rhs;
-            case Lexer::Operator::CARET: return lhs ^ rhs;
-            default: break;
+            case Lexer::Operator::LEFT_SHIFT:
+                return lhs << rhs;
+            case Lexer::Operator::RIGHT_SHIFT:
+                return lhs >> rhs;
+            case Lexer::Operator::PIPE:
+                return lhs | rhs;
+            case Lexer::Operator::AMPERSAND:
+                return lhs & rhs;
+            case Lexer::Operator::CARET:
+                return lhs ^ rhs;
+            default:
+                break;
             }
         }
         throw std::runtime_error("enum member value must be an integral constant expression");
@@ -447,7 +486,6 @@ namespace Codegen
         case Parser::NodeType::ReferenceType:
         {
             CGType pointee = resolve_type(ctx, node.children.front());
-            // in LLVM 15+, pointers are opaque.
             cgType.llvmType = LLVMPointerType(LLVMInt8TypeInContext(ctx.llvmCtx), 0);
             cgType.pointeeType = pointee.llvmType;
             cgType.innerType = std::make_shared<CGType>(pointee);
@@ -469,9 +507,6 @@ namespace Codegen
             }
             else
             {
-                // Runtime-sized arrays are passed as a pointer to their first
-                // element. The runtime size expression stays in the AST for
-                // entrypoint lowering, where argc owns the actual count.
                 cgType.llvmType = LLVMPointerType(LLVMInt8TypeInContext(ctx.llvmCtx), 0);
                 cgType.pointeeType = innerType.llvmType;
                 cgType.innerType = std::make_shared<CGType>(innerType);
@@ -490,7 +525,7 @@ namespace Codegen
                 name = ctx.currentClassName;
             if (const auto binding = ctx.genericBindings.find(name); binding != ctx.genericBindings.end())
                 return binding->second;
-            if (node.children.size() > 0 && structTypes.count(name) && name != "Vector" &&
+            if (node.children.size() > 0 && structTypes.count(name) && !is_vector_template_name(name) &&
                 !structTypes.at(name).genericParameters.empty())
             {
                 const StructInfo &templateInfo = structTypes.at(name);
@@ -527,11 +562,11 @@ namespace Codegen
                 cgType.requiredAlignment = structTypes.at(specializationName).requestedAlignment;
                 cgType.structName = specializationName;
             }
-            else if (name == "Vector" && node.children.size() == 1 && structTypes.count(name))
+            else if (is_vector_template_name(name) && node.children.size() == 1 && structTypes.count(name))
             {
                 const CGType elementType = resolve_type(ctx, node.children.front());
                 const std::string elementName = generic_specialization_component(elementType);
-                const std::string specializationName = "Vector." + elementName;
+                const std::string specializationName = name + "." + elementName;
                 if (!structTypes.count(specializationName))
                 {
                     StructInfo specialization = structTypes.at(name);
@@ -597,10 +632,8 @@ namespace Codegen
         {
             if (child.type == Parser::NodeType::Param)
                 paramTypes.push_back(resolve_type(ctx, child.children.front()).llvmType);
-            else if (child.type == Parser::NodeType::PrimitiveType ||
-                     child.type == Parser::NodeType::PointerType ||
-                     child.type == Parser::NodeType::ReferenceType ||
-                     child.type == Parser::NodeType::CustomType)
+            else if (child.type == Parser::NodeType::PrimitiveType || child.type == Parser::NodeType::PointerType ||
+                     child.type == Parser::NodeType::ReferenceType || child.type == Parser::NodeType::CustomType)
                 returnType = resolve_type(ctx, child).llvmType;
         }
 
@@ -620,8 +653,8 @@ namespace Codegen
         if (node.type == Parser::NodeType::NamespaceDecl)
         {
             const std::string previous = ctx.currentNamespaceName;
-            ctx.currentNamespaceName = qualified_declaration_name(
-                ctx, std::string(std::get<std::string_view>(node.value)));
+            ctx.currentNamespaceName =
+                qualified_declaration_name(ctx, std::string(std::get<std::string_view>(node.value)));
             for (const auto &child : node.children)
                 predeclare_struct_types(ctx, child);
             ctx.currentNamespaceName = previous;
@@ -631,8 +664,8 @@ namespace Codegen
         {
             if (node.children.empty() || node.children.front().type != Parser::NodeType::Identifier)
                 throw std::runtime_error("struct declaration is missing its name");
-            const std::string name = qualified_declaration_name(
-                ctx, std::string(std::get<std::string_view>(node.children.front().value)));
+            const std::string name =
+                qualified_declaration_name(ctx, std::string(std::get<std::string_view>(node.children.front().value)));
             if (!structTypes.count(name))
             {
                 StructInfo info;
@@ -654,8 +687,7 @@ namespace Codegen
     }
 
     // Helper to resolve memory addresses for assignments and mutations
-    LLVMValueRef get_lvalue(Context &ctx, const Parser::ASTNode &node,
-                        RuntimeArrayIndexCapture *runtimeIndex)
+    LLVMValueRef get_lvalue(Context &ctx, const Parser::ASTNode &node, RuntimeArrayIndexCapture *runtimeIndex)
     {
         if (node.type == Parser::NodeType::Identifier)
         {
@@ -663,12 +695,10 @@ namespace Codegen
             VarInfo *var = ctx.find_var(name);
             if (!var)
                 throw std::runtime_error("undeclared identifier '" + name + "'");
-            if (var->type.isOptional &&
-                std::find(ctx.validPayloadAddresses.begin(), ctx.validPayloadAddresses.end(), var->address) !=
-                    ctx.validPayloadAddresses.end())
+            if (var->type.isOptional && std::find(ctx.validPayloadAddresses.begin(), ctx.validPayloadAddresses.end(),
+                                                  var->address) != ctx.validPayloadAddresses.end())
             {
-                return LLVMBuildStructGEP2(ctx.builder, var->type.llvmType, var->address, 1,
-                                       "optionalpayloadaddr");
+                return LLVMBuildStructGEP2(ctx.builder, var->type.llvmType, var->address, 1, "optionalpayloadaddr");
             }
             return var->address;
         }
@@ -698,8 +728,7 @@ namespace Codegen
                 {
                     if (info.fieldNames[i] == fieldName)
                     {
-                        return LLVMBuildStructGEP2(ctx.builder, info.llvmType, baseAddr, i,
-                                                   "memberptr");
+                        return LLVMBuildStructGEP2(ctx.builder, info.llvmType, baseAddr, i, "memberptr");
                     }
                 }
             }
@@ -716,35 +745,33 @@ namespace Codegen
                 LLVMValueRef receiver = get_lvalue(ctx, node.children[0]);
                 LLVMValueRef zero = LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0);
                 LLVMValueRef indices[] = {zero, index};
-                return LLVMBuildGEP2(ctx.builder, receiverType.llvmType, receiver, indices, 2,
-                                    "static_elementptr");
+                return LLVMBuildGEP2(ctx.builder, receiverType.llvmType, receiver, indices, 2, "static_elementptr");
             }
 
-        if (receiverType.isArray && receiverType.pointeeType)
-        {
-            LLVMValueRef receiver = get_lvalue(ctx, node.children[0], runtimeIndex);
-            LLVMValueRef base = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "arraybase");
-            if (runtimeIndex && !runtimeIndex->node && !receiverType.runtimeArrayLengthName.empty())
+            if (receiverType.isArray && receiverType.pointeeType)
             {
-                runtimeIndex->node = &node.children[1];
-                runtimeIndex->value = index;
+                LLVMValueRef receiver = get_lvalue(ctx, node.children[0], runtimeIndex);
+                LLVMValueRef base = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "arraybase");
+                if (runtimeIndex && !runtimeIndex->node && !receiverType.runtimeArrayLengthName.empty())
+                {
+                    runtimeIndex->node = &node.children[1];
+                    runtimeIndex->value = index;
+                }
+                return LLVMBuildGEP2(ctx.builder, receiverType.pointeeType, base, &index, 1, "elementptr");
             }
-            return LLVMBuildGEP2(ctx.builder, receiverType.pointeeType, base, &index, 1, "elementptr");
-        }
 
-        if (receiverType.isPointerLike && receiverType.pointeeType)
-        {
-            LLVMValueRef receiver = get_lvalue(ctx, node.children[0]);
-            LLVMValueRef base = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "pointerbase");
-            return LLVMBuildGEP2(ctx.builder, receiverType.pointeeType, base, &index, 1, "pointerelementptr");
-        }
+            if (receiverType.isPointerLike && receiverType.pointeeType)
+            {
+                LLVMValueRef receiver = get_lvalue(ctx, node.children[0]);
+                LLVMValueRef base = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "pointerbase");
+                return LLVMBuildGEP2(ctx.builder, receiverType.pointeeType, base, &index, 1, "pointerelementptr");
+            }
 
-        const auto classInfo = structTypes.find(receiverType.structName);
-        if (classInfo == structTypes.end() || classInfo->second.indexedField.empty())
-            throw std::runtime_error("indexing requires a runtime-sized array or a class with an index field");
+            const auto classInfo = structTypes.find(receiverType.structName);
+            if (classInfo == structTypes.end() || classInfo->second.indexedField.empty())
+                throw std::runtime_error("indexing requires a runtime-sized array or a class with an index field");
 
-            const auto field = std::find(classInfo->second.fieldNames.begin(),
-                                         classInfo->second.fieldNames.end(),
+            const auto field = std::find(classInfo->second.fieldNames.begin(), classInfo->second.fieldNames.end(),
                                          classInfo->second.indexedField);
             if (field == classInfo->second.fieldNames.end())
                 throw std::runtime_error("class index field is missing from its layout");
@@ -755,8 +782,8 @@ namespace Codegen
                 throw std::runtime_error("class index field must lower to a pointer");
 
             LLVMValueRef receiver = get_lvalue(ctx, node.children[0]);
-            LLVMValueRef fieldAddress = LLVMBuildStructGEP2(ctx.builder, classInfo->second.llvmType,
-                                                            receiver, fieldIndex, "indexfield");
+            LLVMValueRef fieldAddress =
+                LLVMBuildStructGEP2(ctx.builder, classInfo->second.llvmType, receiver, fieldIndex, "indexfield");
             LLVMValueRef base = LLVMBuildLoad2(ctx.builder, backingType.llvmType, fieldAddress, "indexbase");
             return LLVMBuildGEP2(ctx.builder, backingType.pointeeType, base, &index, 1, "elementptr");
         }
@@ -821,7 +848,7 @@ namespace Codegen
         {
             const CGType array = lvalue_type(ctx, node.children[0]);
             const auto vector = structTypes.find(array.structName);
-            if (array.structName.rfind("Vector.", 0) == 0 && vector != structTypes.end() &&
+            if (is_vector_specialization(array.structName) && vector != structTypes.end() &&
                 !vector->second.fieldTypes.empty() && vector->second.fieldTypes.front().innerType)
             {
                 return *vector->second.fieldTypes.front().innerType;
@@ -864,13 +891,12 @@ namespace Codegen
             const auto classInfo = structTypes.find(receiver.structName);
             if (classInfo != structTypes.end() && !classInfo->second.indexedField.empty())
             {
-                const auto field = std::find(classInfo->second.fieldNames.begin(),
-                                             classInfo->second.fieldNames.end(),
+                const auto field = std::find(classInfo->second.fieldNames.begin(), classInfo->second.fieldNames.end(),
                                              classInfo->second.indexedField);
                 if (field != classInfo->second.fieldNames.end())
                 {
-                    const CGType &backing = classInfo->second.fieldTypes[
-                        static_cast<size_t>(field - classInfo->second.fieldNames.begin())];
+                    const CGType &backing =
+                        classInfo->second.fieldTypes[static_cast<size_t>(field - classInfo->second.fieldNames.begin())];
                     CGType element = backing;
                     element.llvmType = backing.pointeeType;
                     element.pointeeType = nullptr;
@@ -879,8 +905,7 @@ namespace Codegen
                 }
             }
         }
-        if (node.type == Parser::NodeType::BinaryExpr && node.children.size() == 2 &&
-            node.value.index() == 5)
+        if (node.type == Parser::NodeType::BinaryExpr && node.children.size() == 2 && node.value.index() == 5)
         {
             const Lexer::Operator op = std::get<Lexer::Operator>(node.value);
             const CGType pointer = lvalue_type(ctx, node.children[0]);
@@ -927,8 +952,8 @@ namespace Codegen
         }
     }
 
-    static LLVMValueRef generate_binary(Context &ctx, Lexer::Operator op, LLVMValueRef lhs,
-                                        LLVMValueRef rhs, bool isSigned)
+    static LLVMValueRef generate_binary(Context &ctx, Lexer::Operator op, LLVMValueRef lhs, LLVMValueRef rhs,
+                                        bool isSigned)
     {
         if (!lhs || !rhs)
             throw std::runtime_error("missing operand in binary expression");
@@ -971,13 +996,20 @@ namespace Codegen
         {
             switch (op)
             {
-            case Lexer::Operator::EQUAL: return LLVMBuildICmp(ctx.builder, LLVMIntEQ, lhs, rhs, "eqtmp");
-            case Lexer::Operator::NOT_EQUAL: return LLVMBuildICmp(ctx.builder, LLVMIntNE, lhs, rhs, "netmp");
-            case Lexer::Operator::LESS_THAN: return LLVMBuildICmp(ctx.builder, LLVMIntULT, lhs, rhs, "lttmp");
-            case Lexer::Operator::LESS_EQUAL: return LLVMBuildICmp(ctx.builder, LLVMIntULE, lhs, rhs, "letmp");
-            case Lexer::Operator::GREATER_THAN: return LLVMBuildICmp(ctx.builder, LLVMIntUGT, lhs, rhs, "gttmp");
-            case Lexer::Operator::GREATER_EQUAL: return LLVMBuildICmp(ctx.builder, LLVMIntUGE, lhs, rhs, "getmp");
-            default: throw std::runtime_error("unsupported pointer operator");
+            case Lexer::Operator::EQUAL:
+                return LLVMBuildICmp(ctx.builder, LLVMIntEQ, lhs, rhs, "eqtmp");
+            case Lexer::Operator::NOT_EQUAL:
+                return LLVMBuildICmp(ctx.builder, LLVMIntNE, lhs, rhs, "netmp");
+            case Lexer::Operator::LESS_THAN:
+                return LLVMBuildICmp(ctx.builder, LLVMIntULT, lhs, rhs, "lttmp");
+            case Lexer::Operator::LESS_EQUAL:
+                return LLVMBuildICmp(ctx.builder, LLVMIntULE, lhs, rhs, "letmp");
+            case Lexer::Operator::GREATER_THAN:
+                return LLVMBuildICmp(ctx.builder, LLVMIntUGT, lhs, rhs, "gttmp");
+            case Lexer::Operator::GREATER_EQUAL:
+                return LLVMBuildICmp(ctx.builder, LLVMIntUGE, lhs, rhs, "getmp");
+            default:
+                throw std::runtime_error("unsupported pointer operator");
             }
         }
 
@@ -1016,17 +1048,13 @@ namespace Codegen
         case Lexer::Operator::NOT_EQUAL:
             return LLVMBuildICmp(ctx.builder, LLVMIntNE, lhs, rhs, "netmp");
         case Lexer::Operator::LESS_THAN:
-            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSLT : LLVMIntULT, lhs, rhs,
-                                 "lttmp");
+            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSLT : LLVMIntULT, lhs, rhs, "lttmp");
         case Lexer::Operator::LESS_EQUAL:
-            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSLE : LLVMIntULE, lhs, rhs,
-                                 "letmp");
+            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSLE : LLVMIntULE, lhs, rhs, "letmp");
         case Lexer::Operator::GREATER_THAN:
-            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSGT : LLVMIntUGT, lhs, rhs,
-                                 "gttmp");
+            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSGT : LLVMIntUGT, lhs, rhs, "gttmp");
         case Lexer::Operator::GREATER_EQUAL:
-            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSGE : LLVMIntUGE, lhs, rhs,
-                                 "getmp");
+            return LLVMBuildICmp(ctx.builder, isSigned && !isPointer ? LLVMIntSGE : LLVMIntUGE, lhs, rhs, "getmp");
         default:
             throw std::runtime_error("unsupported integer operator");
         }
@@ -1034,11 +1062,11 @@ namespace Codegen
 
     static bool is_string_aggregate(const CGType &type)
     {
-        return type.structName == "str" || type.structName == "String";
+        return std_base_name(type.structName) == "str" || std_base_name(type.structName) == "String";
     }
 
     static LLVMValueRef generate_string_equality(Context &ctx, LLVMValueRef lhsData, LLVMValueRef lhsLength,
-                                                  LLVMValueRef rhsData, LLVMValueRef rhsLength, bool negate)
+                                                 LLVMValueRef rhsData, LLVMValueRef rhsLength, bool negate)
     {
         LLVMTypeRef i1 = LLVMInt1TypeInContext(ctx.llvmCtx);
         LLVMTypeRef i8 = LLVMInt8TypeInContext(ctx.llvmCtx);
@@ -1118,8 +1146,7 @@ namespace Codegen
         {
             if (!type.innerType || LLVMGetTypeKind(type.llvmType) != LLVMArrayTypeKind)
                 return 0;
-            return static_cast<uint64_t>(LLVMGetArrayLength(type.llvmType)) *
-                   cleanup_leaf_count(ctx, *type.innerType);
+            return static_cast<uint64_t>(LLVMGetArrayLength(type.llvmType)) * cleanup_leaf_count(ctx, *type.innerType);
         }
         const auto definition = structTypes.find(type.structName);
         if (definition == structTypes.end())
@@ -1147,8 +1174,8 @@ namespace Codegen
         }
         if (type.isOptional && type.innerType)
         {
-            LLVMValueRef payload = LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 1,
-                                                       "runtime_cleanup_optional_payload");
+            LLVMValueRef payload =
+                LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 1, "runtime_cleanup_optional_payload");
             collect_cleanup_leaves(ctx, payload, *type.innerType, leaves);
             return;
         }
@@ -1161,8 +1188,8 @@ namespace Codegen
                     LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), 0, 0),
                     LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), index, 0),
                 };
-                LLVMValueRef element = LLVMBuildGEP2(ctx.builder, type.llvmType, address, indices, 2,
-                                                      "runtime_cleanup_element");
+                LLVMValueRef element =
+                    LLVMBuildGEP2(ctx.builder, type.llvmType, address, indices, 2, "runtime_cleanup_element");
                 collect_cleanup_leaves(ctx, element, *type.innerType, leaves);
             }
             return;
@@ -1173,7 +1200,7 @@ namespace Codegen
         for (size_t index = 0; index < definition->second.fieldTypes.size(); ++index)
         {
             LLVMValueRef field = LLVMBuildStructGEP2(ctx.builder, definition->second.llvmType, address,
-                                                      static_cast<unsigned>(index), "runtime_cleanup_field");
+                                                     static_cast<unsigned>(index), "runtime_cleanup_field");
             collect_cleanup_leaves(ctx, field, definition->second.fieldTypes[index], leaves);
         }
     }
@@ -1185,20 +1212,18 @@ namespace Codegen
         if (!type_requires_cleanup(ctx, type))
             return value;
 
-        value.activeFlag = LLVMBuildAlloca(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx),
-                                           (name + ".dropactive").c_str());
-        LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx),
-                                                    type.isPointerLike ? 0 : 1, 0),
+        value.activeFlag =
+            LLVMBuildAlloca(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), (name + ".dropactive").c_str());
+        LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), type.isPointerLike ? 0 : 1, 0),
                        value.activeFlag);
         if (type.isPointerLike)
             return value;
 
         if (type.isOptional && type.innerType)
         {
-            LLVMValueRef payload = LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 1,
-                                                       "cleanup_optional_payload");
-            value.children.push_back(create_cleanup_value(ctx, payload, *type.innerType,
-                                                          name + ".payload"));
+            LLVMValueRef payload =
+                LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 1, "cleanup_optional_payload");
+            value.children.push_back(create_cleanup_value(ctx, payload, *type.innerType, name + ".payload"));
             return value;
         }
 
@@ -1212,10 +1237,10 @@ namespace Codegen
                     LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), 0, 0),
                     LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), index, 0),
                 };
-                LLVMValueRef element = LLVMBuildGEP2(ctx.builder, type.llvmType, address, indices, 2,
-                                                      "cleanup_element");
-                value.children.push_back(create_cleanup_value(
-                    ctx, element, *type.innerType, name + "." + std::to_string(index)));
+                LLVMValueRef element =
+                    LLVMBuildGEP2(ctx.builder, type.llvmType, address, indices, 2, "cleanup_element");
+                value.children.push_back(
+                    create_cleanup_value(ctx, element, *type.innerType, name + "." + std::to_string(index)));
             }
             return value;
         }
@@ -1227,16 +1252,14 @@ namespace Codegen
         for (size_t index = 0; index < definition->second.fieldTypes.size(); ++index)
         {
             LLVMValueRef field = LLVMBuildStructGEP2(ctx.builder, definition->second.llvmType, address,
-                                                      static_cast<unsigned>(index), "cleanup_field");
-            value.children.push_back(create_cleanup_value(
-                ctx, field, definition->second.fieldTypes[index],
-                name + "." + definition->second.fieldNames[index]));
+                                                     static_cast<unsigned>(index), "cleanup_field");
+            value.children.push_back(create_cleanup_value(ctx, field, definition->second.fieldTypes[index],
+                                                          name + "." + definition->second.fieldNames[index]));
         }
         return value;
     }
 
-    static void collect_cleanup_token_addresses(const CleanupValue &value,
-                                                std::vector<LLVMValueRef> &tokens)
+    static void collect_cleanup_token_addresses(const CleanupValue &value, std::vector<LLVMValueRef> &tokens)
     {
         if (value.type.isPointerLike)
         {
@@ -1251,14 +1274,13 @@ namespace Codegen
     static void arm_cleanup_value(Context &ctx, CleanupValue &value)
     {
         if (value.activeFlag)
-            LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 1, 0),
-                           value.activeFlag);
+            LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 1, 0), value.activeFlag);
         for (CleanupValue &child : value.children)
             arm_cleanup_value(ctx, child);
     }
 
-    static void initialize_runtime_cleanup_flags(Context &ctx, CleanupValue &value,
-                                                 LLVMValueRef elementCount, const std::string &name)
+    static void initialize_runtime_cleanup_flags(Context &ctx, CleanupValue &value, LLVMValueRef elementCount,
+                                                 const std::string &name)
     {
         if (!value.type.innerType)
             throw std::runtime_error("runtime array cleanup requires an element type");
@@ -1270,10 +1292,10 @@ namespace Codegen
         const LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx.llvmCtx);
         value.runtimeElementCount = elementCount;
         value.runtimeCleanupLeafCount = leafCount;
-        LLVMValueRef flagCount = LLVMBuildMul(ctx.builder, elementCount,
-                                              LLVMConstInt(i64, leafCount, 0), "runtimecleanupflagcount");
-        value.runtimeLeafActiveFlags = LLVMBuildArrayAlloca(ctx.builder, i1, flagCount,
-                                                            (name + ".runtimecleanupflags").c_str());
+        LLVMValueRef flagCount =
+            LLVMBuildMul(ctx.builder, elementCount, LLVMConstInt(i64, leafCount, 0), "runtimecleanupflagcount");
+        value.runtimeLeafActiveFlags =
+            LLVMBuildArrayAlloca(ctx.builder, i1, flagCount, (name + ".runtimecleanupflags").c_str());
         LLVMBuildStore(ctx.builder, LLVMConstInt(i1, 1, 0), value.activeFlag);
 
         LLVMValueRef cursor = LLVMBuildAlloca(ctx.builder, i64, "runtimecleanupinitindex");
@@ -1290,11 +1312,11 @@ namespace Codegen
         LLVMValueRef more = LLVMBuildICmp(ctx.builder, LLVMIntULT, index, flagCount, "runtimecleanupinitmore");
         LLVMBuildCondBr(ctx.builder, more, body, done);
         LLVMPositionBuilderAtEnd(ctx.builder, body);
-        LLVMValueRef flag = LLVMBuildGEP2(ctx.builder, i1, value.runtimeLeafActiveFlags, &index, 1,
-                                          "runtimecleanupinitflag");
+        LLVMValueRef flag =
+            LLVMBuildGEP2(ctx.builder, i1, value.runtimeLeafActiveFlags, &index, 1, "runtimecleanupinitflag");
         LLVMBuildStore(ctx.builder, LLVMConstInt(i1, 0, 0), flag);
-        LLVMBuildStore(ctx.builder, LLVMBuildAdd(ctx.builder, index, LLVMConstInt(i64, 1, 0),
-                                                 "runtimecleanupinitnext"), cursor);
+        LLVMBuildStore(ctx.builder, LLVMBuildAdd(ctx.builder, index, LLVMConstInt(i64, 1, 0), "runtimecleanupinitnext"),
+                       cursor);
         LLVMBuildBr(ctx.builder, condition);
         LLVMPositionBuilderAtEnd(ctx.builder, done);
     }
@@ -1330,8 +1352,7 @@ namespace Codegen
                     LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), 0, 0),
                     LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), index, 0),
                 };
-                LLVMValueRef element = LLVMBuildGEP2(ctx.builder, type.llvmType, address, indices, 2,
-                                                      "dropelement");
+                LLVMValueRef element = LLVMBuildGEP2(ctx.builder, type.llvmType, address, indices, 2, "dropelement");
                 emit_cleanup_for_type(ctx, element, *type.innerType);
             }
             return;
@@ -1345,20 +1366,19 @@ namespace Codegen
         for (size_t index = definition->second.fieldTypes.size(); index-- > 0;)
         {
             LLVMValueRef field = LLVMBuildStructGEP2(ctx.builder, definition->second.llvmType, address,
-                                                      static_cast<unsigned>(index), "dropfield");
+                                                     static_cast<unsigned>(index), "dropfield");
             emit_cleanup_for_type(ctx, field, definition->second.fieldTypes[index]);
         }
     }
 
     static void emit_cleanup_leaf_if_active(Context &ctx, LLVMValueRef address, const CGType &type,
-                                             LLVMValueRef activeFlag)
+                                            LLVMValueRef activeFlag)
     {
         const LLVMTypeRef i1 = LLVMInt1TypeInContext(ctx.llvmCtx);
         LLVMValueRef active = LLVMBuildLoad2(ctx.builder, i1, activeFlag, "runtimeleafactive");
         LLVMBasicBlockRef cleanup =
             LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "runtimeleafcleanup");
-        LLVMBasicBlockRef done =
-            LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "runtimeleafcontinue");
+        LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "runtimeleafcontinue");
         LLVMBuildCondBr(ctx.builder, active, cleanup, done);
         LLVMPositionBuilderAtEnd(ctx.builder, cleanup);
         emit_cleanup_for_type(ctx, address, type);
@@ -1371,41 +1391,37 @@ namespace Codegen
     {
         const LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx.llvmCtx);
         const LLVMTypeRef i1 = LLVMInt1TypeInContext(ctx.llvmCtx);
-        LLVMValueRef first = LLVMBuildSub(ctx.builder, value.runtimeElementCount,
-                                          LLVMConstInt(i64, 1, 0), "runtimecleanupfirst");
+        LLVMValueRef first =
+            LLVMBuildSub(ctx.builder, value.runtimeElementCount, LLVMConstInt(i64, 1, 0), "runtimecleanupfirst");
         LLVMValueRef hasElements = LLVMBuildICmp(ctx.builder, LLVMIntNE, value.runtimeElementCount,
                                                  LLVMConstInt(i64, 0, 0), "runtimecleanuphasitems");
         LLVMBasicBlockRef preheader = LLVMGetInsertBlock(ctx.builder);
-        LLVMBasicBlockRef loop =
-            LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "runtimecleanuploop");
-        LLVMBasicBlockRef done =
-            LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "runtimecleanupdone");
+        LLVMBasicBlockRef loop = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "runtimecleanuploop");
+        LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "runtimecleanupdone");
         LLVMBuildCondBr(ctx.builder, hasElements, loop, done);
 
         LLVMPositionBuilderAtEnd(ctx.builder, loop);
         LLVMValueRef index = LLVMBuildPhi(ctx.builder, i64, "runtimecleanupindex");
         LLVMAddIncoming(index, &first, &preheader, 1);
         LLVMValueRef base = LLVMBuildLoad2(ctx.builder, value.type.llvmType, value.address, "runtimecleanupbase");
-        LLVMValueRef element = LLVMBuildGEP2(ctx.builder, value.type.pointeeType, base, &index, 1,
-                                             "runtimecleanupelement");
+        LLVMValueRef element =
+            LLVMBuildGEP2(ctx.builder, value.type.pointeeType, base, &index, 1, "runtimecleanupelement");
         std::vector<CleanupLeaf> leaves;
         collect_cleanup_leaves(ctx, element, *value.type.innerType, leaves);
         if (leaves.size() != value.runtimeCleanupLeafCount)
             throw std::runtime_error("runtime array cleanup leaf layout changed after declaration");
-        LLVMValueRef offset = LLVMBuildMul(ctx.builder, index,
-                                           LLVMConstInt(i64, value.runtimeCleanupLeafCount, 0),
+        LLVMValueRef offset = LLVMBuildMul(ctx.builder, index, LLVMConstInt(i64, value.runtimeCleanupLeafCount, 0),
                                            "runtimecleanupleafoffset");
         for (size_t leaf = leaves.size(); leaf-- > 0;)
         {
-            LLVMValueRef flagIndex = LLVMBuildAdd(ctx.builder, offset,
-                LLVMConstInt(i64, static_cast<uint64_t>(leaf), 0), "runtimecleanupleafindex");
-            LLVMValueRef flag = LLVMBuildGEP2(ctx.builder, i1, value.runtimeLeafActiveFlags, &flagIndex, 1,
-                                              "runtimecleanupleafflag");
+            LLVMValueRef flagIndex = LLVMBuildAdd(
+                ctx.builder, offset, LLVMConstInt(i64, static_cast<uint64_t>(leaf), 0), "runtimecleanupleafindex");
+            LLVMValueRef flag =
+                LLVMBuildGEP2(ctx.builder, i1, value.runtimeLeafActiveFlags, &flagIndex, 1, "runtimecleanupleafflag");
             emit_cleanup_leaf_if_active(ctx, leaves[leaf].address, leaves[leaf].type, flag);
         }
         LLVMValueRef next = LLVMBuildSub(ctx.builder, index, LLVMConstInt(i64, 1, 0), "runtimecleanupnext");
-        LLVMValueRef more = LLVMBuildICmp(ctx.builder, LLVMIntNE, index, LLVMConstInt(i64, 0, 0),
-                                          "runtimecleanupmore");
+        LLVMValueRef more = LLVMBuildICmp(ctx.builder, LLVMIntNE, index, LLVMConstInt(i64, 0, 0), "runtimecleanupmore");
         LLVMBasicBlockRef loopEnd = LLVMGetInsertBlock(ctx.builder);
         LLVMBuildCondBr(ctx.builder, more, loop, done);
         LLVMAddIncoming(index, &next, &loopEnd, 1);
@@ -1417,12 +1433,10 @@ namespace Codegen
         if (!value.address || !value.activeFlag)
             return;
 
-        LLVMValueRef active = LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx),
-                                             value.activeFlag, "dropactive");
-        LLVMBasicBlockRef cleanupBB =
-            LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "dropcleanup");
-        LLVMBasicBlockRef continueBB =
-            LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "dropcontinue");
+        LLVMValueRef active =
+            LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), value.activeFlag, "dropactive");
+        LLVMBasicBlockRef cleanupBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "dropcleanup");
+        LLVMBasicBlockRef continueBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "dropcontinue");
         LLVMBuildCondBr(ctx.builder, active, cleanupBB, continueBB);
 
         LLVMPositionBuilderAtEnd(ctx.builder, cleanupBB);
@@ -1433,8 +1447,7 @@ namespace Codegen
         else
             for (auto child = value.children.rbegin(); child != value.children.rend(); ++child)
                 emit_cleanup_value(ctx, *child);
-        LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0),
-                       value.activeFlag);
+        LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0), value.activeFlag);
         LLVMBuildBr(ctx.builder, continueBB);
         LLVMPositionBuilderAtEnd(ctx.builder, continueBB);
     }
@@ -1485,12 +1498,12 @@ namespace Codegen
     };
 
     static bool runtime_cleanup_path_for_lvalue(Context &ctx, const Parser::ASTNode &node,
-                                                const RuntimeArrayIndexCapture &capturedIndex,
-                                                CleanupValue *&root, CGType &current, uint64_t &leafOrdinal)
+                                                const RuntimeArrayIndexCapture &capturedIndex, CleanupValue *&root,
+                                                CGType &current, uint64_t &leafOrdinal)
     {
         if (node.type == Parser::NodeType::IndexExpr && node.children.size() == 2 &&
-            node.children[0].type == Parser::NodeType::Identifier &&
-            capturedIndex.node == &node.children[1] && capturedIndex.value)
+            node.children[0].type == Parser::NodeType::Identifier && capturedIndex.node == &node.children[1] &&
+            capturedIndex.value)
         {
             const std::string name = std::string(std::get<std::string_view>(node.children[0].value));
             VarInfo *variable = ctx.find_var(name);
@@ -1523,8 +1536,7 @@ namespace Codegen
         if (node.type == Parser::NodeType::IndexExpr && node.children.size() == 2 &&
             runtime_cleanup_path_for_lvalue(ctx, node.children[0], capturedIndex, root, current, leafOrdinal))
         {
-            if (!current.isArray || !current.innerType ||
-                LLVMGetTypeKind(current.llvmType) != LLVMArrayTypeKind ||
+            if (!current.isArray || !current.innerType || LLVMGetTypeKind(current.llvmType) != LLVMArrayTypeKind ||
                 node.children[1].type != Parser::NodeType::IntegerLiteral)
                 return false;
             const uint64_t index = std::get<uint64_t>(node.children[1].value);
@@ -1537,8 +1549,8 @@ namespace Codegen
         return false;
     }
 
-    static RuntimeCleanupTarget runtime_cleanup_target_for_lvalue(
-        Context &ctx, const Parser::ASTNode &node, const RuntimeArrayIndexCapture &capturedIndex)
+    static RuntimeCleanupTarget runtime_cleanup_target_for_lvalue(Context &ctx, const Parser::ASTNode &node,
+                                                                  const RuntimeArrayIndexCapture &capturedIndex)
     {
         CleanupValue *root = nullptr;
         CGType type;
@@ -1549,13 +1561,14 @@ namespace Codegen
             return {};
         const LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx.llvmCtx);
         const LLVMTypeRef i1 = LLVMInt1TypeInContext(ctx.llvmCtx);
-        LLVMValueRef offset = LLVMBuildMul(ctx.builder, capturedIndex.value,
-                                           LLVMConstInt(i64, root->runtimeCleanupLeafCount, 0),
-                                           "runtimeassignmentleafoffset");
-        LLVMValueRef flagIndex = LLVMBuildAdd(ctx.builder, offset, LLVMConstInt(i64, leafOrdinal, 0),
-                                              "runtimeassignmentleafindex");
-        return {LLVMBuildGEP2(ctx.builder, i1, root->runtimeLeafActiveFlags, &flagIndex, 1,
-                              "runtimeassignmentleafflag"), type};
+        LLVMValueRef offset =
+            LLVMBuildMul(ctx.builder, capturedIndex.value, LLVMConstInt(i64, root->runtimeCleanupLeafCount, 0),
+                         "runtimeassignmentleafoffset");
+        LLVMValueRef flagIndex =
+            LLVMBuildAdd(ctx.builder, offset, LLVMConstInt(i64, leafOrdinal, 0), "runtimeassignmentleafindex");
+        return {
+            LLVMBuildGEP2(ctx.builder, i1, root->runtimeLeafActiveFlags, &flagIndex, 1, "runtimeassignmentleafflag"),
+            type};
     }
 
     static CleanupValue *cleanup_value_for_lvalue(Context &ctx, const Parser::ASTNode &node)
@@ -1575,8 +1588,8 @@ namespace Codegen
             if (definition == structTypes.end())
                 return nullptr;
             const std::string fieldName = std::string(std::get<std::string_view>(node.value));
-            const auto field = std::find(definition->second.fieldNames.begin(),
-                                        definition->second.fieldNames.end(), fieldName);
+            const auto field =
+                std::find(definition->second.fieldNames.begin(), definition->second.fieldNames.end(), fieldName);
             if (field == definition->second.fieldNames.end())
                 return nullptr;
             const size_t index = static_cast<size_t>(field - definition->second.fieldNames.begin());
@@ -1585,12 +1598,10 @@ namespace Codegen
         if (node.type == Parser::NodeType::IndexExpr && node.children.size() == 2)
         {
             CleanupValue *parent = cleanup_value_for_lvalue(ctx, node.children.front());
-            if (!parent || !parent->type.isArray ||
-                node.children[1].type != Parser::NodeType::IntegerLiteral)
+            if (!parent || !parent->type.isArray || node.children[1].type != Parser::NodeType::IntegerLiteral)
                 return nullptr;
             const uint64_t index = std::get<uint64_t>(node.children[1].value);
-            return index < parent->children.size() ? &parent->children[static_cast<size_t>(index)]
-                                                    : nullptr;
+            return index < parent->children.size() ? &parent->children[static_cast<size_t>(index)] : nullptr;
         }
         return nullptr;
     }
@@ -1600,14 +1611,12 @@ namespace Codegen
     {
         if (value.activeFlag && value.type.llvmType == targetType.llvmType)
         {
-            LLVMValueRef matches = LLVMBuildICmp(ctx.builder, LLVMIntEQ, value.address, address,
-                                                 "moved_cleanup_slot");
-            LLVMValueRef active = LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx),
-                                                  value.activeFlag, "moved_cleanup_active");
+            LLVMValueRef matches = LLVMBuildICmp(ctx.builder, LLVMIntEQ, value.address, address, "moved_cleanup_slot");
+            LLVMValueRef active = LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), value.activeFlag,
+                                                 "moved_cleanup_active");
             LLVMBuildStore(ctx.builder,
-                           LLVMBuildSelect(ctx.builder, matches,
-                                           LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0), active,
-                                           "moved_cleanup_state"),
+                           LLVMBuildSelect(ctx.builder, matches, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0),
+                                           active, "moved_cleanup_state"),
                            value.activeFlag);
         }
         for (CleanupValue &child : value.children)
@@ -1617,49 +1626,60 @@ namespace Codegen
     static void disarm_cleanup_value(Context &ctx, CleanupValue &value)
     {
         if (value.activeFlag)
-            LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0),
-                           value.activeFlag);
+            LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0), value.activeFlag);
     }
 
     static LLVMValueRef printf_runtime_function(Context &ctx, const char *name, LLVMTypeRef result,
-                                                 const std::vector<LLVMTypeRef> &parameters)
+                                                const std::vector<LLVMTypeRef> &parameters)
     {
         LLVMValueRef function = LLVMGetNamedFunction(ctx.module, name);
-        if (function) return function;
-        return LLVMAddFunction(ctx.module, name,
-                               LLVMFunctionType(result, const_cast<LLVMTypeRef *>(parameters.data()),
-                                                parameters.size(), 0));
+        if (function)
+            return function;
+        return LLVMAddFunction(
+            ctx.module, name,
+            LLVMFunctionType(result, const_cast<LLVMTypeRef *>(parameters.data()), parameters.size(), 0));
     }
 
     static LLVMValueRef emit_printf_bytes(Context &ctx, LLVMValueRef data, LLVMValueRef length)
     {
         LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx.llvmCtx);
-        LLVMValueRef write = printf_runtime_function(ctx, "__sys_write", i64, {i64, LLVMPointerTypeInContext(ctx.llvmCtx, 0), i64});
-        LLVMValueRef args[] = {LLVMConstInt(i64, 1, 0), data, cast_value(ctx.builder, length, i64, false, "printflength")};
+        LLVMValueRef write =
+            printf_runtime_function(ctx, "__sys_write", i64, {i64, LLVMPointerTypeInContext(ctx.llvmCtx, 0), i64});
+        LLVMValueRef args[] = {LLVMConstInt(i64, 1, 0), data,
+                               cast_value(ctx.builder, length, i64, false, "printflength")};
         return LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(write), write, args, 3, "printfwrite");
     }
 
     static LLVMValueRef emit_printf_literal(Context &ctx, const std::string &text)
     {
-        if (text.empty()) return LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0);
+        if (text.empty())
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0);
         return emit_printf_bytes(ctx, LLVMBuildGlobalStringPtr(ctx.builder, text.c_str(), "printftext"),
                                  LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), text.size(), 0));
     }
 
     static std::string printf_type_tag(const CGType &type)
     {
-        if (type.structName == "str" || type.structName == "String") return type.structName;
-        if (type.isBool) return "bool";
-        if (type.isChar) return "char";
-        if (type.isFloat) return LLVMGetTypeKind(type.llvmType) == LLVMFloatTypeKind ? "f32" : "f64";
+        if (std_base_name(type.structName) == "str" || std_base_name(type.structName) == "String")
+            return std_base_name(type.structName);
+        if (type.isBool)
+            return "bool";
+        if (type.isChar)
+            return "char";
+        if (type.isFloat)
+            return LLVMGetTypeKind(type.llvmType) == LLVMFloatTypeKind ? "f32" : "f64";
         if (LLVMGetTypeKind(type.llvmType) == LLVMIntegerTypeKind)
         {
             switch (LLVMGetIntTypeWidth(type.llvmType))
             {
-            case 8: return type.isSigned ? "i8" : "u8";
-            case 16: return type.isSigned ? "i16" : "u16";
-            case 32: return type.isSigned ? "i32" : "u32";
-            case 64: return type.isSigned ? "i64" : "u64";
+            case 8:
+                return type.isSigned ? "i8" : "u8";
+            case 16:
+                return type.isSigned ? "i16" : "u16";
+            case 32:
+                return type.isSigned ? "i32" : "u32";
+            case 64:
+                return type.isSigned ? "i64" : "u64";
             }
         }
         return {};
@@ -1670,20 +1690,29 @@ namespace Codegen
         LLVMTypeRef i8 = LLVMInt8TypeInContext(ctx.llvmCtx), i64 = LLVMInt64TypeInContext(ctx.llvmCtx);
         LLVMTypeRef pointer = LLVMPointerTypeInContext(ctx.llvmCtx, 0);
         LLVMValueRef value = generate_node(ctx, node);
-        if (type.structName == "str" || type.structName == "String")
-            return emit_printf_bytes(ctx, LLVMBuildExtractValue(ctx.builder, value, 0, "printfdata"), LLVMBuildExtractValue(ctx.builder, value, 1, "printflength"));
+        if (std_base_name(type.structName) == "str" || std_base_name(type.structName) == "String")
+            return emit_printf_bytes(ctx, LLVMBuildExtractValue(ctx.builder, value, 0, "printfdata"),
+                                     LLVMBuildExtractValue(ctx.builder, value, 1, "printflength"));
         if (type.isBool)
         {
-            LLVMValueRef data = LLVMBuildSelect(ctx.builder, value, LLVMBuildGlobalStringPtr(ctx.builder, "true", "printftrue"), LLVMBuildGlobalStringPtr(ctx.builder, "false", "printffalse"), "printfbooldata");
-            LLVMValueRef length = LLVMBuildSelect(ctx.builder, value, LLVMConstInt(i64, 4, 0), LLVMConstInt(i64, 5, 0), "printfboollength");
+            LLVMValueRef data =
+                LLVMBuildSelect(ctx.builder, value, LLVMBuildGlobalStringPtr(ctx.builder, "true", "printftrue"),
+                                LLVMBuildGlobalStringPtr(ctx.builder, "false", "printffalse"), "printfbooldata");
+            LLVMValueRef length = LLVMBuildSelect(ctx.builder, value, LLVMConstInt(i64, 4, 0), LLVMConstInt(i64, 5, 0),
+                                                  "printfboollength");
             return emit_printf_bytes(ctx, data, length);
         }
         if (type.isFloat)
         {
             LLVMValueRef buffer = LLVMBuildArrayAlloca(ctx.builder, i8, LLVMConstInt(i64, 64, 0), "printfbuffer");
-            LLVMValueRef convert = printf_runtime_function(ctx, "__sys_float_to_string", i64, {LLVMDoubleTypeInContext(ctx.llvmCtx), pointer, i64});
-            LLVMValueRef args[] = {cast_value(ctx.builder, value, LLVMDoubleTypeInContext(ctx.llvmCtx), true, "printffloat"), buffer, LLVMConstInt(i64, 64, 0)};
-            return emit_printf_bytes(ctx, buffer, LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(convert), convert, args, 3, "printfconverted"));
+            LLVMValueRef convert = printf_runtime_function(ctx, "__sys_float_to_string", i64,
+                                                           {LLVMDoubleTypeInContext(ctx.llvmCtx), pointer, i64});
+            LLVMValueRef args[] = {
+                cast_value(ctx.builder, value, LLVMDoubleTypeInContext(ctx.llvmCtx), true, "printffloat"), buffer,
+                LLVMConstInt(i64, 64, 0)};
+            return emit_printf_bytes(
+                ctx, buffer,
+                LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(convert), convert, args, 3, "printfconverted"));
         }
         if (printf_type_tag(type) == "char")
         {
@@ -1695,16 +1724,21 @@ namespace Codegen
         {
             LLVMValueRef buffer = LLVMBuildArrayAlloca(ctx.builder, i8, LLVMConstInt(i64, 32, 0), "printfbuffer");
             const bool signedValue = type.isSigned;
-            LLVMValueRef convert = printf_runtime_function(ctx, signedValue ? "__sys_int_to_string" : "__sys_uint_to_string", i64, {i64, pointer, i64});
-            LLVMValueRef args[] = {cast_value(ctx.builder, value, i64, signedValue, "printfinteger"), buffer, LLVMConstInt(i64, 32, 0)};
-            return emit_printf_bytes(ctx, buffer, LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(convert), convert, args, 3, "printfconverted"));
+            LLVMValueRef convert = printf_runtime_function(
+                ctx, signedValue ? "__sys_int_to_string" : "__sys_uint_to_string", i64, {i64, pointer, i64});
+            LLVMValueRef args[] = {cast_value(ctx.builder, value, i64, signedValue, "printfinteger"), buffer,
+                                   LLVMConstInt(i64, 32, 0)};
+            return emit_printf_bytes(
+                ctx, buffer,
+                LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(convert), convert, args, 3, "printfconverted"));
         }
         throw std::runtime_error("printf supports only primitives, str, and String");
     }
 
     static LLVMValueRef emit_printf(Context &ctx, const Parser::ASTNode &node)
     {
-        if (!ctx.stdlibEnabled) throw std::runtime_error("printf requires the standard library");
+        if (!ctx.stdlibEnabled)
+            throw std::runtime_error("printf requires the standard library");
         if (node.children.size() < 2 || node.children[1].type != Parser::NodeType::StringLiteral)
             throw std::runtime_error("printf requires a string-literal format argument");
         const std::string format = decode_string_literal(std::get<std::string_view>(node.children[1].value));
@@ -1714,11 +1748,17 @@ namespace Codegen
         while (cursor < format.size())
         {
             const size_t open = format.find('{', cursor);
-            if (open == std::string::npos) { add(emit_printf_literal(ctx, format.substr(cursor))); break; }
+            if (open == std::string::npos)
+            {
+                add(emit_printf_literal(ctx, format.substr(cursor)));
+                break;
+            }
             add(emit_printf_literal(ctx, format.substr(cursor, open - cursor)));
             const size_t close = format.find('}', open + 1);
-            if (close == std::string::npos) throw std::runtime_error("printf format has an unclosed placeholder");
-            if (argument >= node.children.size()) throw std::runtime_error("printf format has more placeholders than arguments");
+            if (close == std::string::npos)
+                throw std::runtime_error("printf format has an unclosed placeholder");
+            if (argument >= node.children.size())
+                throw std::runtime_error("printf format has more placeholders than arguments");
             const CGType type = lvalue_type(ctx, node.children[argument]);
             const std::string tag = format.substr(open + 1, close - open - 1);
             const bool usizePlaceholder = tag == "usize" && LLVMGetTypeKind(type.llvmType) == LLVMIntegerTypeKind &&
@@ -1728,7 +1768,8 @@ namespace Codegen
             add(emit_printf_value(ctx, node.children[argument++], type));
             cursor = close + 1;
         }
-        if (argument != node.children.size()) throw std::runtime_error("printf has more arguments than placeholders");
+        if (argument != node.children.size())
+            throw std::runtime_error("printf has more arguments than placeholders");
         return total;
     }
 
@@ -1759,19 +1800,20 @@ namespace Codegen
             const CGType &parameter = signature->second.paramTypes[index];
             fieldTypes.push_back(parameter.llvmType);
             LLVMValueRef value = generate_node(ctx, call.children[index + 1]);
-            argumentValues.push_back(cast_value(ctx.builder, value, parameter.llvmType, parameter.isSigned,
-                                                "threadargcast"));
+            argumentValues.push_back(
+                cast_value(ctx.builder, value, parameter.llvmType, parameter.isSigned, "threadargcast"));
         }
         LLVMTypeRef captureType = LLVMStructTypeInContext(ctx.llvmCtx, fieldTypes.data(), fieldTypes.size(), 0);
         const std::string suffix = std::to_string(ctx.nextThreadId++);
-        LLVMValueRef active = LLVMAddGlobal(ctx.module, LLVMInt1TypeInContext(ctx.llvmCtx),
-                                             ("__shaft_thread_active_" + suffix).c_str());
+        LLVMValueRef active =
+            LLVMAddGlobal(ctx.module, LLVMInt1TypeInContext(ctx.llvmCtx), ("__shaft_thread_active_" + suffix).c_str());
         LLVMSetInitializer(active, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0));
         LLVMSetLinkage(active, LLVMInternalLinkage);
-        LLVMValueRef alreadyActive = LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), active,
-                                                     "threadactive");
+        LLVMValueRef alreadyActive =
+            LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), active, "threadactive");
         LLVMBasicBlockRef reject = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.reentrant");
-        LLVMBasicBlockRef captureStart = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.capture");
+        LLVMBasicBlockRef captureStart =
+            LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.capture");
         LLVMBuildCondBr(ctx.builder, alreadyActive, reject, captureStart);
         LLVMPositionBuilderAtEnd(ctx.builder, reject);
         LLVMValueRef reentrantStatus = LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), 72, 0);
@@ -1810,14 +1852,13 @@ namespace Codegen
         LLVMPositionBuilderAtEnd(ctx.builder, parentBlock);
 
         LLVMValueRef stackBytes = LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 65536, 0);
-        LLVMValueRef stack = LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(allocate), allocate,
-                                            &stackBytes, 1, "threadstack");
+        LLVMValueRef stack =
+            LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(allocate), allocate, &stackBytes, 1, "threadstack");
         LLVMValueRef cloneArguments[] = {stack, state.threadTid};
-        LLVMValueRef childId = LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(clone), clone,
-                                              cloneArguments, 2, "threadclone");
+        LLVMValueRef childId =
+            LLVMBuildCall2(ctx.builder, LLVMGlobalGetValueType(clone), clone, cloneArguments, 2, "threadclone");
         LLVMValueRef isChild = LLVMBuildICmp(ctx.builder, LLVMIntEQ, childId,
-                                             LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0),
-                                             "threadchild");
+                                             LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0), "threadchild");
         LLVMBasicBlockRef child = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.child");
         LLVMBasicBlockRef parent = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "thread.parent");
         LLVMBuildCondBr(ctx.builder, isChild, child, parent);
@@ -1853,8 +1894,8 @@ namespace Codegen
         case Parser::NodeType::NamespaceDecl:
         {
             const std::string previous = ctx.currentNamespaceName;
-            ctx.currentNamespaceName = qualified_declaration_name(
-                ctx, std::string(std::get<std::string_view>(node.value)));
+            ctx.currentNamespaceName =
+                qualified_declaration_name(ctx, std::string(std::get<std::string_view>(node.value)));
             for (const auto &child : node.children)
                 generate_node(ctx, child);
             ctx.currentNamespaceName = previous;
@@ -1889,22 +1930,22 @@ namespace Codegen
                 std::cerr << "Codegen Error: Struct declaration is missing its name.\n";
                 return nullptr;
             }
-            std::string name = qualified_declaration_name(
-                ctx, std::string(std::get<std::string_view>(node.children.front().value)));
+            std::string name =
+                qualified_declaration_name(ctx, std::string(std::get<std::string_view>(node.children.front().value)));
             StructInfo info;
             info.requestedAlignment = node.requestedAlignment;
             info.baseClassName = node.baseClassName;
             const auto predeclared = structTypes.find(name);
-            info.llvmType = predeclared == structTypes.end()
-                                ? LLVMStructCreateNamed(ctx.llvmCtx, name.c_str())
-                                : predeclared->second.llvmType;
+            info.llvmType = predeclared == structTypes.end() ? LLVMStructCreateNamed(ctx.llvmCtx, name.c_str())
+                                                             : predeclared->second.llvmType;
 
             std::vector<LLVMTypeRef> fieldTypes;
             if (!node.baseClassName.empty())
             {
                 const auto base = structTypes.find(node.baseClassName);
                 if (base == structTypes.end())
-                    throw std::runtime_error("base class '" + node.baseClassName + "' must be declared before its derived class");
+                    throw std::runtime_error("base class '" + node.baseClassName +
+                                             "' must be declared before its derived class");
                 info.fieldNames = base->second.fieldNames;
                 info.fieldTypeNodes = base->second.fieldTypeNodes;
                 info.fieldTypes = base->second.fieldTypes;
@@ -1954,15 +1995,14 @@ namespace Codegen
                 std::cerr << "Codegen Error: Enum declaration is missing its name.\n";
                 return nullptr;
             }
-            std::string name = qualified_declaration_name(
-                ctx, std::string(std::get<std::string_view>(node.children.front().value)));
+            std::string name =
+                qualified_declaration_name(ctx, std::string(std::get<std::string_view>(node.children.front().value)));
             EnumInfo info;
             info.backingType.llvmType = LLVMInt32TypeInContext(ctx.llvmCtx);
             info.backingType.isSigned = true;
             size_t firstMember = 1;
-            if (node.children.size() > 1 &&
-                (node.children[1].type == Parser::NodeType::PrimitiveType ||
-                 node.children[1].type == Parser::NodeType::CustomType))
+            if (node.children.size() > 1 && (node.children[1].type == Parser::NodeType::PrimitiveType ||
+                                             node.children[1].type == Parser::NodeType::CustomType))
             {
                 info.backingType = resolve_type(ctx, node.children[1]);
                 firstMember = 2;
@@ -1973,8 +2013,7 @@ namespace Codegen
                 const auto &child = node.children[index];
                 if (child.type != Parser::NodeType::EnumMember || child.children.empty())
                     continue;
-                std::string memberName =
-                    std::string(std::get<std::string_view>(child.children.front().value));
+                std::string memberName = std::string(std::get<std::string_view>(child.children.front().value));
                 if (child.children.size() > 1)
                     counter = evaluate_enum_constant(child.children[1], info);
                 info.members[memberName] = counter++;
@@ -1984,14 +2023,11 @@ namespace Codegen
         }
 
         case Parser::NodeType::IntegerLiteral:
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), std::get<uint64_t>(node.value),
-                                0);
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), std::get<uint64_t>(node.value), 0);
         case Parser::NodeType::FloatLiteral:
-            return LLVMConstReal(LLVMDoubleTypeInContext(ctx.llvmCtx),
-                                 std::get<double>(node.value));
+            return LLVMConstReal(LLVMDoubleTypeInContext(ctx.llvmCtx), std::get<double>(node.value));
         case Parser::NodeType::BoolLiteral:
-            return LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx),
-                                std::get<bool>(node.value) ? 1 : 0, 0);
+            return LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), std::get<bool>(node.value) ? 1 : 0, 0);
         case Parser::NodeType::StringLiteral:
         {
             std::string_view sv = std::get<std::string_view>(node.value);
@@ -2009,11 +2045,21 @@ namespace Codegen
             {
                 switch (text[1])
                 {
-                case 'n': value = '\n'; break;
-                case 'r': value = '\r'; break;
-                case 't': value = '\t'; break;
-                case '0': value = '\0'; break;
-                default: value = static_cast<unsigned char>(text[1]); break;
+                case 'n':
+                    value = '\n';
+                    break;
+                case 'r':
+                    value = '\r';
+                    break;
+                case 't':
+                    value = '\t';
+                    break;
+                case '0':
+                    value = '\0';
+                    break;
+                default:
+                    value = static_cast<unsigned char>(text[1]);
+                    break;
                 }
             }
             return LLVMConstInt(LLVMInt32TypeInContext(ctx.llvmCtx), value, 0);
@@ -2029,8 +2075,8 @@ namespace Codegen
             {
                 if (!var->type.innerType)
                     throw std::runtime_error("optional variable has no payload type");
-                LLVMValueRef payload = LLVMBuildStructGEP2(ctx.builder, var->type.llvmType, var->address, 1,
-                                                            "optionalpayloadaddr");
+                LLVMValueRef payload =
+                    LLVMBuildStructGEP2(ctx.builder, var->type.llvmType, var->address, 1, "optionalpayloadaddr");
                 return LLVMBuildLoad2(ctx.builder, var->type.innerType->llvmType, payload, name.c_str());
             }
             return LLVMBuildLoad2(ctx.builder, var->type.llvmType, var->address, name.c_str());
@@ -2058,25 +2104,24 @@ namespace Codegen
 
             LLVMValueRef alloca = LLVMBuildAlloca(ctx.builder, cgType.llvmType, name.c_str());
             LLVMValueRef runtimeArrayCount = nullptr;
-            if (cgType.isArray && cgType.isPointerLike && cgType.innerType &&
-                !cgType.runtimeArrayLengthName.empty())
+            if (cgType.isArray && cgType.isPointerLike && cgType.innerType && !cgType.runtimeArrayLengthName.empty())
             {
                 VarInfo *length = ctx.find_var(cgType.runtimeArrayLengthName);
                 if (!length)
                     throw std::runtime_error("runtime array length binding is not declared");
-                LLVMValueRef count = LLVMBuildLoad2(ctx.builder, length->type.llvmType, length->address,
-                                                    "runtimearraycount");
-                count = cast_value(ctx.builder, count, LLVMInt64TypeInContext(ctx.llvmCtx),
-                                   length->type.isSigned, "runtimearraycountcast");
-                LLVMValueRef storage = LLVMBuildArrayAlloca(ctx.builder, cgType.innerType->llvmType, count,
-                                                             "runtimearraystorage");
+                LLVMValueRef count =
+                    LLVMBuildLoad2(ctx.builder, length->type.llvmType, length->address, "runtimearraycount");
+                count = cast_value(ctx.builder, count, LLVMInt64TypeInContext(ctx.llvmCtx), length->type.isSigned,
+                                   "runtimearraycountcast");
+                LLVMValueRef storage =
+                    LLVMBuildArrayAlloca(ctx.builder, cgType.innerType->llvmType, count, "runtimearraystorage");
                 LLVMBuildStore(ctx.builder, storage, alloca);
                 runtimeArrayCount = count;
             }
             if (cgType.requiredAlignment != 0)
                 LLVMSetAlignment(alloca, static_cast<unsigned>(cgType.requiredAlignment));
-            const bool stackRuntimeArray = cgType.isArray && cgType.isPointerLike &&
-                                           !cgType.runtimeArrayLengthName.empty();
+            const bool stackRuntimeArray =
+                cgType.isArray && cgType.isPointerLike && !cgType.runtimeArrayLengthName.empty();
             const bool ownsCleanup = type_requires_cleanup(ctx, cgType);
             if (ownsCleanup)
             {
@@ -2108,10 +2153,10 @@ namespace Codegen
                     for (size_t index = 0; index < classInfo->second.fieldTypes.size(); ++index)
                     {
                         const CGType &fieldType = classInfo->second.fieldTypes[index];
-                        LLVMValueRef fieldAddress = LLVMBuildStructGEP2(ctx.builder, cgType.llvmType, alloca,
-                                                                        index, "structinitfield");
-                        LLVMValueRef value = generate_value_for_target(
-                            ctx, node.children[1].children[index], fieldType);
+                        LLVMValueRef fieldAddress =
+                            LLVMBuildStructGEP2(ctx.builder, cgType.llvmType, alloca, index, "structinitfield");
+                        LLVMValueRef value =
+                            generate_value_for_target(ctx, node.children[1].children[index], fieldType);
                         if (!value)
                             throw std::runtime_error("brace initializer field did not produce a value");
                         LLVMBuildStore(ctx.builder, materialize_value(ctx, value, fieldType, "structinitcast"),
@@ -2119,8 +2164,7 @@ namespace Codegen
                     }
                     return nullptr;
                 }
-                const auto field = std::find(classInfo->second.fieldNames.begin(),
-                                             classInfo->second.fieldNames.end(),
+                const auto field = std::find(classInfo->second.fieldNames.begin(), classInfo->second.fieldNames.end(),
                                              classInfo->second.initializedField);
                 if (field == classInfo->second.fieldNames.end())
                     throw std::runtime_error("class init field is missing from its layout");
@@ -2130,29 +2174,29 @@ namespace Codegen
                     throw std::runtime_error("class init field must lower to a pointer");
 
                 LLVMBuildStore(ctx.builder, LLVMConstNull(cgType.llvmType), alloca);
-                LLVMValueRef count = LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx),
-                                                  node.children[1].children.size(), 0);
-                LLVMValueRef byteCount = LLVMBuildMul(ctx.builder, LLVMSizeOf(backingType.pointeeType),
-                                                      count, "initbytes");
+                LLVMValueRef count =
+                    LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), node.children[1].children.size(), 0);
+                LLVMValueRef byteCount =
+                    LLVMBuildMul(ctx.builder, LLVMSizeOf(backingType.pointeeType), count, "initbytes");
                 LLVMValueRef alloc = LLVMGetNamedFunction(ctx.module, "__shaft_alloc");
                 if (!alloc)
                     throw std::runtime_error("class brace initialization requires __shaft_alloc");
                 LLVMTypeRef allocArg = LLVMInt64TypeInContext(ctx.llvmCtx);
-                LLVMTypeRef allocType = LLVMFunctionType(
-                    LLVMPointerType(LLVMInt8TypeInContext(ctx.llvmCtx), 0), &allocArg, 1, 0);
+                LLVMTypeRef allocType =
+                    LLVMFunctionType(LLVMPointerType(LLVMInt8TypeInContext(ctx.llvmCtx), 0), &allocArg, 1, 0);
                 LLVMValueRef data = LLVMBuildCall2(ctx.builder, allocType, alloc, &byteCount, 1, "initdata");
-                LLVMValueRef dataField = LLVMBuildStructGEP2(ctx.builder, cgType.llvmType, alloca,
-                                                              fieldIndex, "initfield");
+                LLVMValueRef dataField =
+                    LLVMBuildStructGEP2(ctx.builder, cgType.llvmType, alloca, fieldIndex, "initfield");
                 LLVMBuildStore(ctx.builder, data, dataField);
                 for (size_t index = 0; index < node.children[1].children.size(); ++index)
                 {
                     LLVMValueRef elementIndex = LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), index, 0);
-                    LLVMValueRef elementAddress = LLVMBuildGEP2(ctx.builder, backingType.pointeeType, data,
-                                                                 &elementIndex, 1, "initelement");
+                    LLVMValueRef elementAddress =
+                        LLVMBuildGEP2(ctx.builder, backingType.pointeeType, data, &elementIndex, 1, "initelement");
                     LLVMValueRef value = generate_node(ctx, node.children[1].children[index]);
                     LLVMBuildStore(ctx.builder,
-                                   cast_value(ctx.builder, value, backingType.pointeeType,
-                                              backingType.isSigned, "initelementcast"),
+                                   cast_value(ctx.builder, value, backingType.pointeeType, backingType.isSigned,
+                                              "initelementcast"),
                                    elementAddress);
                 }
                 for (size_t index = 0; index < classInfo->second.fieldNames.size(); ++index)
@@ -2161,12 +2205,12 @@ namespace Codegen
                     if (fieldName != "length" && fieldName != "capacity")
                         continue;
                     const CGType &fieldType = classInfo->second.fieldTypes[index];
-                    LLVMValueRef metadata = LLVMBuildStructGEP2(ctx.builder, cgType.llvmType, alloca,
-                                                                 index, "initmetadata");
-                    LLVMBuildStore(ctx.builder,
-                                   cast_value(ctx.builder, count, fieldType.llvmType,
-                                              fieldType.isSigned, "initmetadatacast"),
-                                   metadata);
+                    LLVMValueRef metadata =
+                        LLVMBuildStructGEP2(ctx.builder, cgType.llvmType, alloca, index, "initmetadata");
+                    LLVMBuildStore(
+                        ctx.builder,
+                        cast_value(ctx.builder, count, fieldType.llvmType, fieldType.isSigned, "initmetadatacast"),
+                        metadata);
                 }
             }
             else if (cgType.isOptional)
@@ -2233,8 +2277,7 @@ namespace Codegen
                 default:
                     throw std::runtime_error("unsupported assignment operator");
                 }
-                LLVMValueRef current =
-                    LLVMBuildLoad2(ctx.builder, targetType.llvmType, lval, "assigntmp");
+                LLVMValueRef current = LLVMBuildLoad2(ctx.builder, targetType.llvmType, lval, "assigntmp");
                 rval = generate_binary(ctx, binaryOp, current, rval, targetType.isSigned);
             }
             CleanupValue *targetCleanup = nullptr;
@@ -2247,9 +2290,6 @@ namespace Codegen
                     targetCleanup = cleanup_value_for_lvalue(ctx, node.children[0]);
                     if (targetCleanup && targetCleanup->activeFlag)
                         emit_cleanup_value(ctx, *targetCleanup);
-                    // A runtime array slot without an exact active token may contain
-                    // a borrowed or uninitialized pointer. Never infer ownership
-                    // from its shape and structurally free it as a fallback.
                     else if (!runtimeIndex.value)
                         emit_cleanup_for_type(ctx, lval, targetType);
                 }
@@ -2314,13 +2354,13 @@ namespace Codegen
                     if ((leftLiteral || is_string_aggregate(leftType)) &&
                         (rightLiteral || is_string_aggregate(rightType)))
                     {
-                        const auto string_data_and_length = [&](const Parser::ASTNode &operand,
-                                                                LLVMValueRef value, const char *dataName,
-                                                                const char *lengthName)
+                        const auto string_data_and_length = [&](const Parser::ASTNode &operand, LLVMValueRef value,
+                                                                const char *dataName, const char *lengthName)
                         {
                             if (operand.type == Parser::NodeType::StringLiteral)
                             {
-                                const std::string text = decode_string_literal(std::get<std::string_view>(operand.value));
+                                const std::string text =
+                                    decode_string_literal(std::get<std::string_view>(operand.value));
                                 return std::pair<LLVMValueRef, LLVMValueRef>{
                                     value, LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), text.size(), 0)};
                             }
@@ -2328,10 +2368,10 @@ namespace Codegen
                                 LLVMBuildExtractValue(ctx.builder, value, 0, dataName),
                                 LLVMBuildExtractValue(ctx.builder, value, 1, lengthName)};
                         };
-                        const auto left = string_data_and_length(node.children[0], lhs,
-                                                                 "stringlhsdata", "stringlhslength");
-                        const auto right = string_data_and_length(node.children[1], rhs,
-                                                                  "stringrhsdata", "stringrhslength");
+                        const auto left =
+                            string_data_and_length(node.children[0], lhs, "stringlhsdata", "stringlhslength");
+                        const auto right =
+                            string_data_and_length(node.children[1], rhs, "stringrhsdata", "stringrhslength");
                         return generate_string_equality(ctx, left.first, left.second, right.first, right.second,
                                                         op == Lexer::Operator::NOT_EQUAL);
                     }
@@ -2478,8 +2518,7 @@ namespace Codegen
                 if (!variable)
                     throw std::runtime_error("unknown inline assembly operand '" + name + "'");
                 inputTypes.push_back(variable->type.llvmType);
-                inputs.push_back(LLVMBuildLoad2(ctx.builder, variable->type.llvmType, variable->address,
-                                                "asminput"));
+                inputs.push_back(LLVMBuildLoad2(ctx.builder, variable->type.llvmType, variable->address, "asminput"));
                 if (!constraints.empty())
                     constraints += ',';
                 if (operand.isMutable)
@@ -2502,8 +2541,9 @@ namespace Codegen
                      assemblySource[index + 1] == '_'))
                 {
                     size_t end = index + 2;
-                    while (end < assemblySource.size() &&
-                           (std::isalnum(static_cast<unsigned char>(assemblySource[end])) || assemblySource[end] == '_'))
+                    while (
+                        end < assemblySource.size() &&
+                        (std::isalnum(static_cast<unsigned char>(assemblySource[end])) || assemblySource[end] == '_'))
                         ++end;
                     const std::string name(assemblySource.substr(index + 1, end - index - 1));
                     const auto found = operandNumbers.find(name);
@@ -2530,15 +2570,17 @@ namespace Codegen
             else if (outputTypes.size() > 1)
                 resultType = LLVMStructTypeInContext(ctx.llvmCtx, outputTypes.data(), outputTypes.size(), 0);
             LLVMTypeRef functionType = LLVMFunctionType(resultType, inputTypes.data(), inputTypes.size(), 0);
-            LLVMValueRef inlineAssembly = LLVMGetInlineAsm(
-                functionType, assembly.data(), assembly.size(), constraints.data(), constraints.size(), 1, 0,
-                LLVMInlineAsmDialectATT, 0);
-            LLVMValueRef call = LLVMBuildCall2(ctx.builder, functionType, inlineAssembly, inputs.data(), inputs.size(), "");
+            LLVMValueRef inlineAssembly =
+                LLVMGetInlineAsm(functionType, assembly.data(), assembly.size(), constraints.data(), constraints.size(),
+                                 1, 0, LLVMInlineAsmDialectATT, 0);
+            LLVMValueRef call =
+                LLVMBuildCall2(ctx.builder, functionType, inlineAssembly, inputs.data(), inputs.size(), "");
             for (size_t index = 0; index < writableOperands.size(); ++index)
             {
-                LLVMValueRef output = writableOperands.size() == 1
-                                          ? call
-                                          : LLVMBuildExtractValue(ctx.builder, call, static_cast<unsigned>(index), "asmoutput");
+                LLVMValueRef output =
+                    writableOperands.size() == 1
+                        ? call
+                        : LLVMBuildExtractValue(ctx.builder, call, static_cast<unsigned>(index), "asmoutput");
                 LLVMBuildStore(ctx.builder, output, writableOperands[index]->address);
             }
             return call;
@@ -2547,15 +2589,11 @@ namespace Codegen
         case Parser::NodeType::IfStmt:
         {
             LLVMValueRef cond = generate_node(ctx, node.children[0]);
-            cond = LLVMBuildICmp(ctx.builder, LLVMIntNE, cond, LLVMConstNull(LLVMTypeOf(cond)),
-                                 "ifcond");
+            cond = LLVMBuildICmp(ctx.builder, LLVMIntNE, cond, LLVMConstNull(LLVMTypeOf(cond)), "ifcond");
 
-            LLVMBasicBlockRef thenBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "then");
-            LLVMBasicBlockRef elseBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "else");
-            LLVMBasicBlockRef mergeBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "ifcont");
+            LLVMBasicBlockRef thenBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "then");
+            LLVMBasicBlockRef elseBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "else");
+            LLVMBasicBlockRef mergeBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "ifcont");
 
             LLVMBuildCondBr(ctx.builder, cond, thenBB, elseBB);
 
@@ -2576,19 +2614,15 @@ namespace Codegen
 
         case Parser::NodeType::WhileLoop:
         {
-            LLVMBasicBlockRef condBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "whilecond");
-            LLVMBasicBlockRef loopBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "whileloop");
-            LLVMBasicBlockRef afterBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "whileafter");
+            LLVMBasicBlockRef condBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "whilecond");
+            LLVMBasicBlockRef loopBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "whileloop");
+            LLVMBasicBlockRef afterBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "whileafter");
 
             LLVMBuildBr(ctx.builder, condBB);
             LLVMPositionBuilderAtEnd(ctx.builder, condBB);
 
             LLVMValueRef cond = generate_node(ctx, node.children[0]);
-            cond = LLVMBuildICmp(ctx.builder, LLVMIntNE, cond, LLVMConstNull(LLVMTypeOf(cond)),
-                                 "loopcond");
+            cond = LLVMBuildICmp(ctx.builder, LLVMIntNE, cond, LLVMConstNull(LLVMTypeOf(cond)), "loopcond");
             LLVMBuildCondBr(ctx.builder, cond, loopBB, afterBB);
 
             ctx.loopStack.push_back({condBB, afterBB});
@@ -2628,20 +2662,16 @@ namespace Codegen
             ctx.push_scope();
             generate_node(ctx, node.children[0]);
 
-            LLVMBasicBlockRef condBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "forcond");
-            LLVMBasicBlockRef bodyBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "forbody");
-            LLVMBasicBlockRef postBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "forpost");
-            LLVMBasicBlockRef afterBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "forafter");
+            LLVMBasicBlockRef condBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "forcond");
+            LLVMBasicBlockRef bodyBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "forbody");
+            LLVMBasicBlockRef postBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "forpost");
+            LLVMBasicBlockRef afterBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "forafter");
             LLVMBuildBr(ctx.builder, condBB);
 
             LLVMPositionBuilderAtEnd(ctx.builder, condBB);
             LLVMValueRef condition = generate_node(ctx, node.children[1]);
-            condition = LLVMBuildICmp(ctx.builder, LLVMIntNE, condition, LLVMConstNull(LLVMTypeOf(condition)),
-                                     "forcondvalue");
+            condition =
+                LLVMBuildICmp(ctx.builder, LLVMIntNE, condition, LLVMConstNull(LLVMTypeOf(condition)), "forcondvalue");
             LLVMBuildCondBr(ctx.builder, condition, bodyBB, afterBB);
 
             ctx.loopStack.push_back({postBB, afterBB});
@@ -2670,8 +2700,7 @@ namespace Codegen
                 throw std::runtime_error("malformed match statement");
 
             LLVMValueRef subject = generate_node(ctx, node.children[0]);
-            LLVMBasicBlockRef afterBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "matchafter");
+            LLVMBasicBlockRef afterBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "matchafter");
             bool sawDefault = false;
 
             for (size_t index = 1; index < node.children.size(); ++index)
@@ -2742,18 +2771,19 @@ namespace Codegen
                 LLVMBasicBlockRef condBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "rangecond");
                 LLVMBasicBlockRef bodyBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "rangebody");
                 LLVMBasicBlockRef nextBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "rangenext");
-                LLVMBasicBlockRef afterBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "rangeafter");
+                LLVMBasicBlockRef afterBB =
+                    LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "rangeafter");
                 LLVMBuildBr(ctx.builder, condBB);
                 LLVMPositionBuilderAtEnd(ctx.builder, condBB);
                 LLVMValueRef index = LLVMBuildLoad2(ctx.builder, indexType, cursor, "rangeindexvalue");
-                LLVMValueRef inRange = LLVMBuildICmp(ctx.builder, itemType.isSigned ? LLVMIntSLE : LLVMIntULE,
-                                                     index, end, "rangeinrange");
+                LLVMValueRef inRange =
+                    LLVMBuildICmp(ctx.builder, itemType.isSigned ? LLVMIntSLE : LLVMIntULE, index, end, "rangeinrange");
                 LLVMBuildCondBr(ctx.builder, inRange, bodyBB, afterBB);
                 ctx.loopStack.push_back({nextBB, afterBB});
                 ctx.loopCleanupDepths.push_back(ctx.cleanupScopes.size());
                 LLVMPositionBuilderAtEnd(ctx.builder, bodyBB);
-                LLVMBuildStore(ctx.builder, cast_value(ctx.builder, index, itemType.llvmType,
-                                                       itemType.isSigned, "rangeitem"), item);
+                LLVMBuildStore(ctx.builder,
+                               cast_value(ctx.builder, index, itemType.llvmType, itemType.isSigned, "rangeitem"), item);
                 generate_node(ctx, node.children[2]);
                 if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(ctx.builder)))
                     LLVMBuildBr(ctx.builder, nextBB);
@@ -2763,8 +2793,9 @@ namespace Codegen
                     LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "rangeincrement");
                 LLVMBuildCondBr(ctx.builder, reachedEnd, afterBB, incrementBB);
                 LLVMPositionBuilderAtEnd(ctx.builder, incrementBB);
-                LLVMBuildStore(ctx.builder, LLVMBuildAdd(ctx.builder, index,
-                    LLVMConstInt(indexType, 1, 0), "rangenextindex"), cursor);
+                LLVMBuildStore(ctx.builder,
+                               LLVMBuildAdd(ctx.builder, index, LLVMConstInt(indexType, 1, 0), "rangenextindex"),
+                               cursor);
                 LLVMBuildBr(ctx.builder, condBB);
                 ctx.loopStack.pop_back();
                 ctx.loopCleanupDepths.pop_back();
@@ -2775,11 +2806,9 @@ namespace Codegen
             }
             const CGType containerType = lvalue_type(ctx, node.children[1]);
             const bool fixedArray = !containerType.isPointerLike && containerType.arrayLength != 0;
-            const bool sizedRuntimeArray = containerType.isPointerLike &&
-                                           !containerType.runtimeArrayLengthName.empty();
+            const bool sizedRuntimeArray = containerType.isPointerLike && !containerType.runtimeArrayLengthName.empty();
             const auto vectorInfo = structTypes.find(containerType.structName);
-            const bool vector = containerType.structName.rfind("Vector.", 0) == 0 &&
-                                vectorInfo != structTypes.end() &&
+            const bool vector = is_vector_specialization(containerType.structName) && vectorInfo != structTypes.end() &&
                                 vectorInfo->second.fieldTypes.size() > 1 &&
                                 vectorInfo->second.fieldTypes.front().innerType;
             CGType elementType;
@@ -2790,28 +2819,23 @@ namespace Codegen
             else
                 throw std::runtime_error("foreach requires a fixed-size array, T[length] runtime array, or Vector<T>");
             if ((!fixedArray && !sizedRuntimeArray && !vector) || itemType.llvmType != elementType.llvmType)
-                throw std::runtime_error(vector
-                    ? "foreach item type does not match the Vector element type"
-                    : "foreach item type does not match the array element type");
+                throw std::runtime_error(vector ? "foreach item type does not match the Vector element type"
+                                                : "foreach item type does not match the array element type");
             LLVMValueRef vectorStorage = vector ? get_lvalue(ctx, node.children[1]) : nullptr;
             ctx.push_scope();
             const std::string itemName = std::string(std::get<std::string_view>(node.value));
             LLVMValueRef cursor = LLVMBuildAlloca(ctx.builder, LLVMInt64TypeInContext(ctx.llvmCtx), "foreachindex");
             LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0), cursor);
 
-            LLVMBasicBlockRef condBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "foreachcond");
-            LLVMBasicBlockRef bodyBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "foreachbody");
-            LLVMBasicBlockRef nextBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "foreachnext");
-            LLVMBasicBlockRef afterBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "foreachafter");
+            LLVMBasicBlockRef condBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "foreachcond");
+            LLVMBasicBlockRef bodyBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "foreachbody");
+            LLVMBasicBlockRef nextBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "foreachnext");
+            LLVMBasicBlockRef afterBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "foreachafter");
             LLVMBuildBr(ctx.builder, condBB);
 
             LLVMPositionBuilderAtEnd(ctx.builder, condBB);
-            LLVMValueRef index = LLVMBuildLoad2(ctx.builder, LLVMInt64TypeInContext(ctx.llvmCtx), cursor,
-                                                 "foreachindexvalue");
+            LLVMValueRef index =
+                LLVMBuildLoad2(ctx.builder, LLVMInt64TypeInContext(ctx.llvmCtx), cursor, "foreachindexvalue");
             LLVMValueRef count = nullptr;
             if (fixedArray)
             {
@@ -2822,18 +2846,18 @@ namespace Codegen
                 VarInfo *length = ctx.find_var(containerType.runtimeArrayLengthName);
                 if (!length)
                     throw std::runtime_error("foreach runtime array length is not in scope");
-                LLVMValueRef lengthValue = LLVMBuildLoad2(ctx.builder, length->type.llvmType, length->address,
-                                                          "foreachlength");
+                LLVMValueRef lengthValue =
+                    LLVMBuildLoad2(ctx.builder, length->type.llvmType, length->address, "foreachlength");
                 count = cast_value(ctx.builder, lengthValue, LLVMInt64TypeInContext(ctx.llvmCtx), false,
                                    "foreachlengthcast");
             }
             else
             {
                 const CGType &lengthType = vectorInfo->second.fieldTypes[1];
-                LLVMValueRef lengthAddress = LLVMBuildStructGEP2(ctx.builder, containerType.llvmType,
-                                                                 vectorStorage, 1, "vectorlength");
-                LLVMValueRef lengthValue = LLVMBuildLoad2(ctx.builder, lengthType.llvmType, lengthAddress,
-                                                          "vectorlengthvalue");
+                LLVMValueRef lengthAddress =
+                    LLVMBuildStructGEP2(ctx.builder, containerType.llvmType, vectorStorage, 1, "vectorlength");
+                LLVMValueRef lengthValue =
+                    LLVMBuildLoad2(ctx.builder, lengthType.llvmType, lengthAddress, "vectorlengthvalue");
                 count = cast_value(ctx.builder, lengthValue, LLVMInt64TypeInContext(ctx.llvmCtx), false,
                                    "vectorlengthcast");
             }
@@ -2849,25 +2873,20 @@ namespace Codegen
             {
                 LLVMValueRef zero = LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx), 0, 0);
                 LLVMValueRef indices[] = {zero, index};
-                element = LLVMBuildGEP2(ctx.builder, containerType.llvmType, container, indices, 2,
-                                        "foreachelement");
+                element = LLVMBuildGEP2(ctx.builder, containerType.llvmType, container, indices, 2, "foreachelement");
             }
             else if (sizedRuntimeArray)
             {
-                LLVMValueRef base = LLVMBuildLoad2(ctx.builder, containerType.llvmType, container,
-                                                   "foreachbase");
-                element = LLVMBuildGEP2(ctx.builder, containerType.pointeeType, base, &index, 1,
-                                        "foreachelement");
+                LLVMValueRef base = LLVMBuildLoad2(ctx.builder, containerType.llvmType, container, "foreachbase");
+                element = LLVMBuildGEP2(ctx.builder, containerType.pointeeType, base, &index, 1, "foreachelement");
             }
             else
             {
                 const CGType &dataType = vectorInfo->second.fieldTypes.front();
-                LLVMValueRef dataAddress = LLVMBuildStructGEP2(ctx.builder, containerType.llvmType,
-                                                               vectorStorage, 0, "vectordata");
-                LLVMValueRef base = LLVMBuildLoad2(ctx.builder, dataType.llvmType, dataAddress,
-                                                   "vectordatavalue");
-                element = LLVMBuildGEP2(ctx.builder, elementType.llvmType, base, &index, 1,
-                                        "foreachelement");
+                LLVMValueRef dataAddress =
+                    LLVMBuildStructGEP2(ctx.builder, containerType.llvmType, vectorStorage, 0, "vectordata");
+                LLVMValueRef base = LLVMBuildLoad2(ctx.builder, dataType.llvmType, dataAddress, "vectordatavalue");
+                element = LLVMBuildGEP2(ctx.builder, elementType.llvmType, base, &index, 1, "foreachelement");
             }
             ctx.declare_var(itemName, element, itemType);
             generate_node(ctx, node.children[2]);
@@ -2902,8 +2921,7 @@ namespace Codegen
                 return nullptr;
             }
             std::string mangledName = mangle_function_name(funcName);
-            bool isCFunc = node.type == Parser::NodeType::CFunctionDef ||
-                           node.type == Parser::NodeType::CFunctionDecl;
+            bool isCFunc = node.type == Parser::NodeType::CFunctionDef || node.type == Parser::NodeType::CFunctionDecl;
 
             std::vector<LLVMTypeRef> paramTypes;
             for (const auto &child : node.children)
@@ -2921,10 +2939,8 @@ namespace Codegen
             {
                 for (const auto &child : node.children)
                 {
-                    if (child.type == Parser::NodeType::PrimitiveType ||
-                        child.type == Parser::NodeType::PointerType ||
-                        child.type == Parser::NodeType::ReferenceType ||
-                        child.type == Parser::NodeType::CustomType)
+                    if (child.type == Parser::NodeType::PrimitiveType || child.type == Parser::NodeType::PointerType ||
+                        child.type == Parser::NodeType::ReferenceType || child.type == Parser::NodeType::CustomType)
                     {
                         returnCGType = resolve_type(ctx, child);
                         retType = returnCGType.llvmType;
@@ -2932,8 +2948,7 @@ namespace Codegen
                     }
                 }
             }
-            LLVMTypeRef funcType =
-                LLVMFunctionType(retType, paramTypes.data(), paramTypes.size(), 0);
+            LLVMTypeRef funcType = LLVMFunctionType(retType, paramTypes.data(), paramTypes.size(), 0);
 
             LLVMValueRef func = LLVMGetNamedFunction(ctx.module, mangledName.c_str());
             if (!func)
@@ -2952,6 +2967,21 @@ namespace Codegen
                 // A naked assembly body returns through its target ABI and cannot safely be copied into a caller.
                 LLVMAddAttributeAtIndex(func, LLVMAttributeFunctionIndex,
                                         LLVMCreateEnumAttribute(ctx.llvmCtx, noInlineKind, 0));
+            }
+
+            // `cdec __wasi_<name>` declares an import from the WASI preview 1 module. The attributes are only
+            // understood by the WebAssembly backend and are ignored when generating code for other targets.
+            if (node.type == Parser::NodeType::CFunctionDecl && funcName.rfind("__wasi_", 0) == 0)
+            {
+                const std::string importName = funcName.substr(7);
+                const char *importModule = "wasi_snapshot_preview1";
+                LLVMAddAttributeAtIndex(func, LLVMAttributeFunctionIndex,
+                                        LLVMCreateStringAttribute(ctx.llvmCtx, "wasm-import-module", 18, importModule,
+                                                                  static_cast<unsigned>(strlen(importModule))));
+                LLVMAddAttributeAtIndex(func, LLVMAttributeFunctionIndex,
+                                        LLVMCreateStringAttribute(ctx.llvmCtx, "wasm-import-name", 16,
+                                                                  importName.c_str(),
+                                                                  static_cast<unsigned>(importName.size())));
             }
 
             if (node.type == Parser::NodeType::CFunctionDecl)
@@ -2976,8 +3006,7 @@ namespace Codegen
                     LLVMValueRef argVal = LLVMGetParam(func, argIdx++);
                     CGType pType = resolve_type(ctx, child.children[0]);
 
-                    LLVMValueRef alloca =
-                        LLVMBuildAlloca(ctx.builder, pType.llvmType, argName.c_str());
+                    LLVMValueRef alloca = LLVMBuildAlloca(ctx.builder, pType.llvmType, argName.c_str());
                     LLVMBuildStore(ctx.builder, argVal, alloca);
                     ctx.declare_var(argName, alloca, pType);
                 }
@@ -3003,11 +3032,11 @@ namespace Codegen
             if (node.children.empty() || node.children.front().type != Parser::NodeType::Identifier)
                 throw std::runtime_error("function declaration is missing its name");
             const std::string declaredName = std::string(std::get<std::string_view>(node.children.front().value));
-            const std::string name = !ctx.currentClassName.empty()
-                                         ? ctx.currentClassName + "." + declaredName
-                                         : (!ctx.currentNamespaceName.empty()
-                                                ? ctx.currentNamespaceName + "." + declaredName
-                                                : declaredName);
+            const std::string name =
+                !ctx.currentClassName.empty()
+                    ? ctx.currentClassName + "." + declaredName
+                    : (!ctx.currentNamespaceName.empty() ? ctx.currentNamespaceName + "." + declaredName
+                                                         : declaredName);
             std::vector<LLVMTypeRef> argumentTypes;
             FunctionSignature signature;
             signature.llvmName = mangle_function_name(name);
@@ -3039,12 +3068,12 @@ namespace Codegen
                     throw std::runtime_error("generic function declarations require a definition");
                 }
             }
-            signature.llvmFunctionType = LLVMFunctionType(LLVMVoidTypeInContext(ctx.llvmCtx),
-                                                           argumentTypes.data(), argumentTypes.size(), 0);
+            signature.llvmFunctionType =
+                LLVMFunctionType(LLVMVoidTypeInContext(ctx.llvmCtx), argumentTypes.data(), argumentTypes.size(), 0);
             signature.llvmFunction = LLVMGetNamedFunction(ctx.module, signature.llvmName.c_str());
             if (!signature.llvmFunction)
-                signature.llvmFunction = LLVMAddFunction(ctx.module, signature.llvmName.c_str(),
-                                                         signature.llvmFunctionType);
+                signature.llvmFunction =
+                    LLVMAddFunction(ctx.module, signature.llvmName.c_str(), signature.llvmFunctionType);
             functions[name] = std::move(signature);
             return functions.at(name).llvmFunction;
         }
@@ -3055,11 +3084,11 @@ namespace Codegen
                 throw std::runtime_error("function definition is missing its name");
 
             const std::string declaredName = std::string(std::get<std::string_view>(node.children.front().value));
-            const std::string baseName = !ctx.currentClassName.empty()
-                                             ? ctx.currentClassName + "." + declaredName
-                                             : (!ctx.currentNamespaceName.empty()
-                                                    ? ctx.currentNamespaceName + "." + declaredName
-                                                    : declaredName);
+            const std::string baseName =
+                !ctx.currentClassName.empty()
+                    ? ctx.currentClassName + "." + declaredName
+                    : (!ctx.currentNamespaceName.empty() ? ctx.currentNamespaceName + "." + declaredName
+                                                         : declaredName);
             if (ctx.functionSpecializationName.empty())
             {
                 for (const auto &child : node.children)
@@ -3110,8 +3139,8 @@ namespace Codegen
             if (!body)
                 throw std::runtime_error("function definition is missing its body");
 
-            LLVMTypeRef functionType = LLVMFunctionType(LLVMVoidTypeInContext(ctx.llvmCtx),
-                                                        argumentTypes.data(), argumentTypes.size(), 0);
+            LLVMTypeRef functionType =
+                LLVMFunctionType(LLVMVoidTypeInContext(ctx.llvmCtx), argumentTypes.data(), argumentTypes.size(), 0);
             LLVMValueRef function = LLVMGetNamedFunction(ctx.module, llvmName.c_str());
             if (!function)
                 function = LLVMAddFunction(ctx.module, llvmName.c_str(), functionType);
@@ -3159,8 +3188,8 @@ namespace Codegen
                 const unsigned cleanupArgIndex = argument;
                 const uint64_t cleanupLeafCount = slotCleanupLeafCounts[index];
                 argument += static_cast<unsigned>(cleanupLeafCount);
-                ctx.tunnelSlots[slotName] = {outputIndex, slotType, slotOptionals[index], flagIndex,
-                                             cleanupArgIndex, cleanupLeafCount};
+                ctx.tunnelSlots[slotName] = {outputIndex, slotType,        slotOptionals[index],
+                                             flagIndex,   cleanupArgIndex, cleanupLeafCount};
                 if (slotOptionals[index])
                     LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0),
                                    LLVMGetParam(function, flagIndex));
@@ -3194,10 +3223,7 @@ namespace Codegen
             LLVMValueRef value = generate_node(ctx, node.children[0]);
             if (!value)
                 throw std::runtime_error("return expression did not produce a value");
-            value = cast_value(ctx.builder, value, returnType, ctx.currentReturnType.isSigned,
-                               "returncast");
-            // Returning an owned local transfers its allocation to the caller.
-            // Do not release it while unwinding this function's cleanup scopes.
+            value = cast_value(ctx.builder, value, returnType, ctx.currentReturnType.isSigned, "returncast");
             if (node.children[0].type == Parser::NodeType::Identifier)
             {
                 const std::string name = std::string(std::get<std::string_view>(node.children[0].value));
@@ -3226,25 +3252,31 @@ namespace Codegen
             {
                 funcName = std::string(std::get<std::string_view>(node.children[0].value));
             }
-            else if (node.children[0].type == Parser::NodeType::ScopeAccessExpr &&
-                     !node.children[0].children.empty())
+            else if (node.children[0].type == Parser::NodeType::ScopeAccessExpr && !node.children[0].children.empty())
             {
                 auto qualified_scope_name = [&](const auto &self, const Parser::ASTNode &scope) -> std::string
                 {
                     if (scope.type == Parser::NodeType::Identifier)
                         return std::string(std::get<std::string_view>(scope.value));
                     if (scope.type == Parser::NodeType::ScopeAccessExpr && !scope.children.empty())
-                        return self(self, scope.children.front()) + "::" +
-                               std::string(std::get<std::string_view>(scope.value));
+                        return self(self, scope.children.front()) +
+                               "::" + std::string(std::get<std::string_view>(scope.value));
                     throw std::runtime_error("malformed scoped function call");
                 };
-                const std::string className = qualified_scope_name(
-                    qualified_scope_name, node.children[0].children[0]);
+                const std::string className = qualified_scope_name(qualified_scope_name, node.children[0].children[0]);
                 const std::string methodName = std::string(std::get<std::string_view>(node.children[0].value));
                 funcName = className + "." + methodName;
+                // C-ABI functions keep their plain symbol name even when declared inside a namespace,
+                // so `std::exit(1)` must resolve to the C function `exit` when no `std.exit` exists.
+                if (!structTypes.count(className) &&
+                    !LLVMGetNamedFunction(ctx.module, mangle_function_name(funcName).c_str()))
+                {
+                    // C functions are plain LLVM symbols and are not tracked in `functions`.
+                    if (LLVMGetNamedFunction(ctx.module, mangle_function_name(methodName).c_str()))
+                        funcName = methodName;
+                }
             }
-            else if (node.children[0].type == Parser::NodeType::MemberAccessExpr &&
-                     !node.children[0].children.empty())
+            else if (node.children[0].type == Parser::NodeType::MemberAccessExpr && !node.children[0].children.empty())
             {
                 receiverType = lvalue_type(ctx, node.children[0].children[0]);
                 if (receiverType.structName.empty())
@@ -3270,12 +3302,13 @@ namespace Codegen
                 ++genericCount;
             std::vector<CGType> inferredGenericArguments;
             std::string inferredTemplateName;
-            if (genericCount == 0 && receiver && receiverType.structName.rfind("Vector.", 0) == 0)
+            if (genericCount == 0 && receiver && is_vector_specialization(receiverType.structName))
             {
                 const size_t method = funcName.rfind('.');
                 if (method != std::string::npos)
                 {
-                    inferredTemplateName = "Vector" + funcName.substr(method);
+                    inferredTemplateName =
+                        receiverType.structName.substr(0, receiverType.structName.find('.')) + funcName.substr(method);
                     const auto templateIt = genericFunctionTemplates.find(inferredTemplateName);
                     const auto vectorType = structTypes.find(receiverType.structName);
                     if (templateIt != genericFunctionTemplates.end() && vectorType != structTypes.end() &&
@@ -3297,8 +3330,8 @@ namespace Codegen
                     const size_t specialization = funcName.find('.');
                     const size_t method = funcName.rfind('.');
                     if (specialization != std::string::npos && method != std::string::npos && method > specialization)
-                        templateIt = genericFunctionTemplates.find(
-                            funcName.substr(0, specialization) + funcName.substr(method));
+                        templateIt =
+                            genericFunctionTemplates.find(funcName.substr(0, specialization) + funcName.substr(method));
                 }
                 if (templateIt == genericFunctionTemplates.end())
                     throw std::runtime_error("unknown generic function '" + funcName + "'");
@@ -3340,10 +3373,6 @@ namespace Codegen
                     const auto callerLoopStack = ctx.loopStack;
                     const auto callerLoopCleanupDepths = ctx.loopCleanupDepths;
                     const auto callerValidPayloadAddresses = ctx.validPayloadAddresses;
-                    // A specialization is emitted while lowering the caller, but its
-                    // locals and cleanup tokens belong solely to the specialization.
-                    // Keeping caller cleanup state here can emit a drop that refers to
-                    // an instruction in the wrong LLVM function after a move.
                     ctx.scopes = {callerScopes.front()};
                     ctx.cleanupScopes = {{}};
                     ctx.pendingTunnelResultTargets.clear();
@@ -3408,13 +3437,13 @@ namespace Codegen
                     {
                         // A receiver such as `self` is stored in a local pointer slot.
                         // Pass the pointee, not the address of that slot, to another method.
-                        receiverValue = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver,
-                                                       "pointer_self_receiver");
+                        receiverValue =
+                            LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "pointer_self_receiver");
                     }
                     else if (!receiverParameter.isPointerLike)
                     {
-                        receiverValue = LLVMBuildLoad2(ctx.builder, receiverParameter.llvmType,
-                                                       receiver, "value_self_receiver");
+                        receiverValue =
+                            LLVMBuildLoad2(ctx.builder, receiverParameter.llvmType, receiver, "value_self_receiver");
                     }
                     args.push_back(receiverValue);
                 }
@@ -3422,7 +3451,7 @@ namespace Codegen
                 {
                     const CGType &parameterType = signature.paramTypes[i - 1 - genericCount + (receiver ? 1 : 0)];
                     const Parser::ASTNode &argumentNode = node.children[i];
-                    if (parameterType.structName == "str" &&
+                    if (std_base_name(parameterType.structName) == "str" &&
                         argumentNode.type == Parser::NodeType::StringLiteral)
                     {
                         LLVMValueRef slice = LLVMBuildAlloca(ctx.builder, parameterType.llvmType, "strliteral");
@@ -3432,11 +3461,12 @@ namespace Codegen
                         LLVMValueRef lengthField =
                             LLVMBuildStructGEP2(ctx.builder, parameterType.llvmType, slice, 1, "strlen");
                         LLVMBuildStore(ctx.builder, data, dataField);
-                        LLVMBuildStore(ctx.builder,
-                                       LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx),
-                                                    decode_string_literal(
-                                                        std::get<std::string_view>(argumentNode.value)).size(), 0),
-                                       lengthField);
+                        LLVMBuildStore(
+                            ctx.builder,
+                            LLVMConstInt(LLVMInt64TypeInContext(ctx.llvmCtx),
+                                         decode_string_literal(std::get<std::string_view>(argumentNode.value)).size(),
+                                         0),
+                            lengthField);
                         args.push_back(LLVMBuildLoad2(ctx.builder, parameterType.llvmType, slice, "strvalue"));
                     }
                     else
@@ -3462,11 +3492,13 @@ namespace Codegen
                             reserved.push_back(target->second);
                             const auto presence = ctx.reservedTunnelPresenceTargetScopes[scope].find(name);
                             reservedPresenceTargets.push_back(
-                                presence == ctx.reservedTunnelPresenceTargetScopes[scope].end() ? nullptr : presence->second);
+                                presence == ctx.reservedTunnelPresenceTargetScopes[scope].end() ? nullptr
+                                                                                                : presence->second);
                             const auto cleanup = ctx.reservedTunnelCleanupTargetScopes[scope].find(name);
-                            reservedCleanupTargets.push_back(cleanup == ctx.reservedTunnelCleanupTargetScopes[scope].end()
-                                                                ? std::vector<LLVMValueRef>{}
-                                                                : cleanup->second);
+                            reservedCleanupTargets.push_back(cleanup ==
+                                                                     ctx.reservedTunnelCleanupTargetScopes[scope].end()
+                                                                 ? std::vector<LLVMValueRef>{}
+                                                                 : cleanup->second);
                             reservationScopes.push_back(scope);
                             found = true;
                             break;
@@ -3489,7 +3521,8 @@ namespace Codegen
                         }
                     }
                     else if (signature.tunnelSlotTypes.size() > 1)
-                        throw std::runtime_error("unbound multi-output call requires one compatible reserve declaration per tunnel slot");
+                        throw std::runtime_error(
+                            "unbound multi-output call requires one compatible reserve declaration per tunnel slot");
                 }
                 const bool useProvidedTunnelTargets =
                     ctx.pendingTunnelResultTargets.size() == signature.tunnelSlotTypes.size();
@@ -3507,23 +3540,23 @@ namespace Codegen
                     if (signature.tunnelSlotOptional[index])
                     {
                         LLVMBuildStore(ctx.builder, LLVMConstNull(slotType.llvmType), output);
-                        present = useProvidedTunnelTargets &&
-                                          ctx.pendingTunnelPresenceTargets.size() == signature.tunnelSlotTypes.size()
-                                      ? ctx.pendingTunnelPresenceTargets[index]
-                                      : LLVMBuildAlloca(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx),
-                                                        "tunnelpresent");
+                        present =
+                            useProvidedTunnelTargets &&
+                                    ctx.pendingTunnelPresenceTargets.size() == signature.tunnelSlotTypes.size()
+                                ? ctx.pendingTunnelPresenceTargets[index]
+                                : LLVMBuildAlloca(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), "tunnelpresent");
                         LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0), present);
                         args.push_back(present);
                     }
                     const uint64_t cleanupLeafCount = signature.tunnelSlotCleanupLeafCounts[index];
                     for (uint64_t leaf = 0; leaf < cleanupLeafCount; ++leaf)
                     {
-                        LLVMValueRef token = useProvidedTunnelTargets &&
-                                               ctx.pendingTunnelCleanupTargets.size() == signature.tunnelSlotTypes.size() &&
-                                               leaf < ctx.pendingTunnelCleanupTargets[index].size()
-                                           ? ctx.pendingTunnelCleanupTargets[index][leaf]
-                                           : LLVMBuildAlloca(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx),
-                                                             "tunnelcleanup");
+                        LLVMValueRef token =
+                            useProvidedTunnelTargets &&
+                                    ctx.pendingTunnelCleanupTargets.size() == signature.tunnelSlotTypes.size() &&
+                                    leaf < ctx.pendingTunnelCleanupTargets[index].size()
+                                ? ctx.pendingTunnelCleanupTargets[index][leaf]
+                                : LLVMBuildAlloca(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), "tunnelcleanup");
                         LLVMBuildStore(ctx.builder, LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), 0, 0), token);
                         args.push_back(token);
                     }
@@ -3543,14 +3576,14 @@ namespace Codegen
                     LLVMTypeRef optionalType = LLVMStructTypeInContext(ctx.llvmCtx, optionalFields, 2, 0);
                     LLVMValueRef result = LLVMConstNull(optionalType);
                     LLVMValueRef present = LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx),
-                                                           outputPresenceAddresses.front(), "callpresent");
+                                                          outputPresenceAddresses.front(), "callpresent");
                     LLVMValueRef payload = LLVMBuildLoad2(ctx.builder, signature.tunnelSlotTypes.front().llvmType,
-                                                           outputAddresses.front(), "callpayload");
+                                                          outputAddresses.front(), "callpayload");
                     result = LLVMBuildInsertValue(ctx.builder, result, present, 0, "calloptionalpresent");
                     return LLVMBuildInsertValue(ctx.builder, result, payload, 1, "calloptional");
                 }
-                return LLVMBuildLoad2(ctx.builder, signature.tunnelSlotTypes.front().llvmType,
-                                      outputAddresses.front(), "callresult");
+                return LLVMBuildLoad2(ctx.builder, signature.tunnelSlotTypes.front().llvmType, outputAddresses.front(),
+                                      "callresult");
             }
             const size_t explicitParameters = paramCount - (receiver ? 1 : 0);
             if (node.children.size() - 1 - genericCount != explicitParameters)
@@ -3567,13 +3600,13 @@ namespace Codegen
                 LLVMValueRef receiverValue = receiver;
                 if (receiverParameter.isPointerLike && receiverType.isPointerLike)
                 {
-                    receiverValue = LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver,
-                                                   "pointer_self_receiver");
+                    receiverValue =
+                        LLVMBuildLoad2(ctx.builder, receiverType.llvmType, receiver, "pointer_self_receiver");
                 }
                 else if (!receiverParameter.isPointerLike)
                 {
-                    receiverValue = LLVMBuildLoad2(ctx.builder, receiverParameter.llvmType,
-                                                   receiver, "value_self_receiver");
+                    receiverValue =
+                        LLVMBuildLoad2(ctx.builder, receiverParameter.llvmType, receiver, "value_self_receiver");
                 }
                 args.push_back(receiverValue);
             }
@@ -3582,8 +3615,8 @@ namespace Codegen
             {
                 const size_t parameterIndex = i - 1 - genericCount + (receiver ? 1 : 0);
                 const Parser::ASTNode &argumentNode = node.children[i];
-                if (argumentNode.type == Parser::NodeType::StringLiteral &&
-                    cstrInfo != structTypes.end() && paramTypes[parameterIndex] == cstrInfo->second.llvmType)
+                if (argumentNode.type == Parser::NodeType::StringLiteral && cstrInfo != structTypes.end() &&
+                    paramTypes[parameterIndex] == cstrInfo->second.llvmType)
                 {
                     CGType cstrType;
                     cstrType.llvmType = cstrInfo->second.llvmType;
@@ -3591,18 +3624,16 @@ namespace Codegen
                     args.push_back(generate_value_for_target(ctx, argumentNode, cstrType));
                     continue;
                 }
-                if (normalFunction != functions.end() &&
-                    parameterIndex < normalFunction->second.paramTypes.size())
+                if (normalFunction != functions.end() && parameterIndex < normalFunction->second.paramTypes.size())
                 {
-                    args.push_back(generate_call_argument(ctx, argumentNode,
-                                                         normalFunction->second.paramTypes[parameterIndex]));
+                    args.push_back(
+                        generate_call_argument(ctx, argumentNode, normalFunction->second.paramTypes[parameterIndex]));
                     continue;
                 }
                 LLVMValueRef argument = generate_node(ctx, argumentNode);
                 if (!argument)
                     throw std::runtime_error("call argument did not produce a value");
-                args.push_back(cast_value(ctx.builder, argument, paramTypes[parameterIndex], true,
-                                          "callargcast"));
+                args.push_back(cast_value(ctx.builder, argument, paramTypes[parameterIndex], true, "callargcast"));
             }
 
             const char *callName = LLVMGetTypeKind(LLVMGetReturnType(funcType)) == LLVMVoidTypeKind ? "" : "calltmp";
@@ -3623,7 +3654,8 @@ namespace Codegen
                 const std::string sourceName = std::string(std::get<std::string_view>(node.children.front().value));
                 if (VarInfo *sourceVar = ctx.find_var(sourceName))
                 {
-                    for (auto scope = ctx.cleanupScopes.rbegin(); scope != ctx.cleanupScopes.rend() && !sourceCleanup; ++scope)
+                    for (auto scope = ctx.cleanupScopes.rbegin(); scope != ctx.cleanupScopes.rend() && !sourceCleanup;
+                         ++scope)
                         for (CleanupValue &candidate : *scope)
                             if (candidate.address == sourceVar->address)
                             {
@@ -3641,10 +3673,11 @@ namespace Codegen
             for (uint64_t leaf = 0; leaf < found->second.cleanupLeafCount; ++leaf)
             {
                 const bool freshAllocation = is_fresh_allocation_expr(node.children.front());
-                LLVMValueRef active = leaf < sourceTokens.size()
-                                        ? LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx),
-                                                         sourceTokens[leaf], "tunnelactive")
-                                        : LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), freshAllocation ? 1 : 0, 0);
+                LLVMValueRef active =
+                    leaf < sourceTokens.size()
+                        ? LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), sourceTokens[leaf],
+                                         "tunnelactive")
+                        : LLVMConstInt(LLVMInt1TypeInContext(ctx.llvmCtx), freshAllocation ? 1 : 0, 0);
                 LLVMBuildStore(ctx.builder, active,
                                LLVMGetParam(ctx.currentFunction, found->second.cleanupArgIndex + leaf));
             }
@@ -3677,7 +3710,8 @@ namespace Codegen
                 const std::string name = std::string(std::get<std::string_view>(node.children[index * 2 + 1].value));
                 const bool optional = signature->second.tunnelSlotOptional[index];
                 const CGType &payloadType = signature->second.tunnelSlotTypes[index];
-                if ((optional && (!type.isOptional || !type.innerType || type.innerType->llvmType != payloadType.llvmType)) ||
+                if ((optional &&
+                     (!type.isOptional || !type.innerType || type.innerType->llvmType != payloadType.llvmType)) ||
                     (!optional && type.llvmType != payloadType.llvmType))
                     throw std::runtime_error("multi-result reserve binding type does not match its tunnel output");
                 LLVMValueRef address = LLVMBuildAlloca(ctx.builder, type.llvmType, name.c_str());
@@ -3743,13 +3777,12 @@ namespace Codegen
             }
             if (node.children.size() == 1)
             {
-                if (ctx.reservedTunnelTargetScopes.back().find(name) !=
-                    ctx.reservedTunnelTargetScopes.back().end())
+                if (ctx.reservedTunnelTargetScopes.back().find(name) != ctx.reservedTunnelTargetScopes.back().end())
                     throw std::runtime_error("duplicate tunnel reservation in the same scope");
-                const LLVMValueRef payloadTarget = type.isOptional
-                                                       ? LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 1,
-                                                                             "reserve_tunnel_payload")
-                                                       : address;
+                const LLVMValueRef payloadTarget =
+                    type.isOptional
+                        ? LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 1, "reserve_tunnel_payload")
+                        : address;
                 ctx.reservedTunnelTargetScopes.back()[name] = payloadTarget;
                 if (type.isOptional)
                     ctx.reservedTunnelPresenceTargetScopes.back()[name] =
@@ -3786,8 +3819,7 @@ namespace Codegen
                     for (unsigned i = 0; i < inputCount; ++i)
                     {
                         LLVMValueRef value = generate_node(ctx, source.children[i + 1]);
-                        arguments.push_back(cast_value(ctx.builder, value, parameterTypes[i], true,
-                                                       "reserveargcast"));
+                        arguments.push_back(cast_value(ctx.builder, value, parameterTypes[i], true, "reserveargcast"));
                     }
                     arguments.push_back(address);
                     LLVMBuildCall2(ctx.builder, functionType, function, arguments.data(), arguments.size(), "");
@@ -3798,17 +3830,18 @@ namespace Codegen
             if (source.type == Parser::NodeType::CallExpr && !source.children.empty() &&
                 source.children.front().type == Parser::NodeType::Identifier)
             {
-                const auto callee = functions.find(std::string(std::get<std::string_view>(source.children.front().value)));
+                const auto callee =
+                    functions.find(std::string(std::get<std::string_view>(source.children.front().value)));
                 if (callee != functions.end() && callee->second.tunnelSlotTypes.size() == 1)
                 {
-                    LLVMValueRef payloadTarget = type.isOptional
-                                                     ? LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 1,
-                                                                           "reserve_tunnel_payload")
-                                                     : address;
-                    LLVMValueRef presenceTarget = type.isOptional
-                                                      ? LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 0,
-                                                                            "reserve_tunnel_present")
-                                                      : nullptr;
+                    LLVMValueRef payloadTarget =
+                        type.isOptional
+                            ? LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 1, "reserve_tunnel_payload")
+                            : address;
+                    LLVMValueRef presenceTarget =
+                        type.isOptional
+                            ? LLVMBuildStructGEP2(ctx.builder, type.llvmType, address, 0, "reserve_tunnel_present")
+                            : nullptr;
                     ctx.pendingTunnelResultTargets = {payloadTarget};
                     ctx.pendingTunnelPresenceTargets = {presenceTarget};
                     ctx.pendingTunnelCleanupTargets.clear();
@@ -3935,16 +3968,13 @@ namespace Codegen
             VarInfo *optional = ctx.find_var(name);
             if (!optional || !optional->type.isOptional)
                 throw std::runtime_error("valid requires a declared optional value");
-            LLVMValueRef flagAddress = LLVMBuildStructGEP2(ctx.builder, optional->type.llvmType,
-                                                           optional->address, 0, "optionalflagaddr");
-            LLVMValueRef flag = LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), flagAddress,
-                                                "optionalflag");
-            LLVMBasicBlockRef thenBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "validthen");
-            LLVMBasicBlockRef elseBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "validelse");
-            LLVMBasicBlockRef mergeBB =
-                LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "validcont");
+            LLVMValueRef flagAddress =
+                LLVMBuildStructGEP2(ctx.builder, optional->type.llvmType, optional->address, 0, "optionalflagaddr");
+            LLVMValueRef flag =
+                LLVMBuildLoad2(ctx.builder, LLVMInt1TypeInContext(ctx.llvmCtx), flagAddress, "optionalflag");
+            LLVMBasicBlockRef thenBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "validthen");
+            LLVMBasicBlockRef elseBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "validelse");
+            LLVMBasicBlockRef mergeBB = LLVMAppendBasicBlockInContext(ctx.llvmCtx, ctx.currentFunction, "validcont");
             LLVMBuildCondBr(ctx.builder, flag, thenBB, elseBB);
             LLVMPositionBuilderAtEnd(ctx.builder, thenBB);
             ctx.validPayloadAddresses.push_back(optional->address);
@@ -3962,14 +3992,17 @@ namespace Codegen
         }
 
         default:
-            throw std::runtime_error("internal error: parser construct reached LLVM generation without a lowering rule");
+            throw std::runtime_error(
+                "internal error: parser construct reached LLVM generation without a lowering rule");
         }
         return nullptr;
     }
 
     static LLVMValueRef build_main_arguments(Context &ctx, LLVMValueRef entry)
     {
-        const auto stringInfo = structTypes.find("String");
+        auto stringInfo = structTypes.find("std::String");
+        if (stringInfo == structTypes.end())
+            stringInfo = structTypes.find("String");
         if (stringInfo == structTypes.end())
             throw std::runtime_error("String[argc] main requires the standard String type");
 
@@ -4016,8 +4049,10 @@ namespace Codegen
         LLVMValueRef copyValues[] = {data, source, length};
         LLVMBuildCall2(ctx.builder, copyType, copy, copyValues, 3, "");
         LLVMBuildStore(ctx.builder, data, LLVMBuildStructGEP2(ctx.builder, stringType, stringSlot, 0, "argdatafield"));
-        LLVMBuildStore(ctx.builder, length, LLVMBuildStructGEP2(ctx.builder, stringType, stringSlot, 1, "arglengthfield"));
-        LLVMBuildStore(ctx.builder, length, LLVMBuildStructGEP2(ctx.builder, stringType, stringSlot, 2, "argcapacityfield"));
+        LLVMBuildStore(ctx.builder, length,
+                       LLVMBuildStructGEP2(ctx.builder, stringType, stringSlot, 1, "arglengthfield"));
+        LLVMBuildStore(ctx.builder, length,
+                       LLVMBuildStructGEP2(ctx.builder, stringType, stringSlot, 2, "argcapacityfield"));
         LLVMBuildStore(ctx.builder, LLVMBuildAdd(ctx.builder, current, LLVMConstInt(i64, 1, 0), "nextarg"), index);
         LLVMBuildBr(ctx.builder, loop);
 

@@ -6,6 +6,7 @@
 #include <llvm-c/BitWriter.h>
 #include <llvm-c/Core.h>
 #include <llvm-c/ExecutionEngine.h>
+#include <llvm-c/IRReader.h>
 #include <llvm-c/Support.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
@@ -38,8 +39,17 @@ extern "C"
     void LLVMInitializeRISCVAsmParser();
     void LLVMInitializeRISCVAsmPrinter();
 
-    // Baked-in ELF LLD wrapper
+    void LLVMInitializeWebAssemblyTarget();
+    void LLVMInitializeWebAssemblyTargetInfo();
+    void LLVMInitializeWebAssemblyTargetMC();
+    void LLVMInitializeWebAssemblyAsmParser();
+    void LLVMInitializeWebAssemblyAsmPrinter();
+
     bool lld_elf_link(const char **args, size_t count);
+    bool lld_macho_link(const char **args, size_t count);
+    bool lld_mingw_link(const char **args, size_t count);
+    bool lld_coff_link(const char **args, size_t count);
+    bool lld_wasm_link(const char **args, size_t count);
 
 #ifdef __cplusplus
 }

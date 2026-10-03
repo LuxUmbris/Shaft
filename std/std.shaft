@@ -1,6 +1,9 @@
 // Shaft std
 using global cstr -> *u8;
 
+namespace std
+{
+
 class str
 {
     mut *u8 data;
@@ -10,7 +13,7 @@ class str
         tunnel self.length == 0 -> bool result;
     }
 
-    def find(&self, str needle) -> bool contains, ?-> u64 position
+    def find(&self, std::str needle) -> bool contains, ?-> u64 position
     {
         mut bool found = false;
         mut u64 foundPosition = 0;
@@ -53,9 +56,9 @@ class str
         }
     }
 
-    def substr(&self, u64 offset, u64 requested) -> str result
+    def substr(&self, u64 offset, u64 requested) -> std::str result
     {
-        reserve mut str substring;
+        reserve mut std::str substring;
         if (offset < self.length)
         {
             mut u64 end = offset + requested;
@@ -65,11 +68,11 @@ class str
             }
             substring.data = __shaft_alloc_or_exit(end - offset + 1);
             substring.length = end - offset;
-            mut u64 offset = 0;
-            while (offset < substring.length)
+            mut u64 i = 0;
+            while (i < substring.length)
             {
-                substring.data[offset] = self.data[offset + offset];
-                offset = offset + 1;
+                substring.data[i] = self.data[offset + i];
+                i = i + 1;
             }
             substring.data[substring.length] = 0;
         }
@@ -79,7 +82,7 @@ class str
             substring.length = 0;
             substring.data[0] = 0;
         }
-        tunnel substring -> str result;
+        tunnel substring -> std::str result;
     }
 }
 
@@ -214,7 +217,7 @@ namespace Math
 
     def sin(f64 radians) -> f64 result
     {
-        tunnel Math::cos(radians - 1.5707963267948966) -> f64 result;
+        tunnel std::Math::cos(radians - 1.5707963267948966) -> f64 result;
     }
 }
 
@@ -234,9 +237,9 @@ class String
         tunnel self.length == 0 -> bool result;
     }
 
-    def substr(&self, u64 offset, u64 requested) -> String result
+    def substr(&self, u64 offset, u64 requested) -> std::String result
     {
-        reserve mut String substring;
+        reserve mut std::String substring;
         if (offset < self.length)
         {
             mut u64 end = offset + requested;
@@ -247,11 +250,11 @@ class String
             substring.data = __shaft_alloc_or_exit(end - offset + 1);
             substring.capacity = end - offset;
             substring.length = end - offset;
-            mut u64 offset = 0;
-            while (offset < substring.length)
+            mut u64 i = 0;
+            while (i < substring.length)
             {
-                substring.data[offset] = self.data[offset];
-                offset = offset + 1;
+                substring.data[i] = self.data[offset + i];
+                i = i + 1;
             }
             substring.data[substring.length] = 0;
         }
@@ -262,18 +265,18 @@ class String
             substring.length = 0;
             substring.data[0] = 0;
         }
-        tunnel substring -> String result;
+        tunnel substring -> std::String result;
     }
 
-    def get_view(&self) -> str result
+    def get_view(&self) -> std::str result
     {
-        reserve mut str view;
+        reserve mut std::str view;
         view.data = self.data;
         view.length = self.length;
-        tunnel view -> str result;
+        tunnel view -> std::str result;
     }
 
-    def find(&self, str needle) -> bool contains, ?-> u64 position
+    def find(&self, std::str needle) -> bool contains, ?-> u64 position
     {
         mut bool found = false;
         mut u64 foundPosition = 0;
@@ -316,7 +319,7 @@ class String
         }
     }
 
-    def compare(&self, str other) -> i32 result
+    def compare(&self, std::str other) -> i32 result
     {
         mut i32 comparison = 0;
         mut u64 offset = 0;
@@ -353,7 +356,7 @@ class String
         tunnel comparison -> i32 result;
     }
 
-    def equals(&self, str other) -> bool result
+    def equals(&self, std::str other) -> bool result
     {
         mut bool equal = self.length == other.length;
         mut u64 offset = 0;
@@ -382,9 +385,9 @@ class String
         tunnel value -> u64 result;
     }
 
-    def reverse(&self) -> String result
+    def reverse(&self) -> std::String result
     {
-        reserve mut String reversed;
+        reserve mut std::String reversed;
         reversed.data = __shaft_alloc_or_exit(self.length + 1);
         reversed.length = 0;
         reversed.capacity = self.length;
@@ -396,7 +399,7 @@ class String
         }
         reversed.length = self.length;
         reversed.data[reversed.length] = 0;
-        tunnel reversed -> String result;
+        tunnel reversed -> std::String result;
     }
 
     def capacity(&self) -> u64 result
@@ -560,7 +563,7 @@ class String
         }
     }
 
-    def append(*String string, str value) -> bool result
+    def append(*std::String string, std::str value) -> bool result
     {
         mut bool was_resized = false;
         mut u64 new_capacity = string.capacity;
@@ -596,9 +599,9 @@ class String
         tunnel true -> bool result;
     }
 
-    def append_string(&mut self, &String other) -> bool result
+    def append_string(&mut self, &std::String other) -> bool result
     {
-        str buffer = {other.length, other.data};
+        std::str buffer = {other.length, other.data};
         self.append(buffer);
         tunnel true -> bool result;
     }
@@ -610,7 +613,7 @@ class String
         {
             valueLength = valueLength + 1;
         }
-        mut str buffer;
+        mut std::str buffer;
         buffer.data = value;
         buffer.length = valueLength;
         self.append(buffer);
@@ -620,18 +623,18 @@ class String
 
 namespace String
 {
-    def with_capacity(u64 requested) -> String result
+    def with_capacity(u64 requested) -> std::String result
     {
-        reserve mut String value;
+        reserve mut std::String value;
         value.data = __shaft_alloc(requested + 1);
         value.length = 0;
         value.capacity = requested;
-        tunnel value -> String result;
+        tunnel value -> std::String result;
     }
 
-    def from_int(i64 value) -> String result
+    def from_int(i64 value) -> std::String result
     {
-        reserve mut String resultValue;
+        reserve mut std::String resultValue;
         resultValue.data = __shaft_alloc_or_exit(32);
         resultValue.capacity = 31;
         resultValue.length = __sys_int_to_string(
@@ -640,12 +643,12 @@ namespace String
             resultValue.capacity
         );
         resultValue.data[resultValue.length] = 0;
-        tunnel resultValue -> String result;
+        tunnel resultValue -> std::String result;
     }
 
-    def from_float(f64 value) -> String result
+    def from_float(f64 value) -> std::String result
     {
-        reserve mut String resultValue;
+        reserve mut std::String resultValue;
         resultValue.data = __shaft_alloc_or_exit(64);
         resultValue.capacity = 63;
         resultValue.length = __sys_float_to_string(
@@ -654,34 +657,34 @@ namespace String
             resultValue.capacity
         );
         resultValue.data[resultValue.length] = 0;
-        tunnel resultValue -> String result;
+        tunnel resultValue -> std::String result;
     }
 
-    def from_u64(u64 value) -> String result
+    def from_u64(u64 value) -> std::String result
     {
-        reserve mut String resultValue;
+        reserve mut std::String resultValue;
         resultValue.data = __shaft_alloc_or_exit(32);
         resultValue.capacity = 31;
         resultValue.length = __sys_uint_to_string(value, resultValue.data, resultValue.capacity);
         resultValue.data[resultValue.length] = 0;
-        tunnel resultValue -> String result;
+        tunnel resultValue -> std::String result;
     }
 
-    def from_i8(i8 value) -> String result { tunnel String::from_int(value) -> String result; }
-    def from_u8(u8 value) -> String result { tunnel String::from_u64(value) -> String result; }
-    def from_i16(i16 value) -> String result { tunnel String::from_int(value) -> String result; }
-    def from_u16(u16 value) -> String result { tunnel String::from_u64(value) -> String result; }
-    def from_i32(i32 value) -> String result { tunnel String::from_int(value) -> String result; }
-    def from_u32(u32 value) -> String result { tunnel String::from_u64(value) -> String result; }
-    def from_i64(i64 value) -> String result { tunnel String::from_int(value) -> String result; }
+    def from_i8(i8 value) -> std::String result { tunnel std::String::from_int(value) -> std::String result; }
+    def from_u8(u8 value) -> std::String result { tunnel std::String::from_u64(value) -> std::String result; }
+    def from_i16(i16 value) -> std::String result { tunnel std::String::from_int(value) -> std::String result; }
+    def from_u16(u16 value) -> std::String result { tunnel std::String::from_u64(value) -> std::String result; }
+    def from_i32(i32 value) -> std::String result { tunnel std::String::from_int(value) -> std::String result; }
+    def from_u32(u32 value) -> std::String result { tunnel std::String::from_u64(value) -> std::String result; }
+    def from_i64(i64 value) -> std::String result { tunnel std::String::from_int(value) -> std::String result; }
 
-    def from_usize(usize value) -> String result { tunnel String::from_u64(value) -> String result; }
-    def from_f32(f32 value) -> String result { tunnel String::from_float(value) -> String result; }
-    def from_f64(f64 value) -> String result { tunnel String::from_float(value) -> String result; }
+    def from_usize(usize value) -> std::String result { tunnel std::String::from_u64(value) -> std::String result; }
+    def from_f32(f32 value) -> std::String result { tunnel std::String::from_float(value) -> std::String result; }
+    def from_f64(f64 value) -> std::String result { tunnel std::String::from_float(value) -> std::String result; }
 
-    def from_bool(bool value) -> String result
+    def from_bool(bool value) -> std::String result
     {
-        reserve mut String resultValue;
+        reserve mut std::String resultValue;
         if (value)
         {
             resultValue.data = __shaft_alloc_or_exit(5); resultValue.capacity = 4; resultValue.length = 4;
@@ -693,37 +696,37 @@ namespace String
             resultValue.data[0] = 102; resultValue.data[1] = 97; resultValue.data[2] = 108; resultValue.data[3] = 115; resultValue.data[4] = 101;
         }
         resultValue.data[resultValue.length] = 0;
-        tunnel resultValue -> String result;
+        tunnel resultValue -> std::String result;
     }
 
-    def from_char(char value) -> String result
+    def from_char(char value) -> std::String result
     {
-        reserve mut String resultValue;
+        reserve mut std::String resultValue;
         resultValue.data = __shaft_alloc_or_exit(2); resultValue.capacity = 1; resultValue.length = 1;
         resultValue.data[0] = value; resultValue.data[1] = 0;
-        tunnel resultValue -> String result;
+        tunnel resultValue -> std::String result;
     }
 
-    def from_str(str value) -> String result
+    def from_str(std::str value) -> std::String result
     {
-        reserve mut String resultValue;
+        reserve mut std::String resultValue;
         resultValue.data = __shaft_alloc_or_exit(value.length + 1);
         resultValue.capacity = value.length + 1;
         memcpy(resultValue.data, value.data, value.length);
         resultValue.length = value.length;
         resultValue.data[resultValue.length] = 0;
-        tunnel resultValue -> String result;
+        tunnel resultValue -> std::String result;
     }
 }
 
 namespace str
 {
-    def from_cstr(cstr value) -> str result
+    def from_cstr(cstr value) -> std::str result
     {
-        reserve mut str resultValue;
+        reserve mut std::str resultValue;
         resultValue.length = __cstr_strlen(value);
         resultValue.data = value;
-        tunnel resultValue -> str result;
+        tunnel resultValue -> std::str result;
     }
 }
 
@@ -754,14 +757,14 @@ class<T> Vector
 
     def push(&mut self, T value)<T> -> bool result
     {
-        tunnel vector_push::<T>(self, value) -> bool result;
+        tunnel std::vector_push::<T>(self, value) -> bool result;
     }
 
     def pop(&mut self)<T> -> bool popped, ?-> T value
     {
         reserve bool popped;
         reserve ?T value;
-        vector_pop::<T>(self);
+        std::vector_pop::<T>(self);
         tunnel popped -> bool popped;
         valid value
         {
@@ -770,7 +773,7 @@ class<T> Vector
     }
 }
 
-def vector_init(*Vector<T> vector, u64 requested)<T> -> bool result
+def vector_init(*std::Vector<T> vector, u64 requested)<T> -> bool result
 {
     vector.capacity = 8;
     while (vector.capacity < requested)
@@ -783,12 +786,12 @@ def vector_init(*Vector<T> vector, u64 requested)<T> -> bool result
     tunnel true -> bool result;
 }
 
-def vector_data(*Vector<T> vector)<T> -> *T result
+def vector_data(*std::Vector<T> vector)<T> -> *T result
 {
     tunnel vector.data -> *T result;
 }
 
-def vector_push(*Vector<T> vector, T value)<T> -> bool result
+def vector_push(*std::Vector<T> vector, T value)<T> -> bool result
 {
     if (vector.length == vector.capacity)
     {
@@ -817,7 +820,7 @@ def vector_push(*Vector<T> vector, T value)<T> -> bool result
     tunnel true -> bool result;
 }
 
-def vector_pop(*Vector<T> vector)<T> -> bool popped, ?-> T value
+def vector_pop(*std::Vector<T> vector)<T> -> bool popped, ?-> T value
 {
     mut bool hasValue = vector.length > 0;
     tunnel hasValue -> bool popped;
@@ -828,7 +831,7 @@ def vector_pop(*Vector<T> vector)<T> -> bool popped, ?-> T value
     }
 }
 
-def vector_reserve(*Vector<T> vector, u64 requested)<T> -> bool result
+def vector_reserve(*std::Vector<T> vector, u64 requested)<T> -> bool result
 {
     mut bool reserved = true;
     if (requested > vector.capacity)
@@ -893,7 +896,7 @@ namespace Collections
         tunnel value ^ (value >> 31) -> u64 result;
     }
 
-    def hash_str(str value) -> u64 result
+    def hash_str(std::str value) -> u64 result
     {
         mut u64 hashValue = 14695981039346656037;
         mut u64 offset = 0;
@@ -908,10 +911,10 @@ namespace Collections
 
     def hash(T value)<T> -> u64 result
     {
-        tunnel Collections::hash_u64(value) -> u64 result;
+        tunnel std::Collections::hash_u64(value) -> u64 result;
     }
 
-    def hash_map_u64_init(*Collections::HashMap<u64, u64> map, u64 requested) -> bool result
+    def hash_map_u64_init(*std::Collections::HashMap<u64, u64> map, u64 requested) -> bool result
     {
         map.capacity = 8;
         while (map.capacity < requested * 2)
@@ -933,7 +936,7 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_map_u64_reserve(*Collections::HashMap<u64, u64> map, u64 requested) -> bool result
+    def hash_map_u64_reserve(*std::Collections::HashMap<u64, u64> map, u64 requested) -> bool result
     {
         if (requested * 2 > map.capacity)
         {
@@ -950,7 +953,7 @@ namespace Collections
             {
                 if (map.occupied[oldSlot] != 0)
                 {
-                    slot = Collections::hash_u64(map.keys[oldSlot]) & (newCapacity - 1);
+                    slot = std::Collections::hash_u64(map.keys[oldSlot]) & (newCapacity - 1);
                     while (newOccupied[slot] != 0) { slot = (slot + 1) & (newCapacity - 1); }
                     newOccupied[slot] = 1;
                     newKeys[slot] = map.keys[oldSlot];
@@ -964,16 +967,16 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_map_u64_insert(*Collections::HashMap<u64, u64> map, u64 key, u64 value) -> bool result
+    def hash_map_u64_insert(*std::Collections::HashMap<u64, u64> map, u64 key, u64 value) -> bool result
     {
         if (map.capacity != 0 && map.length + 1 > map.capacity / 2)
         {
-            reserve bool grown = Collections::hash_map_u64_reserve(map, map.length + 1);
+            reserve bool grown = std::Collections::hash_map_u64_reserve(map, map.length + 1);
         }
         mut bool inserted = false;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash_u64(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash_u64(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -999,12 +1002,12 @@ namespace Collections
         tunnel inserted -> bool result;
     }
 
-    def hash_map_u64_contains(*Collections::HashMap<u64, u64> map, u64 key) -> bool result
+    def hash_map_u64_contains(*std::Collections::HashMap<u64, u64> map, u64 key) -> bool result
     {
         mut bool found = false;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash_u64(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash_u64(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -1024,12 +1027,12 @@ namespace Collections
         tunnel found -> bool result;
     }
 
-    def hash_map_u64_get(*Collections::HashMap<u64, u64> map, u64 key) -> u64 result
+    def hash_map_u64_get(*std::Collections::HashMap<u64, u64> map, u64 key) -> u64 result
     {
         mut u64 value = 0;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash_u64(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash_u64(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -1049,12 +1052,12 @@ namespace Collections
         tunnel value -> u64 result;
     }
 
-    def hash_map_u64_len(*Collections::HashMap<u64, u64> map) -> u64 result
+    def hash_map_u64_len(*std::Collections::HashMap<u64, u64> map) -> u64 result
     {
         tunnel map.length -> u64 result;
     }
 
-    def hash_map_init(*Collections::HashMap<K, V> map, u64 requested)<K, V> -> bool result
+    def hash_map_init(*std::Collections::HashMap<K, V> map, u64 requested)<K, V> -> bool result
     {
         map.capacity = 8;
         while (map.capacity < requested * 2)
@@ -1076,7 +1079,7 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_map_reserve(*Collections::HashMap<K, V> map, u64 requested)<K, V> -> bool result
+    def hash_map_reserve(*std::Collections::HashMap<K, V> map, u64 requested)<K, V> -> bool result
     {
         if (requested * 2 > map.capacity)
         {
@@ -1103,7 +1106,7 @@ namespace Collections
             {
                 if (map.occupied[oldSlot] != 0)
                 {
-                    newSlot = Collections::hash::<K>(map.keys[oldSlot]) & (newCapacity - 1);
+                    newSlot = std::Collections::hash::<K>(map.keys[oldSlot]) & (newCapacity - 1);
                     while (newOccupied[newSlot] != 0)
                     {
                         newSlot = (newSlot + 1) & (newCapacity - 1);
@@ -1125,16 +1128,16 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_map_insert(*Collections::HashMap<K, V> map, K key, V value)<K, V> -> bool result
+    def hash_map_insert(*std::Collections::HashMap<K, V> map, K key, V value)<K, V> -> bool result
     {
         if (map.capacity != 0 && map.length + 1 > map.capacity / 2)
         {
-            reserve bool grown = Collections::hash_map_reserve::<K, V>(map, map.length + 1);
+            reserve bool grown = std::Collections::hash_map_reserve::<K, V>(map, map.length + 1);
         }
         mut bool inserted = false;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash::<K>(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash::<K>(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -1160,12 +1163,12 @@ namespace Collections
         tunnel inserted -> bool result;
     }
 
-    def hash_map_contains(*Collections::HashMap<K, V> map, K key)<K, V> -> bool result
+    def hash_map_contains(*std::Collections::HashMap<K, V> map, K key)<K, V> -> bool result
     {
         mut bool found = false;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash::<K>(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash::<K>(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -1185,12 +1188,12 @@ namespace Collections
         tunnel found -> bool result;
     }
 
-    def hash_map_get(*Collections::HashMap<K, V> map, K key)<K, V> -> bool found, ?-> V value
+    def hash_map_get(*std::Collections::HashMap<K, V> map, K key)<K, V> -> bool found, ?-> V value
     {
         mut bool hasValue = false;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash::<K>(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash::<K>(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -1211,12 +1214,12 @@ namespace Collections
         tunnel hasValue -> bool found;
     }
 
-    def hash_map_get_or(*Collections::HashMap<K, V> map, K key, V fallback)<K, V> -> V result
+    def hash_map_get_or(*std::Collections::HashMap<K, V> map, K key, V fallback)<K, V> -> V result
     {
         mut V value = fallback;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash::<K>(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash::<K>(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -1236,12 +1239,12 @@ namespace Collections
         tunnel value -> V result;
     }
 
-    def hash_map_len(*Collections::HashMap<K, V> map)<K, V> -> u64 result
+    def hash_map_len(*std::Collections::HashMap<K, V> map)<K, V> -> u64 result
     {
         tunnel map.length -> u64 result;
     }
 
-    def str_equal(str left, str right) -> bool result
+    def str_equal(std::str left, std::str right) -> bool result
     {
         mut bool equal = left.length == right.length;
         mut u64 offset = 0;
@@ -1257,7 +1260,7 @@ namespace Collections
         tunnel equal -> bool result;
     }
 
-    def hash_map_str_reserve(*Collections::HashMap<str, V> map, u64 requested)<V> -> bool result
+    def hash_map_str_reserve(*std::Collections::HashMap<std::str, V> map, u64 requested)<V> -> bool result
     {
         if (requested * 2 > map.capacity)
         {
@@ -1270,7 +1273,7 @@ namespace Collections
             {
                 newCapacity = newCapacity * 2;
             }
-            mut *str newKeys = __shaft_alloc_or_exit(newCapacity * map.key_size);
+            mut *std::str newKeys = __shaft_alloc_or_exit(newCapacity * map.key_size);
             mut *V newValues = __shaft_alloc_or_exit(newCapacity * map.value_size);
             mut *u8 newOccupied = __shaft_alloc_or_exit(newCapacity);
             mut u64 newSlot = 0;
@@ -1284,7 +1287,7 @@ namespace Collections
             {
                 if (map.occupied[oldSlot] != 0)
                 {
-                    newSlot = Collections::hash_str(map.keys[oldSlot]) & (newCapacity - 1);
+                    newSlot = std::Collections::hash_str(map.keys[oldSlot]) & (newCapacity - 1);
                     while (newOccupied[newSlot] != 0)
                     {
                         newSlot = (newSlot + 1) & (newCapacity - 1);
@@ -1306,16 +1309,16 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_map_str_insert(*Collections::HashMap<str, V> map, str key, V value)<V> -> bool result
+    def hash_map_str_insert(*std::Collections::HashMap<std::str, V> map, std::str key, V value)<V> -> bool result
     {
         if (map.capacity != 0 && map.length + 1 > map.capacity / 2)
         {
-            reserve bool grown = Collections::hash_map_str_reserve::<V>(map, map.length + 1);
+            reserve bool grown = std::Collections::hash_map_str_reserve::<V>(map, map.length + 1);
         }
         mut bool inserted = false;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash_str(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash_str(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -1328,7 +1331,7 @@ namespace Collections
                     inserted = true;
                     break;
                 }
-                reserve bool equal = Collections::str_equal(map.keys[slot], key);
+                reserve bool equal = std::Collections::str_equal(map.keys[slot], key);
                 if (equal)
                 {
                     map.values[slot] = value;
@@ -1342,12 +1345,12 @@ namespace Collections
         tunnel inserted -> bool result;
     }
 
-    def hash_map_str_contains(*Collections::HashMap<str, V> map, str key)<V> -> bool result
+    def hash_map_str_contains(*std::Collections::HashMap<std::str, V> map, std::str key)<V> -> bool result
     {
         mut bool found = false;
         if (map.capacity != 0)
         {
-            mut u64 slot = Collections::hash_str(key) & (map.capacity - 1);
+            mut u64 slot = std::Collections::hash_str(key) & (map.capacity - 1);
             mut u64 probes = 0;
             while (probes < map.capacity)
             {
@@ -1355,7 +1358,7 @@ namespace Collections
                 {
                     break;
                 }
-                reserve bool equal = Collections::str_equal(map.keys[slot], key);
+                reserve bool equal = std::Collections::str_equal(map.keys[slot], key);
                 if (equal)
                 {
                     found = true;
@@ -1368,7 +1371,7 @@ namespace Collections
         tunnel found -> bool result;
     }
 
-    def hash_set_u64_init(*Collections::HashSet<u64> set, u64 requested) -> bool result
+    def hash_set_u64_init(*std::Collections::HashSet<u64> set, u64 requested) -> bool result
     {
         set.capacity = 8;
         while (set.capacity < requested * 2)
@@ -1388,7 +1391,7 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_set_u64_reserve(*Collections::HashSet<u64> set, u64 requested) -> bool result
+    def hash_set_u64_reserve(*std::Collections::HashSet<u64> set, u64 requested) -> bool result
     {
         if (requested * 2 > set.capacity)
         {
@@ -1404,7 +1407,7 @@ namespace Collections
             {
                 if (set.occupied[oldSlot] != 0)
                 {
-                    slot = Collections::hash_u64(set.values[oldSlot]) & (newCapacity - 1);
+                    slot = std::Collections::hash_u64(set.values[oldSlot]) & (newCapacity - 1);
                     while (newOccupied[slot] != 0) { slot = (slot + 1) & (newCapacity - 1); }
                     newOccupied[slot] = 1;
                     newValues[slot] = set.values[oldSlot];
@@ -1417,16 +1420,16 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_set_u64_insert(*Collections::HashSet<u64> set, u64 value) -> bool result
+    def hash_set_u64_insert(*std::Collections::HashSet<u64> set, u64 value) -> bool result
     {
         if (set.capacity != 0 && set.length + 1 > set.capacity / 2)
         {
-            reserve bool grown = Collections::hash_set_u64_reserve(set, set.length + 1);
+            reserve bool grown = std::Collections::hash_set_u64_reserve(set, set.length + 1);
         }
         mut bool inserted = false;
         if (set.capacity != 0)
         {
-            mut u64 slot = Collections::hash_u64(value) & (set.capacity - 1);
+            mut u64 slot = std::Collections::hash_u64(value) & (set.capacity - 1);
             mut u64 probes = 0;
             while (probes < set.capacity)
             {
@@ -1449,12 +1452,12 @@ namespace Collections
         tunnel inserted -> bool result;
     }
 
-    def hash_set_u64_contains(*Collections::HashSet<u64> set, u64 value) -> bool result
+    def hash_set_u64_contains(*std::Collections::HashSet<u64> set, u64 value) -> bool result
     {
         mut bool found = false;
         if (set.capacity != 0)
         {
-            mut u64 slot = Collections::hash_u64(value) & (set.capacity - 1);
+            mut u64 slot = std::Collections::hash_u64(value) & (set.capacity - 1);
             mut u64 probes = 0;
             while (probes < set.capacity)
             {
@@ -1474,12 +1477,12 @@ namespace Collections
         tunnel found -> bool result;
     }
 
-    def hash_set_u64_len(*Collections::HashSet<u64> set) -> u64 result
+    def hash_set_u64_len(*std::Collections::HashSet<u64> set) -> u64 result
     {
         tunnel set.length -> u64 result;
     }
 
-    def hash_set_init(*Collections::HashSet<T> set, u64 requested)<T> -> bool result
+    def hash_set_init(*std::Collections::HashSet<T> set, u64 requested)<T> -> bool result
     {
         set.capacity = 8;
         while (set.capacity < requested * 2)
@@ -1499,7 +1502,7 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_set_reserve(*Collections::HashSet<T> set, u64 requested)<T> -> bool result
+    def hash_set_reserve(*std::Collections::HashSet<T> set, u64 requested)<T> -> bool result
     {
         if (requested * 2 > set.capacity)
         {
@@ -1525,7 +1528,7 @@ namespace Collections
             {
                 if (set.occupied[oldSlot] != 0)
                 {
-                    newSlot = Collections::hash::<T>(set.values[oldSlot]) & (newCapacity - 1);
+                    newSlot = std::Collections::hash::<T>(set.values[oldSlot]) & (newCapacity - 1);
                     while (newOccupied[newSlot] != 0)
                     {
                         newSlot = (newSlot + 1) & (newCapacity - 1);
@@ -1544,16 +1547,16 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_set_insert(*Collections::HashSet<T> set, T value)<T> -> bool result
+    def hash_set_insert(*std::Collections::HashSet<T> set, T value)<T> -> bool result
     {
         if (set.capacity != 0 && set.length + 1 > set.capacity / 2)
         {
-            reserve bool grown = Collections::hash_set_reserve::<T>(set, set.length + 1);
+            reserve bool grown = std::Collections::hash_set_reserve::<T>(set, set.length + 1);
         }
         mut bool inserted = false;
         if (set.capacity != 0)
         {
-            mut u64 slot = Collections::hash::<T>(value) & (set.capacity - 1);
+            mut u64 slot = std::Collections::hash::<T>(value) & (set.capacity - 1);
             mut u64 probes = 0;
             while (probes < set.capacity)
             {
@@ -1576,12 +1579,12 @@ namespace Collections
         tunnel inserted -> bool result;
     }
 
-    def hash_set_contains(*Collections::HashSet<T> set, T value)<T> -> bool result
+    def hash_set_contains(*std::Collections::HashSet<T> set, T value)<T> -> bool result
     {
         mut bool found = false;
         if (set.capacity != 0)
         {
-            mut u64 slot = Collections::hash::<T>(value) & (set.capacity - 1);
+            mut u64 slot = std::Collections::hash::<T>(value) & (set.capacity - 1);
             mut u64 probes = 0;
             while (probes < set.capacity)
             {
@@ -1601,12 +1604,12 @@ namespace Collections
         tunnel found -> bool result;
     }
 
-    def hash_set_len(*Collections::HashSet<T> set)<T> -> u64 result
+    def hash_set_len(*std::Collections::HashSet<T> set)<T> -> u64 result
     {
         tunnel set.length -> u64 result;
     }
 
-    def hash_set_str_reserve(*Collections::HashSet<str> set, u64 requested) -> bool result
+    def hash_set_str_reserve(*std::Collections::HashSet<std::str> set, u64 requested) -> bool result
     {
         if (requested * 2 > set.capacity)
         {
@@ -1619,7 +1622,7 @@ namespace Collections
             {
                 newCapacity = newCapacity * 2;
             }
-            mut *str newValues = __shaft_alloc_or_exit(newCapacity * set.value_size);
+            mut *std::str newValues = __shaft_alloc_or_exit(newCapacity * set.value_size);
             mut *u8 newOccupied = __shaft_alloc_or_exit(newCapacity);
             mut u64 newSlot = 0;
             while (newSlot < newCapacity)
@@ -1632,7 +1635,7 @@ namespace Collections
             {
                 if (set.occupied[oldSlot] != 0)
                 {
-                    newSlot = Collections::hash_str(set.values[oldSlot]) & (newCapacity - 1);
+                    newSlot = std::Collections::hash_str(set.values[oldSlot]) & (newCapacity - 1);
                     while (newOccupied[newSlot] != 0)
                     {
                         newSlot = (newSlot + 1) & (newCapacity - 1);
@@ -1651,16 +1654,16 @@ namespace Collections
         tunnel true -> bool result;
     }
 
-    def hash_set_str_insert(*Collections::HashSet<str> set, str value) -> bool result
+    def hash_set_str_insert(*std::Collections::HashSet<std::str> set, std::str value) -> bool result
     {
         if (set.capacity != 0 && set.length + 1 > set.capacity / 2)
         {
-            reserve bool grown = Collections::hash_set_str_reserve(set, set.length + 1);
+            reserve bool grown = std::Collections::hash_set_str_reserve(set, set.length + 1);
         }
         mut bool inserted = false;
         if (set.capacity != 0)
         {
-            mut u64 slot = Collections::hash_str(value) & (set.capacity - 1);
+            mut u64 slot = std::Collections::hash_str(value) & (set.capacity - 1);
             mut u64 probes = 0;
             while (probes < set.capacity)
             {
@@ -1672,7 +1675,7 @@ namespace Collections
                     inserted = true;
                     break;
                 }
-                reserve bool equal = Collections::str_equal(set.values[slot], value);
+                reserve bool equal = std::Collections::str_equal(set.values[slot], value);
                 if (equal)
                 {
                     break;
@@ -1684,12 +1687,12 @@ namespace Collections
         tunnel inserted -> bool result;
     }
 
-    def hash_set_str_contains(*Collections::HashSet<str> set, str value) -> bool result
+    def hash_set_str_contains(*std::Collections::HashSet<std::str> set, std::str value) -> bool result
     {
         mut bool found = false;
         if (set.capacity != 0)
         {
-            mut u64 slot = Collections::hash_str(value) & (set.capacity - 1);
+            mut u64 slot = std::Collections::hash_str(value) & (set.capacity - 1);
             mut u64 probes = 0;
             while (probes < set.capacity)
             {
@@ -1697,7 +1700,7 @@ namespace Collections
                 {
                     break;
                 }
-                reserve bool equal = Collections::str_equal(set.values[slot], value);
+                reserve bool equal = std::Collections::str_equal(set.values[slot], value);
                 if (equal)
                 {
                     found = true;
@@ -1782,16 +1785,16 @@ namespace Math
 
 namespace Time
 {
-    def now() -> TimePoint result
+    def now() -> std::TimePoint result
     {
-        reserve TimePoint value;
+        reserve std::TimePoint value;
         __sys_gettime_parts(&value.seconds, &value.nanoseconds);
-        tunnel value -> TimePoint result;
+        tunnel value -> std::TimePoint result;
     }
 
     def unix_seconds() -> i64 result
     {
-        reserve TimePoint value = Time::now();
+        reserve std::TimePoint value = std::Time::now();
         tunnel value.seconds -> i64 result;
     }
 
@@ -1802,164 +1805,30 @@ namespace Time
     }
 }
 
-enum Key : i32
-{
-    None = 0,
-    Backspace = 8,
-    Tab = 9,
-    Enter = 13,
-    Escape = 27,
-    Space = 32,
-    Digit0 = 48,
-    Digit1,
-    Digit2,
-    Digit3,
-    Digit4,
-    Digit5,
-    Digit6,
-    Digit7,
-    Digit8,
-    Digit9,
-    A = 65,
-    B,
-    C,
-    D,
-    E,
-    F,
-    G,
-    H,
-    I,
-    J,
-    K,
-    L,
-    M,
-    N,
-    O,
-    P,
-    Q,
-    R,
-    S,
-    T,
-    U,
-    V,
-    W,
-    X,
-    Y,
-    Z,
-    ArrowUp = 257,
-    ArrowDown,
-    ArrowRight,
-    ArrowLeft,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Insert,
-    Delete,
-    F1 = 272,
-    F2,
-    F3,
-    F4,
-    F5,
-    F6,
-    F7,
-    F8,
-    F9,
-    F10,
-    F11,
-    F12,
-
-    ShiftArrowUp = 4353,
-    ShiftArrowDown,
-    ShiftArrowRight,
-    ShiftArrowLeft,
-    AltArrowUp = 8449,
-    AltArrowDown,
-    AltArrowRight,
-    AltArrowLeft,
-    ControlArrowUp = 16641,
-    ControlArrowDown,
-    ControlArrowRight,
-    ControlArrowLeft,
-
-    AltA = 8257,
-    AltB,
-    AltC,
-    AltD,
-    AltE,
-    AltF,
-    AltG,
-    AltH,
-    AltI,
-    AltJ,
-    AltK,
-    AltL,
-    AltM,
-    AltN,
-    AltO,
-    AltP,
-    AltQ,
-    AltR,
-    AltS,
-    AltT,
-    AltU,
-    AltV,
-    AltW,
-    AltX,
-    AltY,
-    AltZ,
-    ControlA = 16449,
-    ControlB,
-    ControlC,
-    ControlD,
-    ControlE,
-    ControlF,
-    ControlG,
-    ControlH,
-    ControlI,
-    ControlJ,
-    ControlK,
-    ControlL,
-    ControlM,
-    ControlN,
-    ControlO,
-    ControlP,
-    ControlQ,
-    ControlR,
-    ControlS,
-    ControlT,
-    ControlU,
-    ControlV,
-    ControlW,
-    ControlX,
-    ControlY,
-    ControlZ,
-}
-
-def write(i32 descriptor, str content) -> i64 result
+def write(i32 descriptor, std::str content) -> i64 result
 {
     tunnel __sys_write(descriptor, content.data, content.length) -> i64 result;
 }
 
-def print(str content) -> i64 result
+def print(std::str content) -> i64 result
 {
-    tunnel write(1, content) -> i64 result;
+    tunnel std::write(1, content) -> i64 result;
 }
 
-def println(str content) -> i64 result
+def println(std::str content) -> i64 result
 {
-    reserve i64 ignored = write(1, content);
+    reserve i64 ignored = std::write(1, content);
     tunnel __sys_write(1, "\n", 1) -> i64 result;
 }
 
-def eprint(str content) -> i64 result
+def eprint(std::str content) -> i64 result
 {
-    tunnel write(2, content) -> i64 result;
+    tunnel std::write(2, content) -> i64 result;
 }
 
-def eprintln(str content) -> i64 result
+def eprintln(std::str content) -> i64 result
 {
-    reserve i64 ignored = write(2, content);
+    reserve i64 ignored = std::write(2, content);
     tunnel __sys_write(2, "\n", 1) -> i64 result;
 }
 
@@ -1983,11 +1852,11 @@ cdec __sys_gettime_parts(*i64 seconds, *i64 nanoseconds) -> i32;
 cdec __sys_sleep_ms(u64 milliseconds) -> i32;
 cdec __sys_restore_terminal();
 cdec __cstr_strlen(*i8 text) -> u64;
-cdec __main(String[] args);
+cdec __main(std::String[] args);
 
 cdef __shaft_entry(i32 argc, **i8 argv) -> i32
 {
-    mut String[] args = __shaft_alloc_or_exit(argc * 24);
+    mut std::String[] args = __shaft_alloc_or_exit(argc * 24);
     mut u64 argumentIndex = 0;
     while (argumentIndex < argc)
     {
@@ -2010,9 +1879,9 @@ cdec __sys_readline(*u8 buffer, u64 capacity) -> i64;
 cdec __sys_close(i64 descriptor) -> i64;
 cdec __sys_file_size(i64 descriptor) -> i64;
 
-def readline() -> String result
+def readline() -> std::String result
 {
-    reserve mut String line = String::with_capacity(65536);
+    reserve mut std::String line = std::String::with_capacity(65536);
     reserve i64 length = __sys_readline(line.data, line.capacity);
     if (length < 0)
     {
@@ -2023,12 +1892,12 @@ def readline() -> String result
         line.length = length;
     }
     line.data[line.length] = 0;
-    tunnel line -> String result;
+    tunnel line -> std::String result;
 }
 
 cdec __sys_read(i64 descriptor, *i8 buffer, u64 count) -> i64;
 
-def read_bytes(u64 requested) -> String result
+def read_bytes(u64 requested) -> std::String result
 {
     mut *i8 buffer = __shaft_alloc_or_exit(requested);
 
@@ -2050,18 +1919,18 @@ def read_bytes(u64 requested) -> String result
         total = total + n;
     }
 
-    mut str slice;
+    mut std::str slice;
     slice.length = total;
     slice.data = buffer;
     slice.data[slice.length] = 0;
-    reserve String s = String::from_str(slice);
+    reserve std::String s = std::String::from_str(slice);
 
-    tunnel s -> String result;
+    tunnel s -> std::String result;
 }
 
 namespace File
 {
-    def read_into(str pathname, *u8 buffer, u64 capacity) -> i64 result
+    def read_into(std::str pathname, *u8 buffer, u64 capacity) -> i64 result
     {
         mut i64 received = 0;
         reserve i64 descriptor = __sys_open(pathname.data, 0);
@@ -2081,16 +1950,16 @@ namespace File
         tunnel received -> i64 result;
     }
 
-    def read(str pathname) -> String result
+    def read(std::str pathname) -> std::String result
     {
-        reserve mut String content;
+        reserve mut std::String content;
         reserve i64 descriptor = __sys_open(pathname.data, 0);
         if (descriptor >= 0)
         {
             reserve i64 size = __sys_file_size(descriptor);
             if (size >= 0)
             {
-                content = String::with_capacity(size);
+                content = std::String::with_capacity(size);
                 mut u64 received = 0;
                 while (received < size)
                 {
@@ -2106,10 +1975,10 @@ namespace File
             }
             __sys_close(descriptor);
         }
-        tunnel content -> String result;
+        tunnel content -> std::String result;
     }
 
-    def write_at_mode(str pathname, str content, i32 openMode) -> i64 result
+    def write_at_mode(std::str pathname, std::str content, i32 openMode) -> i64 result
     {
         mut i64 total = 0;
         reserve i64 descriptor = __sys_open(pathname.data, openMode);
@@ -2129,22 +1998,155 @@ namespace File
         tunnel total -> i64 result;
     }
 
-    def write(str pathname, str content) -> i64 result
+    def write(std::str pathname, std::str content) -> i64 result
     {
-        tunnel File::write_at_mode(pathname, content, 1) -> i64 result;
+        tunnel std::File::write_at_mode(pathname, content, 1) -> i64 result;
     }
 
-    def append(str pathname, str content) -> i64 result
+    def append(std::str pathname, std::str content) -> i64 result
     {
-        tunnel File::write_at_mode(pathname, content, 3) -> i64 result;
+        tunnel std::File::write_at_mode(pathname, content, 3) -> i64 result;
     }
 }
 
 namespace Process
 {
-    def read_key() -> Key result // returns immediately
+    enum Key : i32
     {
-        tunnel __sys_read_key() -> Key result;
+        None = 0,
+        Backspace = 8,
+        Tab = 9,
+        Enter = 13,
+        Escape = 27,
+        Space = 32,
+        Digit0 = 48,
+        Digit1,
+        Digit2,
+        Digit3,
+        Digit4,
+        Digit5,
+        Digit6,
+        Digit7,
+        Digit8,
+        Digit9,
+        A = 65,
+        B,
+        C,
+        D,
+        E,
+        F,
+        G,
+        H,
+        I,
+        J,
+        K,
+        L,
+        M,
+        N,
+        O,
+        P,
+        Q,
+        R,
+        S,
+        T,
+        U,
+        V,
+        W,
+        X,
+        Y,
+        Z,
+        ArrowUp = 257,
+        ArrowDown,
+        ArrowRight,
+        ArrowLeft,
+        Home,
+        End,
+        PageUp,
+        PageDown,
+        Insert,
+        Delete,
+        F1 = 272,
+        F2,
+        F3,
+        F4,
+        F5,
+        F6,
+        F7,
+        F8,
+        F9,
+        F10,
+        F11,
+        F12,
+    
+        ShiftArrowUp = 4353,
+        ShiftArrowDown,
+        ShiftArrowRight,
+        ShiftArrowLeft,
+        AltArrowUp = 8449,
+        AltArrowDown,
+        AltArrowRight,
+        AltArrowLeft,
+        ControlArrowUp = 16641,
+        ControlArrowDown,
+        ControlArrowRight,
+        ControlArrowLeft,
+    
+        AltA = 8257,
+        AltB,
+        AltC,
+        AltD,
+        AltE,
+        AltF,
+        AltG,
+        AltH,
+        AltI,
+        AltJ,
+        AltK,
+        AltL,
+        AltM,
+        AltN,
+        AltO,
+        AltP,
+        AltQ,
+        AltR,
+        AltS,
+        AltT,
+        AltU,
+        AltV,
+        AltW,
+        AltX,
+        AltY,
+        AltZ,
+        ControlA = 16449,
+        ControlB,
+        ControlC,
+        ControlD,
+        ControlE,
+        ControlF,
+        ControlG,
+        ControlH,
+        ControlI,
+        ControlJ,
+        ControlK,
+        ControlL,
+        ControlM,
+        ControlN,
+        ControlO,
+        ControlP,
+        ControlQ,
+        ControlR,
+        ControlS,
+        ControlT,
+        ControlU,
+        ControlV,
+        ControlW,
+        ControlX,
+        ControlY,
+        ControlZ,
+    }
+    def read_key() -> std::Process::Key result // returns immediately
+    {
+        tunnel __sys_read_key() -> std::Process::Key result;
     }
 
     cdec __sys_read_key() -> i32;
@@ -2182,26 +2184,26 @@ namespace Process
     struct Output
     {
         mut i32 status;
-        mut String stdout;
-        mut String stderr;
+        mut std::String stdout;
+        mut std::String stderr;
     }
 
     class Command
     {
-        mut String program;
-        mut Vector<String> arguments;
+        mut std::String program;
+        mut std::Vector<std::String> arguments;
 
-        def new(str program) -> Process::Command result
+        def new(std::str program) -> std::Process::Command result
         {
-            reserve mut Process::Command command;
-            command.program = String::from_str(program);
-            vector_init::<String>(&command.arguments, 4);
-            tunnel command -> Process::Command result;
+            reserve mut std::Process::Command command;
+            command.program = std::String::from_str(program);
+            std::vector_init::<std::String>(&command.arguments, 4);
+            tunnel command -> std::Process::Command result;
         }
 
-        def arg(&mut self, str value) -> bool result
+        def arg(&mut self, std::str value) -> bool result
         {
-            reserve String argument = String::from_str(value);
+            reserve std::String argument = std::String::from_str(value);
             tunnel self.arguments.push(argument) -> bool result;
         }
 
@@ -2210,7 +2212,7 @@ namespace Process
             mut u64 count = self.arguments.length + 2;
             mut **i8 arguments = __shaft_alloc_or_exit(count * 8);
             arguments[0] = self.program.data;
-            mut *String argumentData = vector_data::<String>(&self.arguments);
+            mut *std::String argumentData = std::vector_data::<std::String>(&self.arguments);
             mut u64 argumentIndex = 0;
             while (argumentIndex < self.arguments.length)
             {
@@ -2221,25 +2223,25 @@ namespace Process
             tunnel __sys_process_spawn(self.program.data, arguments, stdoutDescriptor, stderrDescriptor) -> i64 result;
         }
 
-        def spawn(&self) -> Process::Child result
+        def spawn(&self) -> std::Process::Child result
         {
-            reserve mut Process::Child child;
+            reserve mut std::Process::Child child;
             child.pid = self.spawn_with_redirects(-1, -1);
-            tunnel child -> Process::Child result;
+            tunnel child -> std::Process::Child result;
         }
 
         def status(&self) -> i32 result
         {
-            reserve mut Process::Child child = self.spawn();
+            reserve mut std::Process::Child child = self.spawn();
             tunnel child.wait() -> i32 result;
         }
 
-        def output(&self) -> Process::Output result
+        def output(&self) -> std::Process::Output result
         {
-            reserve mut Process::Output output;
+            reserve mut std::Process::Output output;
             output.status = -1;
-            output.stdout = String::with_capacity(256);
-            output.stderr = String::with_capacity(256);
+            output.stdout = std::String::with_capacity(256);
+            output.stderr = std::String::with_capacity(256);
             mut i64[2] stdoutPipe;
             mut i64[2] stderrPipe;
             if (__sys_process_pipe(&stdoutPipe[0]) == 0)
@@ -2263,7 +2265,7 @@ namespace Process
                                 reserve i64 received = __sys_process_read(stdoutPipe[0], &buffer[0], 256);
                                 if (received > 0)
                                 {
-                                    mut str chunk;
+                                    mut std::str chunk;
                                     chunk.data = &buffer[0];
                                     chunk.length = received;
                                     output.stdout.append(chunk);
@@ -2279,7 +2281,7 @@ namespace Process
                                 reserve i64 received = __sys_process_read(stderrPipe[0], &buffer[0], 256);
                                 if (received > 0)
                                 {
-                                    mut str chunk;
+                                    mut std::str chunk;
                                     chunk.data = &buffer[0];
                                     chunk.length = received;
                                     output.stderr.append(chunk);
@@ -2291,7 +2293,7 @@ namespace Process
                                 }
                             }
                         }
-                        reserve mut Process::Child waited;
+                        reserve mut std::Process::Child waited;
                         waited.pid = child;
                         output.status = waited.wait();
                     }
@@ -2307,7 +2309,7 @@ namespace Process
                     __sys_close(stdoutPipe[1]);
                 }
             }
-            tunnel output -> Process::Output result;
+            tunnel output -> std::Process::Output result;
         }
     }
 
@@ -2319,6 +2321,13 @@ namespace Process
 
 namespace Network
 {
+    struct SockaddrIn
+    {
+        mut u16 family;
+        mut u16 port;
+        mut u32 address;
+        mut u8[8] zero;
+    }
     class Socket
     {
         mut i64 descriptor;
@@ -2350,23 +2359,23 @@ namespace Network
         tunnel (first << 24) | (second << 16) | (third << 8) | fourth -> u32 result;
     }
 
-    def tcp() -> Network::Socket result
+    def tcp() -> std::Network::Socket result
     {
-        reserve mut Network::Socket socket;
+        reserve mut std::Network::Socket socket;
         socket.descriptor = __sys_tcp_socket();
-        tunnel socket -> Network::Socket result;
+        tunnel socket -> std::Network::Socket result;
     }
 
-    def udp() -> Network::Socket result
+    def udp() -> std::Network::Socket result
     {
-        reserve mut Network::Socket socket;
+        reserve mut std::Network::Socket socket;
         socket.descriptor = __sys_udp_socket();
-        tunnel socket -> Network::Socket result;
+        tunnel socket -> std::Network::Socket result;
     }
 
-    def tcp_connect_ipv4(u32 address, u16 port) -> Network::Socket result
+    def tcp_connect_ipv4(u32 address, u16 port) -> std::Network::Socket result
     {
-        reserve mut Network::Socket socket = Network::tcp();
+        reserve mut std::Network::Socket socket = std::Network::tcp();
         if (socket.descriptor >= 0)
         {
             reserve i64 connected = __sys_tcp_connect_ipv4(socket.descriptor, address, port);
@@ -2376,46 +2385,46 @@ namespace Network
                 socket.descriptor = -1;
             }
         }
-        tunnel socket -> Network::Socket result;
+        tunnel socket -> std::Network::Socket result;
     }
 
-    def tcp_listen_ipv4(u32 address, u16 port, i32 backlog) -> Network::Socket result
+    def tcp_listen_ipv4(u32 address, u16 port, i32 backlog) -> std::Network::Socket result
     {
-        reserve mut Network::Socket socket;
+        reserve mut std::Network::Socket socket;
         socket.descriptor = __sys_tcp_listen_ipv4(address, port, backlog);
-        tunnel socket -> Network::Socket result;
+        tunnel socket -> std::Network::Socket result;
     }
 
-    def accept(*Network::Socket listener) -> Network::Socket result
+    def accept(*std::Network::Socket listener) -> std::Network::Socket result
     {
-        reserve mut Network::Socket socket;
+        reserve mut std::Network::Socket socket;
         socket.descriptor = __sys_socket_accept(listener.descriptor);
-        tunnel socket -> Network::Socket result;
+        tunnel socket -> std::Network::Socket result;
     }
 
-    def set_nonblocking(*Network::Socket socket) -> i64 result
+    def set_nonblocking(*std::Network::Socket socket) -> i64 result
     {
         tunnel __sys_socket_set_nonblocking(socket.descriptor) -> i64 result;
     }
 
-    def try_accept(*Network::Socket listener) -> Network::Socket result
+    def try_accept(*std::Network::Socket listener) -> std::Network::Socket result
     {
-        reserve mut Network::Socket socket;
+        reserve mut std::Network::Socket socket;
         socket.descriptor = __sys_socket_try_accept(listener.descriptor);
-        tunnel socket -> Network::Socket result;
+        tunnel socket -> std::Network::Socket result;
     }
 
-    def try_send(*Network::Socket socket, str content) -> i64 result
+    def try_send(*std::Network::Socket socket, std::str content) -> i64 result
     {
         tunnel __sys_socket_try_send(socket.descriptor, content.data, content.length) -> i64 result;
     }
 
-    def try_receive(*Network::Socket socket, *u8 buffer, u64 capacity) -> i64 result
+    def try_receive(*std::Network::Socket socket, *u8 buffer, u64 capacity) -> i64 result
     {
         tunnel __sys_socket_try_recv(socket.descriptor, buffer, capacity) -> i64 result;
     }
 
-    def send(*Network::Socket socket, str content) -> i64 result
+    def send(*std::Network::Socket socket, std::str content) -> i64 result
     {
         mut i64 total = 0;
         while (total < content.length)
@@ -2435,17 +2444,17 @@ namespace Network
         tunnel total -> i64 result;
     }
 
-    def receive(*Network::Socket socket, *u8 buffer, u64 capacity) -> i64 result
+    def receive(*std::Network::Socket socket, *u8 buffer, u64 capacity) -> i64 result
     {
         tunnel __sys_recv(socket.descriptor, buffer, capacity, 0) -> i64 result;
     }
 
-    def shutdown(*Network::Socket socket, i32 how) -> i64 result
+    def shutdown(*std::Network::Socket socket, i32 how) -> i64 result
     {
         tunnel __sys_shutdown(socket.descriptor, how) -> i64 result;
     }
 
-    def close(*Network::Socket socket) -> i64 result
+    def close(*std::Network::Socket socket) -> i64 result
     {
         mut i64 closed = 0;
         if (socket.descriptor >= 0)
@@ -2456,14 +2465,6 @@ namespace Network
         tunnel closed -> i64 result;
     }
 
-}
-
-struct sockaddr_in
-{
-    mut u16 family;
-    mut u16 port;
-    mut u32 address;
-    mut u8[8] zero;
 }
 
 namespace DNS
@@ -2492,7 +2493,7 @@ namespace DNS
         data[offset + 1] = value;
     }
 
-    def encode_name(*u8 packet, u64 offset, str hostname) -> u64 result
+    def encode_name(*u8 packet, u64 offset, std::str hostname) -> u64 result
     {
         mut u64 packet_offset = offset;
         mut u64 label_start = 0;
@@ -2576,12 +2577,12 @@ class DNS
     mut u16 next_transaction_id = 1;
     mut u32 dns_server = 0x08080808;
     
-    def resolve(&mut self, str hostname) -> u32 result, -> bool error
+    def resolve(&mut self, std::str hostname) -> u32 result, -> bool error
     {
         mut u32 address = 0;
         mut u8 tunnel_type = 0;
         mut bool error = false;
-        reserve mut Network::Socket socket = Network::udp();
+        reserve mut std::Network::Socket socket = std::Network::udp();
 
         if (socket.descriptor < 0)
         {
@@ -2619,7 +2620,7 @@ class DNS
         packet[offset + 1] = 0;
         offset = offset + 2;
 
-        offset = DNS::encode_name(&packet[0], offset, hostname);
+        offset = std::DNS::encode_name(&packet[0], offset, hostname);
 
         packet[offset] = 0;
         packet[offset + 1] = 1;
@@ -2629,7 +2630,7 @@ class DNS
         packet[offset + 1] = 1;
         offset = offset + 2;
 
-        reserve mut sockaddr_in destination;
+        reserve mut std::Network::SockaddrIn destination;
 
         destination.family = 2;
         destination.port = 0x3500;
@@ -2641,19 +2642,19 @@ class DNS
             offset,
             0,
             &destination,
-            sizeof(sockaddr_in)
+            sizeof(std::Network::SockaddrIn)
         );
 
         if (sent < 0)
         {
-            Network::close(&socket);
+            std::Network::close(&socket);
             error = true;
         }
 
         mut u8[512] response;
 
-        mut sockaddr_in source;
-        mut u32 source_length = sizeof(sockaddr_in);
+        mut std::Network::SockaddrIn source;
+        mut u32 source_length = sizeof(std::Network::SockaddrIn);
 
         if (!error)
         {
@@ -2666,7 +2667,7 @@ class DNS
                 &source_length
             );
 
-            Network::close(&socket);
+            std::Network::close(&socket);
 
             if (received < 12)
             {
@@ -2675,7 +2676,7 @@ class DNS
         
 
             reserve mut u16 response_id =
-                DNS::read_u16(&response[0], 0);
+                std::DNS::read_u16(&response[0], 0);
 
             if (response_id != transaction_id)
             {
@@ -2683,7 +2684,7 @@ class DNS
             }
 
             reserve mut u16 flags =
-                DNS::read_u16(&response[0], 2);
+                std::DNS::read_u16(&response[0], 2);
 
             if ((flags & 0x8000) == 0)
             {
@@ -2697,10 +2698,10 @@ class DNS
 
 
             reserve mut u16 question_count =
-                DNS::read_u16(&response[0], 4);
+                std::DNS::read_u16(&response[0], 4);
 
             reserve mut u16 answer_count =
-                DNS::read_u16(&response[0], 6);
+                std::DNS::read_u16(&response[0], 6);
 
             if (question_count != 1)
             {
@@ -2710,7 +2711,7 @@ class DNS
 
             mut u64 response_offset = 12;
 
-            response_offset = DNS::skip_name(
+            response_offset = std::DNS::skip_name(
                 &response[0],
                 response_offset,
                 received
@@ -2729,7 +2730,7 @@ class DNS
                     error = true;
                 }
 
-                response_offset = DNS::skip_name(
+                response_offset = std::DNS::skip_name(
                     &response[0],
                     response_offset,
                     received
@@ -2741,22 +2742,22 @@ class DNS
                 }
 
                 reserve mut u16 record_type =
-                    DNS::read_u16(&response[0], response_offset);
+                    std::DNS::read_u16(&response[0], response_offset);
 
                 response_offset = response_offset + 2;
 
                 reserve mut u16 record_class =
-                    DNS::read_u16(&response[0], response_offset);
+                    std::DNS::read_u16(&response[0], response_offset);
 
                 response_offset = response_offset + 2;
 
                 reserve mut u32 ttl =
-                    DNS::read_u32(&response[0], response_offset);
+                    std::DNS::read_u32(&response[0], response_offset);
 
                 response_offset = response_offset + 4;
 
                 reserve mut u16 data_length =
-                    DNS::read_u16(&response[0], response_offset);
+                    std::DNS::read_u16(&response[0], response_offset);
 
                 response_offset = response_offset + 2;
 
@@ -2838,4 +2839,5 @@ class RNG
         f32 unit = (self.state / 4294967296.0);
         tunnel unit * range + min -> f32 result;
     }
+}
 }

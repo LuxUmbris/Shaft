@@ -116,9 +116,8 @@ namespace Checker
 
         std::string declared_type_name(const Parser::ASTNode &node)
         {
-            return node.inferredTypeName.empty()
-                       ? std::string(std::get<std::string_view>(node.children.front().value))
-                       : node.inferredTypeName;
+            return node.inferredTypeName.empty() ? std::string(std::get<std::string_view>(node.children.front().value))
+                                                 : node.inferredTypeName;
         }
         std::vector<std::string> activeGenericNames;
         std::vector<std::string> structNameStack;
@@ -133,9 +132,8 @@ namespace Checker
 
         bool types_structurally_equal(const Type &left, const Type &right)
         {
-            if (left.kind != right.kind || left.name != right.name ||
-                left.isOptional != right.isOptional || left.isMutable != right.isMutable ||
-                left.genericArgs.size() != right.genericArgs.size() ||
+            if (left.kind != right.kind || left.name != right.name || left.isOptional != right.isOptional ||
+                left.isMutable != right.isMutable || left.genericArgs.size() != right.genericArgs.size() ||
                 static_cast<bool>(left.innerType) != static_cast<bool>(right.innerType))
                 return false;
             if (left.innerType && !types_structurally_equal(*left.innerType, *right.innerType))
@@ -161,8 +159,7 @@ namespace Checker
             {
                 if (child.type == Parser::NodeType::GenericParam)
                 {
-                    activeGenericNames.push_back(
-                        std::string(std::get<std::string_view>(child.value)));
+                    activeGenericNames.push_back(std::string(std::get<std::string_view>(child.value)));
                     pushed++;
                 }
             }
@@ -293,9 +290,8 @@ namespace Checker
 
         std::string custom_type_name(const Parser::ASTNode &node)
         {
-            return node.inferredTypeName.empty()
-                       ? std::string(std::get<std::string_view>(node.value))
-                       : node.inferredTypeName;
+            return node.inferredTypeName.empty() ? std::string(std::get<std::string_view>(node.value))
+                                                 : node.inferredTypeName;
         }
 
         Type infer_type_from_node(const Parser::ASTNode &node)
@@ -313,18 +309,15 @@ namespace Checker
                 Type type{TypeKind::Pointer, "*"};
                 type.isMutable = node.isMutable;
                 if (!node.children.empty())
-                    type.innerType =
-                        std::make_unique<Type>(infer_type_from_node(node.children.front()));
+                    type.innerType = std::make_unique<Type>(infer_type_from_node(node.children.front()));
                 return type;
             }
             case Parser::NodeType::ReferenceType:
             {
                 Type type{TypeKind::Reference, "&"};
-                type.isMutable = node.isMutable ||
-                                 (node.value.index() != 0 && std::get<bool>(node.value));
+                type.isMutable = node.isMutable || (node.value.index() != 0 && std::get<bool>(node.value));
                 if (!node.children.empty())
-                    type.innerType =
-                        std::make_unique<Type>(infer_type_from_node(node.children.front()));
+                    type.innerType = std::make_unique<Type>(infer_type_from_node(node.children.front()));
                 return type;
             }
             case Parser::NodeType::OptionalType:
@@ -333,8 +326,7 @@ namespace Checker
                 type.isOptional = true;
                 type.isMutable = node.isMutable;
                 if (!node.children.empty())
-                    type.innerType =
-                        std::make_unique<Type>(infer_type_from_node(node.children.front()));
+                    type.innerType = std::make_unique<Type>(infer_type_from_node(node.children.front()));
                 return type;
             }
             case Parser::NodeType::CustomType:
@@ -348,8 +340,10 @@ namespace Checker
                     return type;
                 };
 
-                // only when String/str are defined in the symbol table in case we have --no-std
-                if ((typeName == "String" || typeName == "str") && registeredTypes.find(typeName) != registeredTypes.end())
+                const std::string unqualifiedTypeName =
+                    typeName.compare(0, 5, "std::") == 0 ? typeName.substr(5) : typeName;
+                if ((unqualifiedTypeName == "String" || unqualifiedTypeName == "str") &&
+                    registeredTypes.find(typeName) != registeredTypes.end())
                     return mutable_type(Type(TypeKind::String, typeName));
 
                 if (typeName == "Self" && !structNameStack.empty())
@@ -476,15 +470,14 @@ namespace Checker
             if (node.type == Parser::NodeType::Identifier)
                 return std::string(std::get<std::string_view>(node.value));
             if (node.type == Parser::NodeType::ScopeAccessExpr && !node.children.empty())
-                return scope_access_name(node.children.front()) + "::" +
-                       std::string(std::get<std::string_view>(node.value));
+                return scope_access_name(node.children.front()) +
+                       "::" + std::string(std::get<std::string_view>(node.value));
             return {};
         }
 
         bool type_requires_cleanup(const Type &type, std::unordered_set<std::string> &visiting)
         {
-            if (type.kind == TypeKind::Pointer || type.kind == TypeKind::Reference ||
-                type.kind == TypeKind::Optional)
+            if (type.kind == TypeKind::Pointer || type.kind == TypeKind::Reference || type.kind == TypeKind::Optional)
                 return false;
             if (type.kind == TypeKind::Array)
                 return type.innerType && type_requires_cleanup(*type.innerType, visiting);
@@ -545,8 +538,7 @@ namespace Checker
             {
             case Parser::NodeType::Identifier:
             {
-                const auto *symbol =
-                    table.lookup(std::string(std::get<std::string_view>(expr.value)));
+                const auto *symbol = table.lookup(std::string(std::get<std::string_view>(expr.value)));
                 if (!symbol)
                 {
                     const std::string name = std::string(std::get<std::string_view>(expr.value));
@@ -666,7 +658,7 @@ namespace Checker
                 if (field == definition->second.members.end())
                 {
                     error("Cannot infer type from index expression on type '" + receiver.name +
-                          "' with missing indexed field '" + definition->second.indexedField + "'.",
+                              "' with missing indexed field '" + definition->second.indexedField + "'.",
                           expr);
                     return {TypeKind::Error, {}};
                 }
@@ -674,11 +666,10 @@ namespace Checker
                 const Type backing = infer_type_from_node(backingNode);
                 if (!backing.innerType)
                     return {TypeKind::Error, {}};
-                if (!backingNode.children.empty() &&
-                    backingNode.children.front().type == Parser::NodeType::CustomType)
+                if (!backingNode.children.empty() && backingNode.children.front().type == Parser::NodeType::CustomType)
                 {
-                    const std::string elementName = std::string(
-                        std::get<std::string_view>(backingNode.children.front().value));
+                    const std::string elementName =
+                        std::string(std::get<std::string_view>(backingNode.children.front().value));
                     if (registeredTypes.find(elementName) == registeredTypes.end())
                         return Type(TypeKind::Generic, elementName);
                 }
@@ -695,7 +686,7 @@ namespace Checker
                 const Type &aggregateReceiver =
                     (receiver.kind == TypeKind::Pointer || receiver.kind == TypeKind::Reference) && receiver.innerType
                         ? *receiver.innerType
-                    : receiver;
+                        : receiver;
                 const auto definition = registeredTypes.find(aggregateReceiver.name);
                 if (definition == registeredTypes.end())
                 {
@@ -715,7 +706,7 @@ namespace Checker
                 if (generic != definition->second.genericParameters.end())
                 {
                     const size_t index = static_cast<size_t>(generic - definition->second.genericParameters.begin());
-                    if (index < aggregateReceiver.genericArgs.size())   // was receiver.genericArgs — also wrong for the same reason
+                    if (index < aggregateReceiver.genericArgs.size())
                         return aggregateReceiver.genericArgs[index];
                 }
                 return fieldType;
@@ -760,15 +751,13 @@ namespace Checker
                          op == Lexer::Operator::EQUAL || op == Lexer::Operator::NOT_EQUAL)
                     resultType = Type(TypeKind::Bool);
                 else if ((leftType.kind == TypeKind::Pointer || leftType.kind == TypeKind::Reference) &&
-                         is_numeric(rightType.kind) &&
-                         (op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS))
+                         is_numeric(rightType.kind) && (op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS))
                     resultType = leftType;
                 else if (is_numeric(leftType.kind) && is_numeric(rightType.kind))
-                    resultType =
-                        (leftType.kind == TypeKind::F32 || leftType.kind == TypeKind::F64 ||
-                         rightType.kind == TypeKind::F32 || rightType.kind == TypeKind::F64)
-                            ? Type{TypeKind::F64, {}}
-                            : Type{TypeKind::U64, {}};
+                    resultType = (leftType.kind == TypeKind::F32 || leftType.kind == TypeKind::F64 ||
+                                  rightType.kind == TypeKind::F32 || rightType.kind == TypeKind::F64)
+                                     ? Type{TypeKind::F64, {}}
+                                     : Type{TypeKind::U64, {}};
                 else if (leftType.kind == rightType.kind)
                     resultType = leftType;
 
@@ -786,10 +775,10 @@ namespace Checker
                 return infer_expression_type(table, expr.children[1]);
             }
             default:
-                {
-                    error("Cannot infer type for this expression.", expr);
-                    return {TypeKind::Error, {}};
-                }
+            {
+                error("Cannot infer type for this expression.", expr);
+                return {TypeKind::Error, {}};
+            }
             }
         }
 
@@ -808,7 +797,7 @@ namespace Checker
             if (is_pointer_to_byte(declaredType))
                 return true;
             if (declaredType.kind == TypeKind::String &&
-               (declaredType.name == "str"))
+                (declaredType.name == "str" || declaredType.name == "std::str"))
                 return true;
             return false;
         }
@@ -822,11 +811,9 @@ namespace Checker
             if (declaredType.isOptional || valueType.isOptional)
             {
                 if (!declaredType.isOptional)
-                    return is_assignable(declaredType,
-                                         valueType.innerType ? *valueType.innerType : Type{});
+                    return is_assignable(declaredType, valueType.innerType ? *valueType.innerType : Type{});
                 if (!valueType.isOptional)
-                    return is_assignable(declaredType.innerType ? *declaredType.innerType : Type{},
-                                         valueType);
+                    return is_assignable(declaredType.innerType ? *declaredType.innerType : Type{}, valueType);
                 return is_assignable(declaredType.innerType ? *declaredType.innerType : Type{},
                                      valueType.innerType ? *valueType.innerType : Type{});
             }
@@ -864,7 +851,8 @@ namespace Checker
             if ((valueType.kind == TypeKind::Enum && is_numeric(declaredType.kind)) ||
                 (declaredType.kind == TypeKind::Enum && is_numeric(valueType.kind)))
                 return true;
-            if (declaredType.kind == TypeKind::Struct || declaredType.kind == TypeKind::Class || declaredType.kind == TypeKind::Enum)
+            if (declaredType.kind == TypeKind::Struct || declaredType.kind == TypeKind::Class ||
+                declaredType.kind == TypeKind::Enum)
             {
                 return valueType.kind == declaredType.kind && declaredType.name == valueType.name;
             }
@@ -879,8 +867,7 @@ namespace Checker
             return false;
         }
 
-        bool implicitly_borrows_for_reference_parameter(const Type &parameterType,
-                                                        const Type &argumentType,
+        bool implicitly_borrows_for_reference_parameter(const Type &parameterType, const Type &argumentType,
                                                         const Parser::ASTNode &argument)
         {
             if (parameterType.kind != TypeKind::Reference || argumentType.kind == TypeKind::Reference ||
@@ -897,8 +884,7 @@ namespace Checker
                    is_assignable(*parameterType.innerType, argumentType);
         }
 
-        bool implicitly_dereferences_for_value_parameter(const Type &parameterType,
-                                                         const Type &argumentType)
+        bool implicitly_dereferences_for_value_parameter(const Type &parameterType, const Type &argumentType)
         {
             return parameterType.kind != TypeKind::Reference && argumentType.kind == TypeKind::Reference &&
                    argumentType.innerType && is_assignable(parameterType, *argumentType.innerType);
@@ -923,8 +909,8 @@ namespace Checker
                        (left.kind == right.kind && left.kind != TypeKind::Pointer) ||
                        (left.kind == TypeKind::Pointer && right.kind == TypeKind::Pointer) ||
                        (left.kind == TypeKind::Reference && right.kind == TypeKind::Reference);
-            if ((left.kind == TypeKind::Pointer || left.kind == TypeKind::Reference) &&
-                is_numeric(right.kind) && (op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS))
+            if ((left.kind == TypeKind::Pointer || left.kind == TypeKind::Reference) && is_numeric(right.kind) &&
+                (op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS))
                 return true;
             if ((left.kind == TypeKind::Pointer || right.kind == TypeKind::Pointer) &&
                 (op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS))
@@ -933,8 +919,8 @@ namespace Checker
                 (right.kind == TypeKind::Pointer || right.kind == TypeKind::Reference) &&
                 (op == Lexer::Operator::EQUAL || op == Lexer::Operator::NOT_EQUAL))
                 return true;
-            if (left.kind == TypeKind::Pointer || right.kind == TypeKind::Pointer ||
-                left.kind == TypeKind::Reference || right.kind == TypeKind::Reference)
+            if (left.kind == TypeKind::Pointer || right.kind == TypeKind::Pointer || left.kind == TypeKind::Reference ||
+                right.kind == TypeKind::Reference)
                 return false;
 
             if (left.kind == TypeKind::Bool || right.kind == TypeKind::Bool)
@@ -945,11 +931,11 @@ namespace Checker
             const bool hasFloat = left.kind == TypeKind::F32 || left.kind == TypeKind::F64 ||
                                   right.kind == TypeKind::F32 || right.kind == TypeKind::F64;
             if (hasFloat)
-                return op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS ||
-                       op == Lexer::Operator::MULTIPLY || op == Lexer::Operator::DIVIDE ||
-                       op == Lexer::Operator::LESS_THAN || op == Lexer::Operator::GREATER_THAN ||
-                       op == Lexer::Operator::LESS_EQUAL || op == Lexer::Operator::GREATER_EQUAL ||
-                       op == Lexer::Operator::EQUAL || op == Lexer::Operator::NOT_EQUAL;
+                return op == Lexer::Operator::PLUS || op == Lexer::Operator::MINUS || op == Lexer::Operator::MULTIPLY ||
+                       op == Lexer::Operator::DIVIDE || op == Lexer::Operator::LESS_THAN ||
+                       op == Lexer::Operator::GREATER_THAN || op == Lexer::Operator::LESS_EQUAL ||
+                       op == Lexer::Operator::GREATER_EQUAL || op == Lexer::Operator::EQUAL ||
+                       op == Lexer::Operator::NOT_EQUAL;
             if (left.kind == right.kind)
                 return true;
             return is_numeric(left.kind) && is_numeric(right.kind);
@@ -966,8 +952,7 @@ namespace Checker
         if (!def.name.empty())
             def.name += "::";
         def.name += std::string(std::get<std::string_view>(node.children.front().value));
-        if (def.name.empty() && !node.children.empty() &&
-            node.children.front().type == Parser::NodeType::Identifier)
+        if (def.name.empty() && !node.children.empty() && node.children.front().type == Parser::NodeType::Identifier)
             def.name = std::string(std::get<std::string_view>(node.children.front().value));
 
         if (def.name.empty())
@@ -994,39 +979,47 @@ namespace Checker
                 def.genericParameters.push_back(std::string(std::get<std::string_view>(child.value)));
         }
 
-        // Publish the declaration before resolving member signatures so methods
-        // can refer to their enclosing type by name.
         registeredTypes[def.name] = def;
 
         uint64_t enumMaximum = UINT64_MAX;
         if (def.isEnum && node.children.size() > 1 && node.children[1].type == Parser::NodeType::PrimitiveType)
         {
             const Lexer::Keyword backing = std::get<Lexer::Keyword>(node.children[1].value);
-            const bool integerBacking = backing == Lexer::Keyword::U8 || backing == Lexer::Keyword::U16 ||
-                                        backing == Lexer::Keyword::U32 || backing == Lexer::Keyword::U64 ||
-                                        backing == Lexer::Keyword::I8 || backing == Lexer::Keyword::I16 ||
-                                        backing == Lexer::Keyword::I32 || backing == Lexer::Keyword::I64 ||
-                                        backing == Lexer::Keyword::USIZE;
+            const bool integerBacking =
+                backing == Lexer::Keyword::U8 || backing == Lexer::Keyword::U16 || backing == Lexer::Keyword::U32 ||
+                backing == Lexer::Keyword::U64 || backing == Lexer::Keyword::I8 || backing == Lexer::Keyword::I16 ||
+                backing == Lexer::Keyword::I32 || backing == Lexer::Keyword::I64 || backing == Lexer::Keyword::USIZE;
             if (!integerBacking)
             {
                 error("enum backing type must be an integer.", node);
             }
-            if (backing == Lexer::Keyword::U8) enumMaximum = UINT8_MAX;
-            else if (backing == Lexer::Keyword::U16) enumMaximum = UINT16_MAX;
-            else if (backing == Lexer::Keyword::U32) enumMaximum = UINT32_MAX;
-            else if (backing == Lexer::Keyword::I8) enumMaximum = INT8_MAX;
-            else if (backing == Lexer::Keyword::I16) enumMaximum = INT16_MAX;
-            else if (backing == Lexer::Keyword::I32) enumMaximum = INT32_MAX;
-            else if (backing == Lexer::Keyword::I64) enumMaximum = INT64_MAX;
+            if (backing == Lexer::Keyword::U8)
+                enumMaximum = UINT8_MAX;
+            else if (backing == Lexer::Keyword::U16)
+                enumMaximum = UINT16_MAX;
+            else if (backing == Lexer::Keyword::U32)
+                enumMaximum = UINT32_MAX;
+            else if (backing == Lexer::Keyword::I8)
+                enumMaximum = INT8_MAX;
+            else if (backing == Lexer::Keyword::I16)
+                enumMaximum = INT16_MAX;
+            else if (backing == Lexer::Keyword::I32)
+                enumMaximum = INT32_MAX;
+            else if (backing == Lexer::Keyword::I64)
+                enumMaximum = INT64_MAX;
         }
         int64_t enumMinimum = 0;
         if (def.isEnum && node.children.size() > 1 && node.children[1].type == Parser::NodeType::PrimitiveType)
         {
             const Lexer::Keyword backing = std::get<Lexer::Keyword>(node.children[1].value);
-            if (backing == Lexer::Keyword::I8) enumMinimum = INT8_MIN;
-            else if (backing == Lexer::Keyword::I16) enumMinimum = INT16_MIN;
-            else if (backing == Lexer::Keyword::I32) enumMinimum = INT32_MIN;
-            else if (backing == Lexer::Keyword::I64) enumMinimum = INT64_MIN;
+            if (backing == Lexer::Keyword::I8)
+                enumMinimum = INT8_MIN;
+            else if (backing == Lexer::Keyword::I16)
+                enumMinimum = INT16_MIN;
+            else if (backing == Lexer::Keyword::I32)
+                enumMinimum = INT32_MIN;
+            else if (backing == Lexer::Keyword::I64)
+                enumMinimum = INT64_MIN;
         }
         uint64_t nextEnumValue = 0;
         bool enumNextValueOverflowed = false;
@@ -1034,17 +1027,16 @@ namespace Checker
         {
             if (def.isEnum && child.type == Parser::NodeType::EnumMember)
             {
-                const bool negativeLiteral = child.children.size() > 1 &&
-                                             child.children[1].type == Parser::NodeType::UnaryExpr &&
-                                             std::get<Lexer::Operator>(child.children[1].value) == Lexer::Operator::MINUS &&
-                                             child.children[1].children.size() == 1 &&
-                                             child.children[1].children[0].type == Parser::NodeType::IntegerLiteral;
+                const bool negativeLiteral =
+                    child.children.size() > 1 && child.children[1].type == Parser::NodeType::UnaryExpr &&
+                    std::get<Lexer::Operator>(child.children[1].value) == Lexer::Operator::MINUS &&
+                    child.children[1].children.size() == 1 &&
+                    child.children[1].children[0].type == Parser::NodeType::IntegerLiteral;
                 if (negativeLiteral)
                 {
                     const uint64_t magnitude = std::get<uint64_t>(child.children[1].children[0].value);
-                    const uint64_t minimumMagnitude = enumMinimum < 0
-                        ? static_cast<uint64_t>(-(enumMinimum + 1)) + 1
-                        : 0;
+                    const uint64_t minimumMagnitude =
+                        enumMinimum < 0 ? static_cast<uint64_t>(-(enumMinimum + 1)) + 1 : 0;
                     if (magnitude > minimumMagnitude)
                     {
                         error("enum member value does not fit backing type.", node);
@@ -1075,7 +1067,8 @@ namespace Checker
             }
             if (child.type == Parser::NodeType::VariableDecl)
             {
-                const auto has_named_runtime_array = [&](const auto &self, const Parser::ASTNode &typeNode) -> bool {
+                const auto has_named_runtime_array = [&](const auto &self, const Parser::ASTNode &typeNode) -> bool
+                {
                     if (typeNode.type == Parser::NodeType::ArrayType &&
                         std::holds_alternative<std::string_view>(typeNode.value))
                         return true;
@@ -1092,12 +1085,13 @@ namespace Checker
                     std::get<std::string_view>(child.children.front().value) ==
                         std::get<std::string_view>(node.children.front().value))
                 {
-                    error("recursive-by-value field '" + std::string(std::get<std::string_view>(child.value)) + "' requires a pointer or reference indirection.", node);
+                    error("recursive-by-value field '" + std::string(std::get<std::string_view>(child.value)) +
+                              "' requires a pointer or reference indirection.",
+                          node);
                 }
                 Symbol field;
                 field.name = std::string(std::get<std::string_view>(child.value));
-                field.typeNode =
-                    child.children.empty() ? Parser::ASTNode{} : child.children.front();
+                field.typeNode = child.children.empty() ? Parser::ASTNode{} : child.children.front();
                 def.members[field.name] = field;
             }
             else if (child.type == Parser::NodeType::IndexDecl)
@@ -1116,18 +1110,14 @@ namespace Checker
                 }
                 def.initializedField = std::string(std::get<std::string_view>(child.value));
             }
-            else if (child.type == Parser::NodeType::FunctionDef ||
-                     child.type == Parser::NodeType::FunctionDecl ||
-                     child.type == Parser::NodeType::CFunctionDef ||
-                     child.type == Parser::NodeType::CFunctionDecl)
+            else if (child.type == Parser::NodeType::FunctionDef || child.type == Parser::NodeType::FunctionDecl ||
+                     child.type == Parser::NodeType::CFunctionDef || child.type == Parser::NodeType::CFunctionDecl)
             {
                 Symbol method;
-                method.name =
-                    child.children.empty()
-                        ? std::string{}
-                        : std::string(std::get<std::string_view>(child.children.front().value));
-                method.typeNode =
-                    child.children.empty() ? Parser::ASTNode{} : child.children.front();
+                method.name = child.children.empty()
+                                  ? std::string{}
+                                  : std::string(std::get<std::string_view>(child.children.front().value));
+                method.typeNode = child.children.empty() ? Parser::ASTNode{} : child.children.front();
                 method.isFunction = true;
                 bool hasReceiver = false;
                 for (const auto &parameter : child.children)
@@ -1160,7 +1150,8 @@ namespace Checker
             const Parser::NodeType type = backing->second.typeNode.type;
             if (type != Parser::NodeType::PointerType && type != Parser::NodeType::ArrayType)
             {
-                error("Indexed backing field '" + def.indexedField + "' must be a pointer or runtime-sized array.", node);
+                error("Indexed backing field '" + def.indexedField + "' must be a pointer or runtime-sized array.",
+                      node);
             }
         }
         if (!def.initializedField.empty() && def.initializedField != def.indexedField)
@@ -1215,7 +1206,8 @@ namespace Checker
             }
             for (size_t i = 0; i < argTypes.size(); ++i)
             {
-                const bool cAbiWordConversion = symbol->isCFunction &&
+                const bool cAbiWordConversion =
+                    symbol->isCFunction &&
                     ((symbol->paramTypes[i].kind == TypeKind::Pointer && is_numeric(argTypes[i].kind)) ||
                      (is_numeric(symbol->paramTypes[i].kind) && argTypes[i].kind == TypeKind::Pointer));
                 if (!hasExplicitGenericArguments && !is_assignable(symbol->paramTypes[i], argTypes[i]) &&
@@ -1243,7 +1235,8 @@ namespace Checker
                 }
                 if (symbol->tunnelSlotNames.size() > 1 && !allReservationsPresent)
                 {
-                    error("Unbound multi-output call requires one compatible reserve declaration per tunnel slot.", callee);
+                    error("Unbound multi-output call requires one compatible reserve declaration per tunnel slot.",
+                          callee);
                 }
                 if (allReservationsPresent)
                 {
@@ -1261,7 +1254,8 @@ namespace Checker
                         }
                         if (reservation->tunnelReservationConsumed)
                         {
-                            error("tunnel reservation '" + symbol->tunnelSlotNames[index] + "' was already consumed.", callee);
+                            error("tunnel reservation '" + symbol->tunnelSlotNames[index] + "' was already consumed.",
+                                  callee);
                         }
                     }
                     for (Symbol *reservation : reservations)
@@ -1271,8 +1265,8 @@ namespace Checker
         }
         else if (callee.type == Parser::NodeType::MemberAccessExpr)
         {
-            const Type receiverType = infer_expression_type(
-                table, const_cast<Parser::ASTNode &>(callee.children.front()));
+            const Type receiverType =
+                infer_expression_type(table, const_cast<Parser::ASTNode &>(callee.children.front()));
             const std::string methodName = std::string(std::get<std::string_view>(callee.value));
             auto it = registeredTypes.find(receiverType.name);
             if (it != registeredTypes.end())
@@ -1287,7 +1281,8 @@ namespace Checker
                     for (size_t i = 0; i < argTypes.size(); ++i)
                     {
                         if (!is_assignable(methodIt->second.paramTypes[i], argTypes[i]) &&
-                            !implicitly_borrows_for_reference_parameter(methodIt->second.paramTypes[i], argTypes[i], *argNodes[i]) &&
+                            !implicitly_borrows_for_reference_parameter(methodIt->second.paramTypes[i], argTypes[i],
+                                                                        *argNodes[i]) &&
                             !implicitly_dereferences_for_value_parameter(methodIt->second.paramTypes[i], argTypes[i]) &&
                             !string_literal_decays_to_pointer(methodIt->second.paramTypes[i], *argNodes[i]))
                         {
@@ -1329,8 +1324,7 @@ namespace Checker
                 if (fieldIt != it->second.members.end())
                 {
                     expr.hasInferredType = true;
-                    expr.inferredTypeName =
-                        type_to_string(infer_type_from_node(fieldIt->second.typeNode));
+                    expr.inferredTypeName = type_to_string(infer_type_from_node(fieldIt->second.typeNode));
                 }
             }
         }
@@ -1422,8 +1416,7 @@ namespace Checker
                 declaredType = infer_type_from_node(sym->typeNode);
                 hasDeclaredType = true;
             }
-            else if (target.type == Parser::NodeType::MemberAccessExpr ||
-                     target.type == Parser::NodeType::IndexExpr)
+            else if (target.type == Parser::NodeType::MemberAccessExpr || target.type == Parser::NodeType::IndexExpr)
             {
                 check_mutable_assignment_target(table, const_cast<Parser::ASTNode &>(target));
                 declaredType = infer_expression_type(table, const_cast<Parser::ASTNode &>(target));
@@ -1431,18 +1424,17 @@ namespace Checker
             }
         }
 
-        for (size_t i = (node.type == Parser::NodeType::VariableDecl ? 1u : 1u);
-             i < node.children.size(); ++i)
+        for (size_t i = (node.type == Parser::NodeType::VariableDecl ? 1u : 1u); i < node.children.size(); ++i)
         {
             const auto &child = node.children[i];
             if (child.type == Parser::NodeType::MoveExpr)
             {
                 const OwnershipPath sourcePath =
                     child.children.empty() ? OwnershipPath{} : ownership_path(child.children.front());
-                const std::string sourceVar = sourcePath.root.empty()
-                                                  ? (child.children.empty() ? std::string{}
-                                                                            : owning_root_name(child.children.front()))
-                                                  : sourcePath.root;
+                const std::string sourceVar =
+                    sourcePath.root.empty()
+                        ? (child.children.empty() ? std::string{} : owning_root_name(child.children.front()))
+                        : sourcePath.root;
                 if (sourceVar.empty())
                 {
                     error("Cannot move without an addressable source.", node);
@@ -1453,7 +1445,8 @@ namespace Checker
                 {
                     error("Cannot move from undeclared variable '" + sourceVar + "'.", node);
                 }
-                const auto is_named_runtime_array_type = [&](const auto &self, const Parser::ASTNode &typeNode) -> bool {
+                const auto is_named_runtime_array_type = [&](const auto &self, const Parser::ASTNode &typeNode) -> bool
+                {
                     if (typeNode.type == Parser::NodeType::ArrayType &&
                         std::holds_alternative<std::string_view>(typeNode.value))
                         return true;
@@ -1470,9 +1463,8 @@ namespace Checker
                     error("Cannot move from a dynamic runtime-array index.", node);
                 }
                 if (sym->state == VarOwnershipState::Moved ||
-                    (!sourcePath.relative.empty() &&
-                     (subobject_is_moved(*sym, sourcePath.relative) ||
-                      subobject_contains_moved_value(*sym, sourcePath.relative))))
+                    (!sourcePath.relative.empty() && (subobject_is_moved(*sym, sourcePath.relative) ||
+                                                      subobject_contains_moved_value(*sym, sourcePath.relative))))
                 {
                     error("Cannot move from already moved variable '" + sourceVar + "'.", node);
                 }
@@ -1480,8 +1472,7 @@ namespace Checker
                 {
                     error("Cannot move a borrowed variable.", node);
                 }
-                if (hasDeclaredType &&
-                    !is_assignable(declaredType, infer_type_from_node(sym->typeNode)))
+                if (hasDeclaredType && !is_assignable(declaredType, infer_type_from_node(sym->typeNode)))
                 {
                     error("Type mismatch in move assignment or initialization.", node);
                 }
@@ -1495,10 +1486,10 @@ namespace Checker
             {
                 const OwnershipPath sourcePath =
                     child.children.empty() ? OwnershipPath{} : ownership_path(child.children.front());
-                const std::string sourceVar = sourcePath.root.empty()
-                                                  ? (child.children.empty() ? std::string{}
-                                                                            : owning_root_name(child.children.front()))
-                                                  : sourcePath.root;
+                const std::string sourceVar =
+                    sourcePath.root.empty()
+                        ? (child.children.empty() ? std::string{} : owning_root_name(child.children.front()))
+                        : sourcePath.root;
                 if (sourceVar.empty())
                 {
                     error("Cannot borrow without an addressable source.", node);
@@ -1512,7 +1503,9 @@ namespace Checker
                 if (sym->state == VarOwnershipState::Moved ||
                     (!sourcePath.relative.empty() && subobject_is_moved(*sym, sourcePath.relative)))
                 {
-                    error("Cannot borrow from moved "+ (sourcePath.relative.empty() ? "variable '" + sourceVar + "'" : "subobject") + ".", node);
+                    error("Cannot borrow from moved " +
+                              (sourcePath.relative.empty() ? "variable '" + sourceVar + "'" : "subobject") + ".",
+                          node);
                 }
                 if (!hasDeclaredType || declaredType.kind != TypeKind::Reference)
                 {
@@ -1525,20 +1518,18 @@ namespace Checker
                 }
                 if (!table.record_borrow(sourceVar, mutableBorrow))
                 {
-                    error(std::string("Cannot borrow a variable already borrowed ") + (mutableBorrow ? "by readers or a writer" : "mutably") + ".", node);
+                    error(std::string("Cannot borrow a variable already borrowed ") +
+                              (mutableBorrow ? "by readers or a writer" : "mutably") + ".",
+                          node);
                 }
             }
             else if (hasDeclaredType && child.type != Parser::NodeType::PrimitiveType &&
-                     child.type != Parser::NodeType::CustomType &&
-                     child.type != Parser::NodeType::PointerType &&
-                     child.type != Parser::NodeType::ReferenceType &&
-                     child.type != Parser::NodeType::StructInitExpr &&
-                     child.type != Parser::NodeType::MoveExpr &&
-                     child.type != Parser::NodeType::RefExpr)
+                     child.type != Parser::NodeType::CustomType && child.type != Parser::NodeType::PointerType &&
+                     child.type != Parser::NodeType::ReferenceType && child.type != Parser::NodeType::StructInitExpr &&
+                     child.type != Parser::NodeType::MoveExpr && child.type != Parser::NodeType::RefExpr)
             {
                 Type valueType = infer_expression_type(table, const_cast<Parser::ASTNode &>(child));
-                if ((child.type == Parser::NodeType::Identifier ||
-                     child.type == Parser::NodeType::MemberAccessExpr ||
+                if ((child.type == Parser::NodeType::Identifier || child.type == Parser::NodeType::MemberAccessExpr ||
                      child.type == Parser::NodeType::IndexExpr) &&
                     type_requires_cleanup(valueType))
                 {
@@ -1586,13 +1577,8 @@ namespace Checker
             const std::string name = std::string(std::get<std::string_view>(child.value));
             const bool has_type = !child.children.empty();
 
-            activeTunnelSlots[name] = {
-                name,
-                child.isOptional,
-                false,
-                has_type ? infer_type_from_node(child.children.front()) : Type{},
-                has_type
-            };
+            activeTunnelSlots[name] = {name, child.isOptional, false,
+                                       has_type ? infer_type_from_node(child.children.front()) : Type{}, has_type};
         }
 
         struct Flow
@@ -1629,18 +1615,15 @@ namespace Checker
         {
             if (node.type == Parser::NodeType::TunnelStmt)
             {
-                if (!node.children.empty() &&
-                    node.children.front().type == Parser::NodeType::RefExpr)
+                if (!node.children.empty() && node.children.front().type == Parser::NodeType::RefExpr)
                 {
                     error("cannot tunnel a reference to function-local storage.", node);
                 }
 
-                const std::string slotName =
-                    std::string(std::get<std::string_view>(node.value));
+                const std::string slotName = std::string(std::get<std::string_view>(node.value));
 
                 if (const auto slot = activeTunnelSlots.find(slotName);
-                    slot != activeTunnelSlots.end() &&
-                    node.children.size() > 1)
+                    slot != activeTunnelSlots.end() && node.children.size() > 1)
                 {
                     const Type restated = infer_type_from_node(node.children[1]);
                     if (!types_structurally_equal(slot->second.expectedType, restated))
@@ -1653,14 +1636,11 @@ namespace Checker
                 return flows;
             }
 
-            if (node.type == Parser::NodeType::ReserveStmt &&
-                node.children.size() == 2 &&
+            if (node.type == Parser::NodeType::ReserveStmt && node.children.size() == 2 &&
                 node.children[1].type == Parser::NodeType::TunnelBindingExpr)
             {
-                const std::string local =
-                    std::string(std::get<std::string_view>(node.value));
-                const std::string slot =
-                    std::string(std::get<std::string_view>(node.children[1].value));
+                const std::string local = std::string(std::get<std::string_view>(node.value));
+                const std::string slot = std::string(std::get<std::string_view>(node.children[1].value));
 
                 if (activeTunnelSlots.find(slot) == activeTunnelSlots.end())
                 {
@@ -1671,15 +1651,12 @@ namespace Checker
                 return flows;
             }
 
-            if (node.type == Parser::NodeType::AssignmentExpr &&
-                !node.children.empty() &&
+            if (node.type == Parser::NodeType::AssignmentExpr && !node.children.empty() &&
                 node.children.front().type == Parser::NodeType::Identifier)
             {
-                const std::string target =
-                    std::string(std::get<std::string_view>(node.children.front().value));
+                const std::string target = std::string(std::get<std::string_view>(node.children.front().value));
 
-                if (const auto bound = boundTunnelSlots.find(target);
-                    bound != boundTunnelSlots.end())
+                if (const auto bound = boundTunnelSlots.find(target); bound != boundTunnelSlots.end())
                 {
                     mark_slot_filled(flows, bound->second, node);
                 }
@@ -1687,8 +1664,7 @@ namespace Checker
                 return flows;
             }
 
-            if (node.type == Parser::NodeType::MatchStmt &&
-                node.children.size() >= 2)
+            if (node.type == Parser::NodeType::MatchStmt && node.children.size() >= 2)
             {
                 const Flows incoming = flows;
                 std::vector<Flows> branchFlows;
@@ -1698,18 +1674,14 @@ namespace Checker
                 {
                     const Parser::ASTNode &branch = node.children[index];
 
-                    if (branch.type == Parser::NodeType::MatchCase &&
-                        branch.children.size() >= 2)
+                    if (branch.type == Parser::NodeType::MatchCase && branch.children.size() >= 2)
                     {
-                        branchFlows.push_back(
-                            self(self, branch.children[1], incoming));
+                        branchFlows.push_back(self(self, branch.children[1], incoming));
                     }
-                    else if (branch.type == Parser::NodeType::MatchDefault &&
-                             !branch.children.empty())
+                    else if (branch.type == Parser::NodeType::MatchDefault && !branch.children.empty())
                     {
                         hasDefault = true;
-                        branchFlows.push_back(
-                            self(self, branch.children.front(), incoming));
+                        branchFlows.push_back(self(self, branch.children.front(), incoming));
                     }
                 }
 
@@ -1723,44 +1695,34 @@ namespace Checker
 
                     for (const Flows &branch : branchFlows)
                     {
-                        flow.may_fill =
-                            flow.may_fill || branch.at(name).may_fill;
-                        flow.must_fill =
-                            flow.must_fill && branch.at(name).must_fill;
+                        flow.may_fill = flow.may_fill || branch.at(name).may_fill;
+                        flow.must_fill = flow.must_fill && branch.at(name).must_fill;
                     }
                 }
 
                 return flows;
             }
 
-            if (node.type == Parser::NodeType::IfStmt &&
-                node.children.size() >= 2)
+            if (node.type == Parser::NodeType::IfStmt && node.children.size() >= 2)
             {
-                Flows then_flow =
-                    self(self, node.children[1], flows);
+                Flows then_flow = self(self, node.children[1], flows);
 
                 Flows else_flow = flows;
 
                 if (node.children.size() >= 3)
-                    else_flow =
-                        self(self, node.children[2], flows);
+                    else_flow = self(self, node.children[2], flows);
 
                 for (auto &[name, flow] : flows)
                 {
-                    flow.may_fill =
-                        then_flow[name].may_fill ||
-                        else_flow[name].may_fill;
+                    flow.may_fill = then_flow[name].may_fill || else_flow[name].may_fill;
 
-                    flow.must_fill =
-                        then_flow[name].must_fill &&
-                        else_flow[name].must_fill;
+                    flow.must_fill = then_flow[name].must_fill && else_flow[name].must_fill;
                 }
 
                 return flows;
             }
 
-            if (node.type == Parser::NodeType::WhileLoop ||
-                node.type == Parser::NodeType::ForLoop ||
+            if (node.type == Parser::NodeType::WhileLoop || node.type == Parser::NodeType::ForLoop ||
                 node.type == Parser::NodeType::ForeachLoop)
             {
                 Flows body_flow = flows;
@@ -1770,8 +1732,7 @@ namespace Checker
 
                 for (auto &[name, flow] : flows)
                 {
-                    flow.may_fill =
-                        flow.may_fill || body_flow[name].may_fill;
+                    flow.may_fill = flow.may_fill || body_flow[name].may_fill;
                 }
 
                 return flows;
@@ -1797,8 +1758,7 @@ namespace Checker
 
             if (!slot.isOptional && !slot.filled)
             {
-                error("Function exiting without populating required tunnel slot '" + name + "'.",
-                      funcNode);
+                error("Function exiting without populating required tunnel slot '" + name + "'.", funcNode);
             }
         }
     }
@@ -1853,8 +1813,7 @@ namespace Checker
         exprNode.inferredTypeName = type_to_string(resultType);
     }
 
-    void declare_function_symbols(SymbolTable &table, Parser::ASTNode &node,
-                                  const std::string &namespaceName = {})
+    void declare_function_symbols(SymbolTable &table, Parser::ASTNode &node, const std::string &namespaceName = {})
     {
         if (node.type == Parser::NodeType::NamespaceDecl)
         {
@@ -1889,22 +1848,19 @@ namespace Checker
             structNameStack.pop_back();
             return;
         }
-        if (node.type == Parser::NodeType::FunctionDecl ||
-            node.type == Parser::NodeType::FunctionDef ||
-            node.type == Parser::NodeType::CFunctionDecl ||
-            node.type == Parser::NodeType::CFunctionDef)
+        if (node.type == Parser::NodeType::FunctionDecl || node.type == Parser::NodeType::FunctionDef ||
+            node.type == Parser::NodeType::CFunctionDecl || node.type == Parser::NodeType::CFunctionDef)
         {
             if (node.children.empty() || node.children.front().type != Parser::NodeType::Identifier)
                 return;
 
-            const std::string unqualifiedName =
-                std::string(std::get<std::string_view>(node.children.front().value));
+            const std::string unqualifiedName = std::string(std::get<std::string_view>(node.children.front().value));
             const std::string name = namespaceName.empty() ? unqualifiedName : namespaceName + "::" + unqualifiedName;
             Symbol symbol;
             symbol.name = name;
             symbol.isFunction = true;
-            symbol.isCFunction = node.type == Parser::NodeType::CFunctionDecl ||
-                                 node.type == Parser::NodeType::CFunctionDef;
+            symbol.isCFunction =
+                node.type == Parser::NodeType::CFunctionDecl || node.type == Parser::NodeType::CFunctionDef;
             std::vector<std::string> genericParameters;
             for (const auto &child : node.children)
                 if (child.type == Parser::NodeType::GenericParam)
@@ -1944,6 +1900,11 @@ namespace Checker
             pop_generic_params(genericParameters.size());
 
             Symbol *existing = table.lookup(name);
+            if (existing && namespaceName.empty() && existing->isFunction && existing->name != name)
+            {
+                *existing = std::move(symbol);
+                return;
+            }
             if (existing)
             {
                 if (!existing->isFunction || existing->paramTypes.size() != symbol.paramTypes.size())
@@ -1990,7 +1951,9 @@ namespace Checker
         case Parser::NodeType::VariableDecl:
             check_assignment_and_ownership(table, node);
             {
-                const auto validate_runtime_array_lengths = [&](const auto &self, const Parser::ASTNode &typeNode) -> void {
+                const auto validate_runtime_array_lengths = [&](const auto &self,
+                                                                const Parser::ASTNode &typeNode) -> void
+                {
                     if (typeNode.type == Parser::NodeType::ArrayType &&
                         std::holds_alternative<std::string_view>(typeNode.value))
                     {
@@ -2043,7 +2006,8 @@ namespace Checker
             for (size_t index = 0; index < bindingCount; ++index)
             {
                 const Type bindingType = infer_type_from_node(node.children[index * 2]);
-                const Type bindingPayload = bindingType.isOptional && bindingType.innerType ? *bindingType.innerType : bindingType;
+                const Type bindingPayload =
+                    bindingType.isOptional && bindingType.innerType ? *bindingType.innerType : bindingType;
                 const Type &slotType = callee->tunnelSlotTypes[index];
                 if (bindingPayload.kind != slotType.kind || bindingPayload.name != slotType.name ||
                     bindingType.isOptional != callee->tunnelSlotOptional[index])
@@ -2087,7 +2051,8 @@ namespace Checker
                         error("Reserve binding count does not match tunnel outputs.", node);
                     }
                     const Type &slotType = callee->tunnelSlotTypes.front();
-                    const Type bindingPayload = declared.isOptional && declared.innerType ? *declared.innerType : declared;
+                    const Type bindingPayload =
+                        declared.isOptional && declared.innerType ? *declared.innerType : declared;
                     if (bindingPayload.kind != slotType.kind || bindingPayload.name != slotType.name ||
                         declared.isOptional != callee->tunnelSlotOptional.front())
                     {
@@ -2095,7 +2060,9 @@ namespace Checker
                     }
                 }
             }
-            if (node.children.size() > 1 && node.children[1].type != Parser::NodeType::TunnelBindingExpr && !is_assignable(declared, infer_expression_type(table, node.children[1])) && !string_literal_decays_to_pointer(declared, node.children[1]))
+            if (node.children.size() > 1 && node.children[1].type != Parser::NodeType::TunnelBindingExpr &&
+                !is_assignable(declared, infer_expression_type(table, node.children[1])) &&
+                !string_literal_decays_to_pointer(declared, node.children[1]))
             {
                 error("Type mismatch in reserve initialization.", node);
             }
@@ -2153,9 +2120,8 @@ namespace Checker
                                              node.start,
                                              node.mod_path,
                                              node.source,
-                                             node.type == Parser::NodeType::ThreadBindingDecl
-                                                 ? Lexer::Keyword::THREAD
-                                                 : Lexer::Keyword::STATE,
+                                             node.type == Parser::NodeType::ThreadBindingDecl ? Lexer::Keyword::THREAD
+                                                                                              : Lexer::Keyword::STATE,
                                              {}};
             if (!table.declare(stateName, std::move(state)))
             {
@@ -2179,11 +2145,10 @@ namespace Checker
         case Parser::NodeType::AwaitExpr:
             if (!node.children.empty() && node.children.front().type == Parser::NodeType::Identifier)
             {
-                const std::string name =
-                    std::string(std::get<std::string_view>(node.children.front().value));
+                const std::string name = std::string(std::get<std::string_view>(node.children.front().value));
                 Symbol *state = table.lookup(name);
                 if (!state || (infer_type_from_node(state->typeNode).kind != TypeKind::State &&
-                           infer_type_from_node(state->typeNode).kind != TypeKind::Thread))
+                               infer_type_from_node(state->typeNode).kind != TypeKind::Thread))
                 {
                     error("Await requires a declared State binding or call expression.", node);
                 }
@@ -2206,8 +2171,7 @@ namespace Checker
             if (!node.children.empty())
             {
                 Type value = infer_expression_type(table, node.children.front());
-                if (found->second.hasExpectedType &&
-                    !is_assignable(found->second.expectedType, value))
+                if (found->second.hasExpectedType && !is_assignable(found->second.expectedType, value))
                 {
                     error("Tunnel value type mismatch for slot '" + slot + "'.", node);
                 }
@@ -2228,8 +2192,7 @@ namespace Checker
         {
             const std::string name = std::string(std::get<std::string_view>(node.value));
             Symbol *symbol = table.lookup(name);
-            if (!symbol || !infer_type_from_node(symbol->typeNode).isOptional ||
-                symbol->typeNode.children.empty())
+            if (!symbol || !infer_type_from_node(symbol->typeNode).isOptional || symbol->typeNode.children.empty())
             {
                 error("Valid requires a declared optional value.", node);
             }
@@ -2248,8 +2211,7 @@ namespace Checker
             register_type_definition(node);
 
             std::string structName;
-            if (!node.children.empty() &&
-                node.children.front().type == Parser::NodeType::Identifier)
+            if (!node.children.empty() && node.children.front().type == Parser::NodeType::Identifier)
                 structName = std::string(std::get<std::string_view>(node.children.front().value));
 
             if (!activeNamespaces.empty())
@@ -2271,10 +2233,8 @@ namespace Checker
             table.push_scope();
             for (auto &child : node.children)
             {
-                if (child.type == Parser::NodeType::FunctionDef ||
-                    child.type == Parser::NodeType::FunctionDecl ||
-                    child.type == Parser::NodeType::CFunctionDef ||
-                    child.type == Parser::NodeType::CFunctionDecl)
+                if (child.type == Parser::NodeType::FunctionDef || child.type == Parser::NodeType::FunctionDecl ||
+                    child.type == Parser::NodeType::CFunctionDef || child.type == Parser::NodeType::CFunctionDecl)
                     check_node(table, child);
             }
             table.pop_scope();
@@ -2345,7 +2305,9 @@ namespace Checker
         {
             if (!inCFunctionBody)
             {
-                error("'return' is not allowed in a tunnel-based function (def/dec); use 'tunnel value -> Type slot;' instead. 'return' is only valid in cdef/cdec (C-ABI) functions.", node);
+                error("'return' is not allowed in a tunnel-based function (def/dec); use 'tunnel value -> Type slot;' "
+                      "instead. 'return' is only valid in cdef/cdec (C-ABI) functions.",
+                      node);
             }
             if (node.children.empty())
             {
@@ -2361,8 +2323,7 @@ namespace Checker
             }
             const Type returnedType = infer_expression_type(table, node.children.front());
             if (activeCFunctionReturnType.kind == TypeKind::Pointer &&
-                node.children.front().type == Parser::NodeType::CallExpr &&
-                !node.children.front().children.empty() &&
+                node.children.front().type == Parser::NodeType::CallExpr && !node.children.front().children.empty() &&
                 node.children.front().children.front().type == Parser::NodeType::Identifier)
             {
                 const std::string_view callee =
@@ -2399,8 +2360,7 @@ namespace Checker
                 {
                     Symbol paramSym;
                     paramSym.name = std::string(std::get<std::string_view>(child.value));
-                    paramSym.typeNode =
-                        child.children.empty() ? Parser::ASTNode{} : child.children.front();
+                    paramSym.typeNode = child.children.empty() ? Parser::ASTNode{} : child.children.front();
                     table.declare(paramSym.name, paramSym);
                 }
             }
@@ -2445,10 +2405,8 @@ namespace Checker
             }
             for (const auto &child : node.children)
             {
-                if (child.type == Parser::NodeType::PrimitiveType ||
-                    child.type == Parser::NodeType::PointerType ||
-                    child.type == Parser::NodeType::ReferenceType ||
-                    child.type == Parser::NodeType::CustomType)
+                if (child.type == Parser::NodeType::PrimitiveType || child.type == Parser::NodeType::PointerType ||
+                    child.type == Parser::NodeType::ReferenceType || child.type == Parser::NodeType::CustomType)
                 {
                     activeCFunctionReturnType = infer_type_from_node(child);
                     activeCFunctionReturnsValue = true;
@@ -2464,8 +2422,7 @@ namespace Checker
                 {
                     Symbol paramSym;
                     paramSym.name = std::string(std::get<std::string_view>(child.value));
-                    paramSym.typeNode =
-                        child.children.empty() ? Parser::ASTNode{} : child.children.front();
+                    paramSym.typeNode = child.children.empty() ? Parser::ASTNode{} : child.children.front();
                     if (!table.declare(paramSym.name, paramSym))
                     {
                         error("Duplicate parameter '" + paramSym.name + "'.", node);
@@ -2521,7 +2478,9 @@ namespace Checker
             }
             const Type iterableType = infer_expression_type(table, node.children[1]);
             const bool isVector = (iterableType.kind == TypeKind::Struct || iterableType.kind == TypeKind::Class) &&
-                                  iterableType.name == "Vector";
+                                  (iterableType.name == "Vector" ||
+                                   (iterableType.name.size() > 8 &&
+                                    iterableType.name.compare(iterableType.name.size() - 8, 8, "::Vector") == 0));
             if (iterableType.kind != TypeKind::Array && !isVector)
             {
                 error("foreach requires a fixed-size array, T[length] runtime array, or Vector<T>.", node.children[1]);
@@ -2546,7 +2505,9 @@ namespace Checker
         case Parser::NodeType::ContinueStmt:
             if (loopDepth == 0)
             {
-                error(std::string("'") + (node.type == Parser::NodeType::BreakStmt ? "break" : "continue") + "' is only valid inside a loop.", node);
+                error(std::string("'") + (node.type == Parser::NodeType::BreakStmt ? "break" : "continue") +
+                          "' is only valid inside a loop.",
+                      node);
             }
             break;
 

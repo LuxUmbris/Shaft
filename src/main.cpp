@@ -2,6 +2,7 @@
 #include "codegen.hpp"
 #include "lexer.hpp"
 #include "parser.hpp"
+#include "toolchain.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -71,6 +72,7 @@ namespace
         std::string runtimePath;
         std::string resourcePath;
         std::string targetTriple;
+        std::string sysroot;
         std::string packageName;
         std::string packageVersion;
         OptimizationLevel optimization = OptimizationLevel::O2;
@@ -333,6 +335,8 @@ namespace
         }
         if (fields.find("build.target") != fields.end())
             options.targetTriple = stringField("build.target");
+        if (fields.find("build.sysroot") != fields.end())
+            options.sysroot = resolve_build_path(base, stringField("build.sysroot"));
         if (fields.find("package.name") != fields.end())
             options.packageName = stringField("package.name");
         if (fields.find("package.version") != fields.end())
@@ -678,23 +682,25 @@ namespace
             }
             if (argument == "--help" || argument == "-h")
             {
-                std::cout
-                    << "Usage: shaftc [OPTIONS] INPUT\n"
-                       "       shaftc --build [Shaft.build] [OPTIONS]\n"
-                       "--build reads a TOML-like Shaft.build file (or an explicit path)\n"
-                       "--emit KIND: llvm, object, asm, staticlib, dynamiclib, binary\n"
-                       "-O0, -O1, -O2, or -O3 select LLVM optimization level (default: -O2)\n"
-                       "--native tunes native object, assembly, and binary output for this CPU\n"
-                       "--target TRIPLE selects an LLVM target triple; Linux binary targets link through baked-in LLD\n"
-                       "--hosted links a host C runtime (required for --link C libraries)\n"
-                       "--link NAME or -lNAME links libNAME; --link-dir PATH adds a C-library search directory\n"
-                       "raw .o, .a, .ll, .llvm, and .bc linker inputs may follow the .shaft input\n"
-                       "--check-only runs lexing, parsing, and checking without emitting an artifact\n"
-                       "--verbose reports compilation stages to stderr\n"
-                       "--version prints the compiler version\n"
-                       "--no-std disables the automatic standard prelude\n"
-                       "--std PATH, --runtime PATH, and --resources PATH override bundled resources\n"
-                       "--dump-ast outputs ast as string";
+                std::cout << "Usage: shaftc [OPTIONS] INPUT\n"
+                             "       shaftc --build [Shaft.build] [OPTIONS]\n"
+                             "--build reads a TOML-like Shaft.build file (or an explicit path)\n"
+                             "--emit KIND: llvm, object, asm, staticlib, dynamiclib, binary\n"
+                             "-O0, -O1, -O2, or -O3 select LLVM optimization level (default: -O2)\n"
+                             "--native tunes native object, assembly, and binary output for this CPU\n"
+                             "--target TRIPLE selects an LLVM target triple; ELF (x86_64, aarch64, riscv64), Mach-O, "
+                             "COFF and\n"
+                             "WebAssembly (wasm32/wasm64) binaries all link through the baked-in LLD\n"
+                             "--sysroot PATH sets the C runtime root (Linux/MinGW) or SDK (macOS) used by --hosted\n"
+                             "--hosted links a host C runtime (required for --link C libraries)\n"
+                             "--link NAME or -lNAME links libNAME; --link-dir PATH adds a C-library search directory\n"
+                             "raw .o, .a, .ll, .llvm, and .bc linker inputs may follow the .shaft input\n"
+                             "--check-only runs lexing, parsing, and checking without emitting an artifact\n"
+                             "--verbose reports compilation stages to stderr\n"
+                             "--version prints the compiler version\n"
+                             "--no-std disables the automatic standard prelude\n"
+                             "--std PATH, --runtime PATH, and --resources PATH override bundled resources\n"
+                             "--dump-ast outputs ast as string";
                 std::exit(0);
             }
             if (argument == "--emit" || argument == "-emit")
@@ -784,6 +790,18 @@ namespace
                     throw std::runtime_error("shaftc: --target requires an LLVM target triple");
                 continue;
             }
+            if (argument == "--sysroot")
+            {
+                if (++i == argc)
+                    throw std::runtime_error("shaftc: --sysroot requires a path");
+                options.sysroot = argv[i];
+                continue;
+            }
+            if (argument.rfind("--sysroot=", 0) == 0)
+            {
+                options.sysroot = argument.substr(10);
+                continue;
+            }
             if (argument == "--std" || argument == "--runtime" || argument == "--resources")
             {
                 if (++i == argc)
@@ -842,44 +860,6 @@ namespace
         if (options.outputPath.empty())
             options.outputPath = default_output_path(options.inputPath, options.emit);
         return options;
-    }
-
-    std::string shell_quote(const std::string &value)
-    {
-#if defined(_WIN32)
-        std::string quoted = "\"";
-        for (const char c : value)
-        {
-            if (c == '"')
-                quoted += "\\\"";
-            else
-                quoted += c;
-        }
-        return quoted + "\"";
-#else
-        std::string quoted = "'";
-        for (const char c : value)
-        {
-            if (c == '\'')
-                quoted += "'\\\"'\\\"'";
-            else
-                quoted += c;
-        }
-        return quoted + "'";
-#endif
-    }
-
-    void run_command(const std::vector<std::string> &arguments)
-    {
-        std::string command;
-        for (const std::string &argument : arguments)
-        {
-            if (!command.empty())
-                command += ' ';
-            command += shell_quote(argument);
-        }
-        if (std::system(command.c_str()) != 0)
-            throw std::runtime_error("tool failed while producing the requested artifact");
     }
 
     std::filesystem::path executable_path(const char *argv0)
@@ -956,29 +936,25 @@ namespace
         return modules;
     }
 
-    bool target_is_linux(const std::string &triple) { return triple.find("linux") != std::string::npos; }
-
     std::filesystem::path bundled_runtime(const Options &options, const char *argv0, const std::string &targetTriple)
     {
         if (!options.runtimePath.empty())
             return options.runtimePath;
-        if (target_is_linux(targetTriple))
+        if (Toolchain::is_wasm(targetTriple))
+        {
+            if (Toolchain::architecture(targetTriple) != "wasm32")
+                throw std::runtime_error(
+                    "the bundled WebAssembly runtime targets WASI preview 1, which is wasm32 only; "
+                    "use --no-std or --runtime for wasm64");
+            return find_resource(options, argv0, "std/runtime/wasm.shaft");
+        }
+        if (Toolchain::is_linux(targetTriple))
             return find_resource(options, argv0, "std/runtime/linux.shaft");
-        if (targetTriple.find("darwin") != std::string::npos || targetTriple.find("apple") != std::string::npos)
+        if (Toolchain::is_darwin(targetTriple))
             return find_resource(options, argv0, "std/runtime/darwin.shaft");
-        if (targetTriple.find("windows") != std::string::npos || targetTriple.find("mingw") != std::string::npos)
+        if (Toolchain::is_windows(targetTriple))
             return find_resource(options, argv0, "std/runtime/windows.shaft");
         throw std::runtime_error("no bundled runtime matches target '" + targetTriple + "'; use --runtime");
-    }
-
-    void link_with_baked_lld(const std::vector<std::string> &arguments)
-    {
-        std::vector<const char *> argv;
-        argv.reserve(arguments.size());
-        for (const std::string &argument : arguments)
-            argv.push_back(argument.c_str());
-        if (!lld_elf_link(argv.data(), argv.size()))
-            throw std::runtime_error("baked-in LLD failed while producing the requested artifact");
     }
 
     std::string selected_target_triple(const Options &options)
@@ -1057,7 +1033,19 @@ namespace
     {
         TargetMachineConfig config;
         if (!options.nativeCpu)
+        {
+            const std::string architecture = Toolchain::architecture(selected_target_triple(options));
+            if (architecture == "riscv64" || architecture == "riscv32")
+            {
+                config.cpu = architecture == "riscv64" ? "generic-rv64" : "generic-rv32";
+                config.features = "+m,+a,+f,+d,+c";
+            }
+            else if (architecture == "wasm32" || architecture == "wasm64")
+            {
+                config.features = "+bulk-memory,+sign-ext,+mutable-globals,+nontrapping-fptoint";
+            }
             return config;
+        }
         char *cpu = LLVMGetHostCPUName();
         char *features = LLVMGetHostCPUFeatures();
         if (cpu && *cpu)
@@ -1191,14 +1179,10 @@ namespace
 
     std::filesystem::path temporary_object_path()
     {
+        static unsigned counter = 0;
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        return std::filesystem::temp_directory_path() / ("shaftc-" + std::to_string(stamp) + ".o");
-    }
-
-    std::filesystem::path temporary_hosted_bridge_path()
-    {
-        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        return std::filesystem::temp_directory_path() / ("shaftc-hosted-" + std::to_string(stamp) + ".c");
+        return std::filesystem::temp_directory_path() /
+               ("shaftc-" + std::to_string(stamp) + "-" + std::to_string(counter++) + ".o");
     }
 
     void inline_assembly_diagnostic_handler(LLVMDiagnosticInfoRef diagnostic, void *opaqueContext)
@@ -1257,9 +1241,6 @@ namespace
             }
             panic_at_source("inline assembly: " + message, *node->mod_path, sourcePosition, node->source);
         }
-
-        // LLVM sends optimization remarks through this handler. Native-emission failures are
-        // returned by the emission API, so non-inline diagnostics must not become CLI noise.
     }
 
     void emit_artifact(LLVMModuleRef module, const Options &options, const char *argv0)
@@ -1288,100 +1269,78 @@ namespace
             return;
         }
 
-        const std::filesystem::path objectPath = temporary_object_path();
-        std::filesystem::path hostedBridge;
+        (void)argv0;
+        std::vector<std::filesystem::path> temporaries;
+        const auto cleanup = [&temporaries]()
+        {
+            for (const std::filesystem::path &temporary : temporaries)
+            {
+                std::error_code ignored;
+                std::filesystem::remove(temporary, ignored);
+            }
+        };
         try
         {
-            emit_native(module, objectPath.string(), LLVMObjectFile, targetTriple, options);
-            if (options.emit == EmitKind::StaticLibrary)
-                run_command({SHAFT_LLVM_AR_PATH, "rcs", options.outputPath, objectPath.string()});
-            else if (options.emit == EmitKind::DynamicLibrary)
+            const bool hostedBinary = options.hosted && options.emit == EmitKind::Binary;
+            if (hostedBinary)
             {
-                std::vector<std::string> linker{"shaftc", "-shared", "-nostdlib", objectPath.string()};
-                linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
-                linker.emplace_back("-o");
-                linker.emplace_back(options.outputPath);
-                link_with_baked_lld(linker);
+                if (Toolchain::is_wasm(targetTriple))
+                    throw std::runtime_error("--hosted is not supported for WebAssembly targets");
+                if (options.noStd)
+                {
+                    LLVMValueRef entry = LLVMGetNamedFunction(module, "__main");
+                    if (!entry || LLVMCountParams(entry) != 0 ||
+                        LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(entry))) != LLVMIntegerTypeKind ||
+                        LLVMGetIntTypeWidth(LLVMGetReturnType(LLVMGlobalGetValueType(entry))) != 32)
+                    {
+                        throw std::runtime_error("--no-std --hosted requires cdef main() -> i32");
+                    }
+                }
+                Toolchain::add_hosted_main(module, options.noStd);
+            }
+
+            const std::filesystem::path objectPath = temporary_object_path();
+            temporaries.push_back(objectPath);
+            emit_native(module, objectPath.string(), LLVMObjectFile, targetTriple, options);
+
+            if (options.emit == EmitKind::StaticLibrary)
+            {
+                Toolchain::create_archive(options.outputPath, {objectPath.string()}, targetTriple);
             }
             else
             {
-                if (options.hosted)
+                Toolchain::LinkJob job;
+                job.triple = targetTriple;
+                job.output = options.outputPath;
+                job.sysroot = options.sysroot;
+                job.shared = options.emit == EmitKind::DynamicLibrary;
+                job.hosted = hostedBinary;
+                job.verbose = options.verbose;
+                job.libraryDirectories = options.linkDirectories;
+                job.inputs.push_back(objectPath.string());
+                for (const std::string &argument : options.linkArguments)
                 {
-                    std::vector<std::string> linker{SHAFT_CLANG_PATH, objectPath.string()};
-                    if (options.noStd)
+                    if (Toolchain::is_ir_input(argument))
                     {
-                        LLVMValueRef entry = LLVMGetNamedFunction(module, "__main");
-                        if (!entry || LLVMCountParams(entry) != 0 ||
-                            LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(entry))) != LLVMIntegerTypeKind ||
-                            LLVMGetIntTypeWidth(LLVMGetReturnType(LLVMGlobalGetValueType(entry))) != 32)
-                        {
-                            throw std::runtime_error("--no-std --hosted requires cdef main() -> i32");
-                        }
-                        hostedBridge = temporary_hosted_bridge_path();
-                        std::ofstream bridge(hostedBridge);
-                        if (!bridge)
-                            throw std::runtime_error("failed to create hosted C entry bridge");
-                        bridge << "extern int __main(void); int main(void) { return __main(); }\n";
-                        linker.emplace_back(hostedBridge.string());
+                        const std::filesystem::path lowered = temporary_object_path();
+                        temporaries.push_back(lowered);
+                        Toolchain::lower_ir_input(
+                            argument, [&](LLVMModuleRef ir)
+                            { emit_native(ir, lowered.string(), LLVMObjectFile, targetTriple, options); });
+                        job.inputs.push_back(lowered.string());
                     }
                     else
-                    {
-                        hostedBridge = temporary_hosted_bridge_path();
-                        std::ofstream bridge(hostedBridge);
-                        if (!bridge)
-                            throw std::runtime_error("failed to create hosted C entry bridge");
-                        bridge << "extern int __shaft_entry(int, char **); int main(int argc, char **argv) { return "
-                                  "__shaft_entry(argc, argv); }\n";
-                        linker.emplace_back(hostedBridge.string());
-                    }
-                    for (const std::string &directory : options.linkDirectories)
-                    {
-                        linker.emplace_back("-L" + directory);
-                        linker.emplace_back("-Wl,-rpath," + directory);
-                    }
-                    linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
-                    linker.emplace_back("-o");
-                    linker.emplace_back(options.outputPath);
-                    run_command(linker);
+                        job.inputs.push_back(argument);
                 }
-                else
-                {
-                    if (!options.targetTriple.empty())
-                    {
-                        if (!target_is_linux(targetTriple))
-                            throw std::runtime_error("cross-target binary linking currently supports Linux targets; "
-                                                     "emit an object for other targets");
-                        std::vector<std::string> linker{"shaftc", "-nostdlib", "-static", objectPath.string()};
-                        linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
-                        linker.emplace_back("-e");
-                        linker.emplace_back("_start");
-                        linker.emplace_back("-o");
-                        linker.emplace_back(options.outputPath);
-                        link_with_baked_lld(linker);
-                    }
-                    else
-                    {
-                        std::vector<std::string> linker{"shaftc", "-nostdlib", "-static", objectPath.string()};
-                        linker.insert(linker.end(), options.linkArguments.begin(), options.linkArguments.end());
-                        linker.emplace_back("-e");
-                        linker.emplace_back("_start");
-                        linker.emplace_back("-o");
-                        linker.emplace_back(options.outputPath);
-                        link_with_baked_lld(linker);
-                    }
-                }
+                Toolchain::link(job);
             }
-            std::filesystem::remove(objectPath);
-            if (!hostedBridge.empty())
-                std::filesystem::remove(hostedBridge);
         }
         catch (...)
         {
-            if (!hostedBridge.empty())
-                std::filesystem::remove(hostedBridge);
-            std::filesystem::remove(objectPath);
+            cleanup();
             throw;
         }
+        cleanup();
     }
 } // namespace
 

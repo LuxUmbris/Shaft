@@ -10,9 +10,9 @@ def read_byte(*u8 result) -> bool available
 }
 
 
-def read_message() -> String result
+def read_message() -> std::String result
 {
-    reserve mut String contentLength = String::from_str("Content-Length");
+    reserve mut std::String contentLength = std::String::from_str("Content-Length");
     mut u64 nameOffset = 0;
     mut bool foundLength = false;
     mut bool readingLength = false;
@@ -81,7 +81,7 @@ def read_message() -> String result
         }
     }
 
-    reserve mut String message = String::with_capacity(length);
+    reserve mut std::String message = std::String::with_capacity(length);
     mut u64 offset = 0;
     while (inputOpen && offset < length)
     {
@@ -93,11 +93,11 @@ def read_message() -> String result
     }
     message.length = offset;
     message.data[offset] = 0;
-    tunnel message -> String result;
+    tunnel message -> std::String result;
 }
 
 
-def contains(*String message, *String needle) -> bool found
+def contains(*std::String message, *std::String needle) -> bool found
 {
     mut bool present = false;
     if (needle.length == 0)
@@ -132,7 +132,7 @@ def contains(*String message, *String needle) -> bool found
 }
 
 
-def matches_at(*String text, u64 offset, *String expected) -> bool matches
+def matches_at(*std::String text, u64 offset, *std::String expected) -> bool matches
 {
     mut bool equal = offset + expected.length <= text.length;
     mut u64 characterOffset = 0;
@@ -147,9 +147,9 @@ def matches_at(*String text, u64 offset, *String expected) -> bool matches
     tunnel equal -> bool matches;
 }
 
-def json_string(*String message, *String marker) -> String result
+def json_string(*std::String message, *std::String marker) -> std::String result
 {
-    reserve mut String value = String::with_capacity(message.length);
+    reserve mut std::String value = std::String::with_capacity(message.length);
     mut u64 markerStart = 0;
     mut bool found = false;
     while (!found && markerStart + marker.length <= message.length)
@@ -194,11 +194,11 @@ def json_string(*String message, *String marker) -> String result
         }
     }
     value.data[value.length] = 0;
-    tunnel value -> String result;
+    tunnel value -> std::String result;
 }
 
 
-def json_number(*String message, *String marker, u64 occurrence) -> u64 result
+def json_number(*std::String message, *std::String marker, u64 occurrence) -> u64 result
 {
     mut u64 search = 0;
     mut u64 seen = 0;
@@ -236,7 +236,7 @@ def json_number(*String message, *String marker, u64 occurrence) -> u64 result
 }
 
 
-def document_offset(*String text, u64 wantedLine, u64 wantedColumn) -> u64 result
+def document_offset(*std::String text, u64 wantedLine, u64 wantedColumn) -> u64 result
 {
     mut u64 offset = 0;
     mut u64 line = 0;
@@ -258,9 +258,9 @@ def document_offset(*String text, u64 wantedLine, u64 wantedColumn) -> u64 resul
 }
 
 
-def replace_document_range(*String source, u64 rangeStart, u64 rangeEnd, *String replacement) -> String result
+def replace_document_range(*std::String source, u64 rangeStart, u64 rangeEnd, *std::String replacement) -> std::String result
 {
-    reserve mut String value = String::with_capacity(source.length + replacement.length);
+    reserve mut std::String value = std::String::with_capacity(source.length + replacement.length);
     mut u64 offset = 0;
     while (offset < rangeStart && offset < source.length)
     {
@@ -283,13 +283,13 @@ def replace_document_range(*String source, u64 rangeStart, u64 rangeEnd, *String
         offset = offset + 1;
     }
     value.data[value.length] = 0;
-    tunnel value -> String result;
+    tunnel value -> std::String result;
 }
 
 
-def request_id(*String message) -> u64 result
+def request_id(*std::String message) -> u64 result
 {
-    reserve String marker = String::from_str("\"id\":");
+    reserve std::String marker = std::String::from_str("\"id\":");
     mut u64 identifier = 0;
     mut u64 markerOffset = 0;
     mut bool reading = false;
@@ -330,21 +330,21 @@ def request_id(*String message) -> u64 result
 }
 
 
-def send_body(*String body)
+def send_body(*std::String body)
 {
-    reserve mut String frame = String::from_str("Content-Length: ");
-    reserve String sizeText = String::from_u64(body.length);
+    reserve mut std::String frame = std::String::from_str("Content-Length: ");
+    reserve std::String sizeText = std::String::from_u64(body.length);
     frame.append(sizeText.get_view());
     frame.append("\r\n\r\n");
     frame.append(body.get_view());
-    print(frame.get_view());
+    std::print(frame.get_view());
 }
 
 
-def send_response(u64 identifier, *String result)
+def send_response(u64 identifier, *std::String result)
 {
-    reserve mut String body = String::from_str("{\"jsonrpc\":\"2.0\",\"id\":");
-    reserve String idText = String::from_u64(identifier);
+    reserve mut std::String body = std::String::from_str("{\"jsonrpc\":\"2.0\",\"id\":");
+    reserve std::String idText = std::String::from_u64(identifier);
     body.append(idText.get_view());
     body.append(",\"result\":");
     body.append(result.get_view());
@@ -353,9 +353,9 @@ def send_response(u64 identifier, *String result)
 }
 
 
-def send_notification(*String method, *String params)
+def send_notification(*std::String method, *std::String params)
 {
-    reserve mut String body = String::from_str("{\"jsonrpc\":\"2.0\",\"method\":\"");
+    reserve mut std::String body = std::String::from_str("{\"jsonrpc\":\"2.0\",\"method\":\"");
     body.append(method.get_view());
     body.append("\",\"params\":");
     body.append(params.get_view());
@@ -364,14 +364,14 @@ def send_notification(*String method, *String params)
 }
 
 
-def append_number(*String output, u64 value)
+def append_number(*std::String output, u64 value)
 {
-    reserve String text = String::from_u64(value);
+    reserve std::String text = std::String::from_u64(value);
     output.append(text.get_view());
 }
 
 
-def append_token(*String output, u64 line, u64 column, u64 tokenLength, u64 kind, *u64 previousLine, *u64 previousStart, *bool first)
+def append_token(*std::String output, u64 line, u64 column, u64 tokenLength, u64 kind, *u64 previousLine, *u64 previousStart, *bool first)
 {
     if (!first[0])
     {
@@ -416,7 +416,7 @@ def is_assembly_name_part(u8 byte) -> bool result
 }
 
 
-def matches_config_directive(*String text, u64 offset, *String directive) -> bool matches
+def matches_config_directive(*std::String text, u64 offset, *std::String directive) -> bool matches
 {
     mut bool complete = matches_at(text, offset, directive);
     if (complete)
@@ -427,7 +427,7 @@ def matches_config_directive(*String text, u64 offset, *String directive) -> boo
 }
 
 
-def matches_line_directive(*String text, u64 offset, u64 lineEnd, *String directive) -> bool matches
+def matches_line_directive(*std::String text, u64 offset, u64 lineEnd, *std::String directive) -> bool matches
 {
     mut bool complete = matches_at(text, offset, directive);
     if (complete && offset + directive.length < lineEnd)
@@ -439,7 +439,7 @@ def matches_line_directive(*String text, u64 offset, u64 lineEnd, *String direct
 }
 
 
-def append_assembly_tokens(*String text, u64 offset, u64 lineEnd, u64 line, *String output,
+def append_assembly_tokens(*std::String text, u64 offset, u64 lineEnd, u64 line, *std::String output,
                            *u64 previousLine, *u64 previousStart, *bool first)
 {
     mut u64 cursor = offset;
@@ -502,7 +502,7 @@ def append_assembly_tokens(*String text, u64 offset, u64 lineEnd, u64 line, *Str
 }
 
 
-def word_in_list(*String text, u64 startOffset, u64 endOffset, *String words) -> bool found
+def word_in_list(*std::String text, u64 startOffset, u64 endOffset, *std::String words) -> bool found
 {
     mut bool present = false;
     mut u64 offset = 0;
@@ -533,9 +533,9 @@ def word_in_list(*String text, u64 startOffset, u64 endOffset, *String words) ->
 }
 
 
-def is_declared_custom_type(*String text, u64 candidateStart, u64 candidateEnd) -> bool found
+def is_declared_custom_type(*std::String text, u64 candidateStart, u64 candidateEnd) -> bool found
 {
-    reserve String declarations = String::from_str("class|enum|struct");
+    reserve std::String declarations = std::String::from_str("class|enum|struct");
     mut u64 cursor = 0;
     mut bool declared = false;
     while (!declared && cursor < text.length)
@@ -638,10 +638,10 @@ def is_declared_custom_type(*String text, u64 candidateStart, u64 candidateEnd) 
 }
 
 
-def append_config_condition_tokens(*String text, u64 startOffset, u64 lineEnd, u64 line, u64 lineStart,
-                                   *String output, *u64 previousLine, *u64 previousStart, *bool first)
+def append_config_condition_tokens(*std::String text, u64 startOffset, u64 lineEnd, u64 line, u64 lineStart,
+                                   *std::String output, *u64 previousLine, *u64 previousStart, *bool first)
 {
-    reserve String conditions = String::from_str("in|matches");
+    reserve std::String conditions = std::String::from_str("in|matches");
     mut u64 cursor = startOffset;
     while (cursor < lineEnd && !is_space(text.data[cursor]) && text.data[cursor] != 61)
     {
@@ -666,11 +666,11 @@ def append_config_condition_tokens(*String text, u64 startOffset, u64 lineEnd, u
 }
 
 
-def append_source_tokens(*String text, u64 offset, u64 lineEnd, u64 line, *String output,
+def append_source_tokens(*std::String text, u64 offset, u64 lineEnd, u64 line, *std::String output,
                          *u64 previousLine, *u64 previousStart, *bool first)
 {
-    reserve String keywords = String::from_str("align|async|await|break|case|cdec|cdef|class|continue|dec|default|def|else|enum|export|for|foreach|global|if|import|index|init|inline|match|move|mut|naked|namespace|raw|ref|reserve|return|self|sizeof|start|struct|tunnel|using|valid|while");
-    reserve String types = String::from_str("bool|char|State|Thread|u8|u16|u32|u64|usize|i8|i16|i32|i64|f32|f64");
+    reserve std::String keywords = std::String::from_str("align|async|await|break|case|cdec|cdef|class|continue|dec|default|def|else|enum|export|for|foreach|global|if|import|index|init|inline|match|move|mut|naked|namespace|raw|ref|reserve|return|self|sizeof|start|struct|tunnel|using|valid|while");
+    reserve std::String types = std::String::from_str("bool|char|State|Thread|u8|u16|u32|u64|usize|i8|i16|i32|i64|f32|f64");
     mut u64 cursor = offset;
     while (cursor < lineEnd)
     {
@@ -783,15 +783,15 @@ def append_source_tokens(*String text, u64 offset, u64 lineEnd, u64 line, *Strin
 }
 
 
-def semantic_tokens(*String text) -> String result
+def semantic_tokens(*std::String text) -> std::String result
 {
-    reserve String importWord = String::from_str("import");
-    reserve String configWord = String::from_str("@config");
-    reserve String negatedConfigWord = String::from_str("@!config");
-    reserve String errorWord = String::from_str("@error");
-    reserve String asmWord = String::from_str("@asm");
-    reserve String endWord = String::from_str("@end");
-    reserve mut String output = String::with_capacity(text.length * 4 + 32);
+    reserve std::String importWord = std::String::from_str("import");
+    reserve std::String configWord = std::String::from_str("@config");
+    reserve std::String negatedConfigWord = std::String::from_str("@!config");
+    reserve std::String errorWord = std::String::from_str("@error");
+    reserve std::String asmWord = std::String::from_str("@asm");
+    reserve std::String endWord = std::String::from_str("@end");
+    reserve mut std::String output = std::String::with_capacity(text.length * 4 + 32);
     output.append("{\"data\":[");
     mut u64 previousLine = 0;
     mut u64 previousStart = 0;
@@ -889,11 +889,11 @@ def semantic_tokens(*String text) -> String result
         }
     }
     output.append("]}");
-    tunnel output -> String result;
+    tunnel output -> std::String result;
 }
 
 
-def append_json_escaped(*String output, *String value)
+def append_json_escaped(*std::String output, *std::String value)
 {
     mut u64 offset = 0;
     while (offset < value.length)
@@ -945,7 +945,7 @@ def append_json_escaped(*String output, *String value)
 }
 
 
-def append_diagnostic(*String output, u64 line, u64 column, *String message, *String source, *bool first)
+def append_diagnostic(*std::String output, u64 line, u64 column, *std::String message, *std::String source, *bool first)
 {
     if (!first[0])
     {
@@ -968,9 +968,9 @@ def append_diagnostic(*String output, u64 line, u64 column, *String message, *St
 }
 
 
-def publish_empty_diagnostics(*String uri, *String notificationMethod)
+def publish_empty_diagnostics(*std::String uri, *std::String notificationMethod)
 {
-    reserve mut String params = String::with_capacity(uri.length + 32);
+    reserve mut std::String params = std::String::with_capacity(uri.length + 32);
     params.append("{\"uri\":\"");
     append_json_escaped(&params, uri);
     params.append("\",\"diagnostics\":[]}");
@@ -978,7 +978,7 @@ def publish_empty_diagnostics(*String uri, *String notificationMethod)
 }
 
 
-def find_text(*String text, *String needle, u64 startOffset) -> u64 result
+def find_text(*std::String text, *std::String needle, u64 startOffset) -> u64 result
 {
     mut u64 offset = startOffset;
     mut bool found = false;
@@ -1001,11 +1001,10 @@ def find_text(*String text, *String needle, u64 startOffset) -> u64 result
 }
 
 
-// `shaftc` colors diagnostics even when stderr is redirected. Remove CSI
-// sequences before parsing or serializing a diagnostic for JSON-RPC.
-def strip_ansi(*String input) -> String result
+
+def strip_ansi(*std::String input) -> std::String result
 {
-    reserve mut String clean = String::with_capacity(input.length);
+    reserve mut std::String clean = std::String::with_capacity(input.length);
     mut u64 offset = 0;
     while (offset < input.length)
     {
@@ -1029,27 +1028,26 @@ def strip_ansi(*String input) -> String result
         }
     }
     clean.data[clean.length] = 0;
-    tunnel clean -> String result;
+    tunnel clean -> std::String result;
 }
 
 
-// The launcher provisions an isolated snapshot path. The server writes only
-// that path, never the user's on-disk source file.
-def append_compiler_diagnostic(*String output, *String text, *String compilerPath, *String diagnosticPath, *bool first)
+
+def append_compiler_diagnostic(*std::String output, *std::String text, *std::String compilerPath, *std::String diagnosticPath, *bool first)
 {
     if (compilerPath.length != 0 && diagnosticPath.length != 0 &&
-        File::write(diagnosticPath.get_view(), text.get_view()) == text.length)
+        std::File::write(diagnosticPath.get_view(), text.get_view()) == text.length)
     {
-        reserve mut Process::Command command = Process::Command::new(compilerPath.get_view());
+        reserve mut std::Process::Command command = std::Process::Command::new(compilerPath.get_view());
         command.arg("--check-only");
         command.arg(diagnosticPath.get_view());
-        reserve Process::Output compilerOutput = command.output();
+        reserve std::Process::Output compilerOutput = command.output();
         if (compilerOutput.status != 0)
         {
-            reserve String compilerError = strip_ansi(&compilerOutput.stderr);
-            reserve String errorMarker = String::from_str("error: ");
-            reserve String locationMarker = String::from_str("--> ");
-            reserve String compilerSource = String::from_str("shaftc");
+            reserve std::String compilerError = strip_ansi(&compilerOutput.stderr);
+            reserve std::String errorMarker = std::String::from_str("error: ");
+            reserve std::String locationMarker = std::String::from_str("--> ");
+            reserve std::String compilerSource = std::String::from_str("shaftc");
             reserve u64 errorStart = find_text(&compilerError, &errorMarker, 0);
             reserve u64 locationStart = find_text(&compilerError, &locationMarker, 0);
             if (errorStart < compilerError.length &&
@@ -1062,7 +1060,7 @@ def append_compiler_diagnostic(*String output, *String text, *String compilerPat
                 {
                     messageEnd = messageEnd + 1;
                 }
-                reserve mut String message = String::with_capacity(messageEnd - errorStart - errorMarker.length);
+                reserve mut std::String message = std::String::with_capacity(messageEnd - errorStart - errorMarker.length);
                 mut u64 character = errorStart + errorMarker.length;
                 while (character < messageEnd)
                 {
@@ -1114,15 +1112,15 @@ def append_compiler_diagnostic(*String output, *String text, *String compilerPat
 
 // Braces in strings and line comments do not participate in structure. Every
 // unmatched close and every remaining open is reported at its source position.
-def publish_structure_diagnostics(*String uri, *String text, *String compilerPath, *String diagnosticPath, *String notificationMethod, *String unmatchedMessage, *String unclosedMessage)
+def publish_structure_diagnostics(*std::String uri, *std::String text, *std::String compilerPath, *std::String diagnosticPath, *std::String notificationMethod, *std::String unmatchedMessage, *std::String unclosedMessage)
 {
     // A source byte can produce one complete diagnostic object, not merely one
     // output byte (for example, a document of unmatched closing braces).
-    reserve mut String params = String::with_capacity(text.length * 160 + uri.length + 128);
+    reserve mut std::String params = std::String::with_capacity(text.length * 160 + uri.length + 128);
     params.append("{\"uri\":\"");
     append_json_escaped(&params, uri);
     params.append("\",\"diagnostics\":[");
-    reserve String structureSource = String::from_str("shaftls");
+    reserve std::String structureSource = std::String::from_str("shaftls");
     mut bool first = true;
     mut u64[] braceLines = __shaft_alloc_or_exit((text.length + 1) * 8);
     mut u64[] braceColumns = __shaft_alloc_or_exit((text.length + 1) * 8);
@@ -1205,7 +1203,7 @@ def publish_structure_diagnostics(*String uri, *String text, *String compilerPat
     }
     if (inString)
     {
-        reserve String unterminatedStringMessage = String::from_str("Unterminated string literal");
+        reserve std::String unterminatedStringMessage = std::String::from_str("Unterminated string literal");
         append_diagnostic(&params, stringLine, stringColumn, &unterminatedStringMessage, &structureSource, &first);
     }
     while (depth > 0)
@@ -1222,54 +1220,54 @@ def publish_structure_diagnostics(*String uri, *String text, *String compilerPat
 }
 
 
-def main(String[] args)
+def main(std::String[] args)
 {
-    reserve String initializeMarker = String::from_str("\"method\":\"initialize\"");
-    reserve String shutdownMarker = String::from_str("\"method\":\"shutdown\"");
-    reserve String exitMarker = String::from_str("\"method\":\"exit\"");
-    reserve String didOpenMarker = String::from_str("\"method\":\"textDocument/didOpen\"");
-    reserve String didChangeMarker = String::from_str("\"method\":\"textDocument/didChange\"");
-    reserve String didCloseMarker = String::from_str("\"method\":\"textDocument/didClose\"");
-    reserve String semanticMarker = String::from_str("\"method\":\"textDocument/semanticTokens/full\"");
-    reserve String uriMarker = String::from_str("\"uri\":\"");
-    reserve String textMarker = String::from_str("\"text\":\"");
-    reserve String rangeMarker = String::from_str("\"range\":");
-    reserve String startLineMarker = String::from_str("\"start\":{\"line\":");
-    reserve String endLineMarker = String::from_str("\"end\":{\"line\":");
-    reserve String characterMarker = String::from_str("\"character\":");
-    reserve String compilerPathMarker = String::from_str("\"compilerPath\":\"");
-    reserve String diagnosticPathMarker = String::from_str("\"diagnosticPath\":\"");
-    reserve String diagnosticsMethod = String::from_str("textDocument/publishDiagnostics");
-    reserve String unmatchedMessage = String::from_str("Unmatched closing brace");
-    reserve String unclosedMessage = String::from_str("Unclosed opening brace");
-    reserve String initializeResult = String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\",\"macro\",\"variable\",\"error\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
-    reserve String nullResult = String::from_str("null");
-    reserve mut String documentUri = String::with_capacity(1);
-    reserve mut String documentText = String::with_capacity(1);
-    reserve mut String compilerPath = String::with_capacity(1);
-    reserve mut String diagnosticPath = String::with_capacity(1);
+    reserve std::String initializeMarker = std::String::from_str("\"method\":\"initialize\"");
+    reserve std::String shutdownMarker = std::String::from_str("\"method\":\"shutdown\"");
+    reserve std::String exitMarker = std::String::from_str("\"method\":\"exit\"");
+    reserve std::String didOpenMarker = std::String::from_str("\"method\":\"textDocument/didOpen\"");
+    reserve std::String didChangeMarker = std::String::from_str("\"method\":\"textDocument/didChange\"");
+    reserve std::String didCloseMarker = std::String::from_str("\"method\":\"textDocument/didClose\"");
+    reserve std::String semanticMarker = std::String::from_str("\"method\":\"textDocument/semanticTokens/full\"");
+    reserve std::String uriMarker = std::String::from_str("\"uri\":\"");
+    reserve std::String textMarker = std::String::from_str("\"text\":\"");
+    reserve std::String rangeMarker = std::String::from_str("\"range\":");
+    reserve std::String startLineMarker = std::String::from_str("\"start\":{\"line\":");
+    reserve std::String endLineMarker = std::String::from_str("\"end\":{\"line\":");
+    reserve std::String characterMarker = std::String::from_str("\"character\":");
+    reserve std::String compilerPathMarker = std::String::from_str("\"compilerPath\":\"");
+    reserve std::String diagnosticPathMarker = std::String::from_str("\"diagnosticPath\":\"");
+    reserve std::String diagnosticsMethod = std::String::from_str("textDocument/publishDiagnostics");
+    reserve std::String unmatchedMessage = std::String::from_str("Unmatched closing brace");
+    reserve std::String unclosedMessage = std::String::from_str("Unclosed opening brace");
+    reserve std::String initializeResult = std::String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\",\"macro\",\"variable\",\"error\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
+    reserve std::String nullResult = std::String::from_str("null");
+    reserve mut std::String documentUri = std::String::with_capacity(1);
+    reserve mut std::String documentText = std::String::with_capacity(1);
+    reserve mut std::String compilerPath = std::String::with_capacity(1);
+    reserve mut std::String diagnosticPath = std::String::with_capacity(1);
     mut bool running = true;
     mut bool shutdownRequested = false;
     mut bool exitReceived = false;
 
     while (running)
     {
-        reserve String message = read_message();
+        reserve std::String message = read_message();
         if (message.length == 0)
         {
             running = false;
         }
         else if (contains(&message, &initializeMarker))
         {
-            reserve String configuredCompilerPath = json_string(&message, &compilerPathMarker);
+            reserve std::String configuredCompilerPath = json_string(&message, &compilerPathMarker);
             if (configuredCompilerPath.length != 0)
             {
-                compilerPath = String::from_str(configuredCompilerPath.get_view());
+                compilerPath = std::String::from_str(configuredCompilerPath.get_view());
             }
-            reserve String configuredDiagnosticPath = json_string(&message, &diagnosticPathMarker);
+            reserve std::String configuredDiagnosticPath = json_string(&message, &diagnosticPathMarker);
             if (configuredDiagnosticPath.length != 0)
             {
-                diagnosticPath = String::from_str(configuredDiagnosticPath.get_view());
+                diagnosticPath = std::String::from_str(configuredDiagnosticPath.get_view());
             }
             send_response(request_id(&message), &initializeResult);
         }
@@ -1293,7 +1291,7 @@ def main(String[] args)
         {
             if (contains(&message, &rangeMarker))
             {
-                reserve String replacement = json_string(&message, &textMarker);
+                reserve std::String replacement = json_string(&message, &textMarker);
                 reserve u64 rangeStart = document_offset(&documentText, json_number(&message, &startLineMarker, 0), json_number(&message, &characterMarker, 0));
                 reserve u64 rangeEnd = document_offset(&documentText, json_number(&message, &endLineMarker, 0), json_number(&message, &characterMarker, 1));
                 documentText = replace_document_range(&documentText, rangeStart, rangeEnd, &replacement);
@@ -1303,7 +1301,7 @@ def main(String[] args)
                 // Full-content changes replace the stored text.
                 documentText = json_string(&message, &textMarker);
             }
-            reserve String changedUri = json_string(&message, &uriMarker);
+            reserve std::String changedUri = json_string(&message, &uriMarker);
             if (changedUri.length != 0)
             {
                 documentUri = changedUri;
@@ -1312,12 +1310,12 @@ def main(String[] args)
         }
         else if (contains(&message, &didCloseMarker))
         {
-            reserve String closedUri = json_string(&message, &uriMarker);
+            reserve std::String closedUri = json_string(&message, &uriMarker);
             publish_empty_diagnostics(&closedUri, &diagnosticsMethod);
         }
         else if (contains(&message, &semanticMarker))
         {
-            reserve String tokens = semantic_tokens(&documentText);
+            reserve std::String tokens = semantic_tokens(&documentText);
             send_response(request_id(&message), &tokens);
         }
     }

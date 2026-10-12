@@ -68,7 +68,6 @@ def main() -> None:
     runtimes = [
         package_root / "share" / "shaft" / "std" / "runtime" / "linux.shaft",
         package_root / "share" / "shaft" / "std" / "runtime" / "darwin.shaft",
-        package_root / "share" / "shaft" / "std" / "runtime" / "macos.shaft",
         package_root / "share" / "shaft" / "std" / "runtime" / "windows.shaft",
     ]
     required = [compiler, language_server, stdlib, *runtimes]

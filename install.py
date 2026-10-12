@@ -195,9 +195,18 @@ def install_vim(source_root: Path, vim_home: Path) -> list[Path]:
 
 
 def install_neovim(source_root: Path, config_home: Path) -> list[Path]:
-    return install_editor_files(source_root / "editors" / "neovim", config_home, (
+    installed = install_editor_files(source_root / "editors" / "neovim", config_home, (
         "lua/shaft/init.lua", "plugin/shaft.lua", "syntax/shaft.vim",
     ))
+    server_root = source_root / "editors" / "vscode-shaft" / "server"
+    for relative in ("shaft-lsp.cjs", "lib/shaft-language.cjs", "lib/compiler-discovery.cjs"):
+        source = server_root / relative
+        if not source.is_file():
+            raise InstallError(f"editor integration resource is missing: {source}")
+        destination = config_home / "lua" / "shaft" / "server" / relative
+        copy_file(source, destination)
+        installed.append(destination)
+    return installed
 
 
 def neovim_config_directory(target: Target, environment: dict[str, str] | None = None) -> Path:

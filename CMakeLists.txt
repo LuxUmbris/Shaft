@@ -39,7 +39,13 @@ FetchContent_Declare(
     SOURCE_SUBDIR llvm
     EXCLUDE_FROM_ALL
 )
+# Respect LLVM's monorepo layout when an older CMake cache has a stale external
+# LLD source path (for example, `/lld`).
+set(LLVM_EXTERNAL_LLD_SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/llvm-project-src/lld" CACHE PATH "" FORCE)
 FetchContent_MakeAvailable(llvm-project)
+target_include_directories(LLVMSupport SYSTEM PRIVATE
+    "${llvm-project_SOURCE_DIR}/third-party/siphash/include"
+)
 
 find_program(SHAFT_CLANG NAMES clang REQUIRED)
 find_program(SHAFT_LLVM_AR NAMES llvm-ar-18 llvm-ar REQUIRED)
@@ -68,7 +74,7 @@ target_compile_definitions(shaftc PRIVATE
     SHAFT_SOURCE_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     SHAFT_CLANG_PATH="${SHAFT_CLANG}"
     SHAFT_LLVM_AR_PATH="${SHAFT_LLVM_AR}"
-    SHAFT_VERSION="alpha-0.2-bootstrap"
+    SHAFT_VERSION="beta-0.3-bootstrap"
 )
 
 target_link_libraries(shaftc PRIVATE
@@ -97,13 +103,13 @@ target_link_libraries(shaftc PRIVATE
 )
 
 add_custom_target(shaftls ALL
-    COMMAND $<TARGET_FILE:shaftc> --build Shaft.build
+    COMMAND $<TARGET_FILE:shaftc> --build Shaft.toml
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/shaftls/build/shaftls
         ${CMAKE_CURRENT_BINARY_DIR}/shaftls
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/shaftls
     DEPENDS shaftc
-        ${CMAKE_CURRENT_SOURCE_DIR}/shaftls/Shaft.build
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaftls/Shaft.toml
         ${CMAKE_CURRENT_SOURCE_DIR}/shaftls/src/main.shaft
     BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/shaftls)
 

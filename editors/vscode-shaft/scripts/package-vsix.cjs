@@ -10,6 +10,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'ut
 const output = process.argv[2] ? path.resolve(process.argv[2]) : path.join(root, `${manifest.name}-${manifest.version}.vsix`);
 const files = [
   'package.json', 'README.md', 'extension.cjs', 'language-configuration.json',
+  'server/shaft-lsp.cjs', 'server/lib/shaft-language.cjs', 'server/lib/compiler-discovery.cjs',
   'server/lib/extension-settings.cjs', 'server/lib/server-command.cjs',
   'syntaxes/shaft.tmLanguage.json', 'snippets/shaft.code-snippets',
 ];

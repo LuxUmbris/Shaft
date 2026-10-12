@@ -135,13 +135,17 @@
           "match": "^\\s*@error\\b"
         },
         {
+          "name": "keyword.control.preprocessor.shaft",
+          "match": "^\\s*@(unsafe|nocheck|nocleanup|comptime|end)\\b"
+        },
+        {
           "match": "^(\\s*@!?config\\.(?:build|package)\\.[A-Za-z_]\\w*\\s+)(in|matches)\\b",
           "captures": {
             "1": {
-              "name": "meta.preprocessor.shaft"
+              "name": "keyword.control.preprocessor.shaft"
             },
             "2": {
-              "name": "meta.preprocessor.shaft"
+              "name": "keyword.control.preprocessor.shaft"
             }
           }
         },
@@ -183,7 +187,7 @@
     "declarations": {
       "patterns": [
         {
-          "match": "\\b(namespace|class|struct|enum)\\s*(<[^>]*>)?\\s*([A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)*)",
+          "match": "\\b(namespace|struct|trait|impl|enum)\\s*(<[^>]*>)?\\s*([A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)*)",
           "captures": {
             "1": {
               "name": "storage.type.shaft"
@@ -197,7 +201,7 @@
           }
         },
         {
-          "match": "\\b(def|dec|cdef|cdec)\\s*(<[^>]*>)?\\s*(?:(async|naked)\\s+)?([A-Za-z_]\\w*)",
+          "match": "\\b(def|dec|cdef|cdec)\\b\\s*(<[^>]*>)?\\s*(?:(async|naked)\\s+)?([A-Za-z_]\\w*)",
           "captures": {
             "1": {
               "name": "storage.type.function.shaft"
@@ -221,7 +225,7 @@
     },
     "keywords": {
       "name": "keyword.control.shaft",
-      "match": "\\b(if|else|match|case|default|while|for|foreach|break|continue|return|tunnel|reserve|valid|move|ref|mut|namespace|using|global|import|export|inline|naked|align|index|init|async|await|start|self|sizeof)\\b"
+      "match": "\\b(if|else|match|case|default|while|for|foreach|break|continue|do|yield|return|terminate|tunnel|reserve|valid|move|ref|mut|namespace|using|global|import|export|inline|naked|align|index|init|async|await|start|self|sizeof|as|impl|trait|union)\\b"
     },
     "types": {
       "name": "support.type.shaft",

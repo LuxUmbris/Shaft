@@ -12,7 +12,7 @@ syn region shaftCharacter start=/'/ skip=/\\./ end=/'/ contains=shaftEscape
 syn match shaftEscape /\\./ contained
 
 " Ordinary source tokens.
-syn keyword shaftKeyword align async await break case continue default else export for foreach global if import in index init inline match matches move mut naked raw ref return self sizeof start tunnel using valid while
+syn keyword shaftKeyword align as async await break case continue default else export for foreach global if impl import in index init inline match matches move mut naked raw ref return self sizeof start trait tunnel using valid while
 syn keyword shaftType bool char State Thread u8 u16 u32 u64 usize i8 i16 i32 i64 f32 f64
 syn keyword shaftBoolean true false
 syn match shaftNumber /\<\%(0x[0-9A-Fa-f_]\+\|0b[01_]\+\|[0-9][0-9_]*\%(\.[0-9][0-9_]*\)\?\)\>/
@@ -22,7 +22,7 @@ syn match shaftVariable /\<[A-Za-z_][A-Za-z0-9_]*\>/
 
 " Types are recognized at declarations and type-bearing source positions, even when lowercase.
 syn match shaftType /\<[A-Z][A-Za-z0-9_]*\>/
-syn keyword shaftKeyword namespace class struct enum nextgroup=shaftCustomType skipwhite
+syn keyword shaftKeyword namespace struct trait impl enum nextgroup=shaftCustomType skipwhite
 syn keyword shaftKeyword reserve nextgroup=shaftModifier,shaftCustomType skipwhite
 syn keyword shaftModifier mut ref contained nextgroup=shaftCustomType skipwhite
 syn keyword shaftKeyword def dec cdef cdec nextgroup=shaftFunctionModifier,shaftFunction skipwhite

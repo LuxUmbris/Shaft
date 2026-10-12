@@ -59,6 +59,23 @@ test('creates and cleans an isolated live-diagnostics snapshot for an absolute c
   }
 });
 
+
+test('resolves shaftc on PATH to an absolute live-diagnostics compiler', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shaft-path-diagnostics-'));
+  try {
+    const compiler = path.join(directory, 'shaftc');
+    fs.writeFileSync(compiler, 'compiler');
+    const live = discovery.createLiveDiagnosticsOptions(
+      { compilerPath: 'shaftc' },
+      { temporaryDirectory: directory, env: { PATH: directory } },
+    );
+    assert.equal(live.options.compilerPath, compiler);
+    discovery.removeLiveDiagnosticsDirectory(live.directory);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('computes config paths for supported operating systems', () => {
   assert.equal(discovery.registrationPath({ platform: 'linux', env: { XDG_CONFIG_HOME: '/config' }, home: '/home/test' }), '/config/shaft/compiler.json');
   assert.equal(discovery.registrationPath({ platform: 'darwin', env: {}, home: '/Users/test' }), '/Users/test/Library/Application Support/Shaft/compiler.json');

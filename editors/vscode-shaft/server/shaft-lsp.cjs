@@ -2,6 +2,7 @@
 'use strict';
 
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -15,10 +16,11 @@ let shutdownRequested = false;
 let rootUri = null;
 let settings = { compilerPath: '', diagnostics: 'onChange', maxProblems: 100 };
 
-const completionKinds = { class: 7, struct: 22, enum: 13, function: 3, keyword: 14, symbol: 13 };
-const symbolKinds = { class: 5, struct: 23, enum: 10, function: 12 };
+const completionKinds = { struct: 22, trait: 8, impl: 8, enum: 13, function: 3, field: 5, variable: 6, parameter: 6, namespace: 9, keyword: 14, symbol: 13 };
+const symbolKinds = { struct: 23, trait: 11, impl: 8, enum: 10, function: 12, field: 8, variable: 13, namespace: 3 };
 const tokenTypes = ['keyword', 'type', 'function', 'number', 'string', 'comment', 'operator'];
 const keywordSet = new Set(language.KEYWORDS);
+const directiveSet = new Set(['@unsafe', '@end']);
 
 function send(message) {
   const body = Buffer.from(JSON.stringify(message), 'utf8');
@@ -68,7 +70,7 @@ function allSymbols() {
 function indexWorkspace() {
   if (!rootUri || !rootUri.startsWith('file:')) return;
   const root = workspacePath();
-  const ignored = new Set(['.git', 'build', 'node_modules', '.vscode-test']);
+  const ignored = new Set(['.git', '.hermes', '.llvm-cache', 'build', 'node_modules', '.vscode-test']);
   let indexed = 0;
   const visit = (directory) => {
     if (indexed >= 1000) return;
@@ -106,9 +108,17 @@ function compilerDiagnostics(uri, text) {
   if (settings.diagnostics === 'off') return [];
   const compiler = settings.compilerPath;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shaft-lsp-'));
-  const sourcePath = path.join(directory, 'document.shaft');
+  let sourcePath;
   try {
+    const sourceDirectory = path.dirname(uriToPath(uri));
+    fs.accessSync(sourceDirectory, fs.constants.W_OK);
+    sourcePath = path.join(sourceDirectory, `.shaft-lsp-${crypto.randomUUID()}.shaft`);
     fs.writeFileSync(sourcePath, text, 'utf8');
+  } catch {
+    sourcePath = path.join(directory, 'document.shaft');
+    fs.writeFileSync(sourcePath, text, 'utf8');
+  }
+  try {
     const args = ['--emit', 'llvm', '-o', path.join(directory, 'document.ll')];
     if (settings.stdlibPath) args.push('--std', settings.stdlibPath);
     else {
@@ -117,10 +127,48 @@ function compilerDiagnostics(uri, text) {
     }
     if (settings.resourcePath) args.push('--resources', settings.resourcePath);
     args.push(sourcePath);
-    const result = childProcess.spawnSync(compiler, args, { cwd: workspacePath(), encoding: 'utf8', timeout: 10000, windowsHide: true });
+    const requestedCwd = workspacePath();
+    const cwd = fs.existsSync(requestedCwd) ? requestedCwd : process.cwd();
+    const result = childProcess.spawnSync(compiler, args, { cwd, encoding: 'utf8', timeout: 10000, windowsHide: true });
     if (result.error) return [{ severity: 2, source: 'shaft-lsp', message: `Compiler unavailable: ${result.error.message}`, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }];
     return language.parseCompilerDiagnostics(`${result.stdout || ''}\n${result.stderr || ''}`);
-  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  } finally {
+    if (sourcePath) fs.rmSync(sourcePath, { force: true });
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+async function ollamaCompletion(analysis, pos) {
+  const model = settings.ollamaModel || '';
+  if (!settings.ollamaEnabled || !model || typeof fetch !== 'function') return null;
+  const line = analysis.lines[pos?.line] || '';
+  const cursor = Math.max(0, Math.min(pos?.character ?? line.length, line.length));
+  const context = analysis.lines.slice(Math.max(0, (pos?.line || 0) - 30), pos?.line || 0).join('\n') + '\n' + line.slice(0, cursor);
+  if (!context.trim()) return null;
+  const base = (settings.ollamaUrl || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1800);
+  try {
+    const response = await fetch(`${base}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt: `You are completing Shaft programming language code. Return only the next useful completion as a single line, without markdown or explanation. Prefer one identifier, member name, or short expression.\n\n${context}\n<completion>`,
+        stream: false,
+        options: { temperature: 0.1, num_predict: 48 },
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const suggestion = String(payload.response || '').trim().replace(/^```[^\n]*\n?|\n?```$/g, '').split(/\r?\n/, 1)[0].trim();
+    if (!suggestion || suggestion.length > 120 || /[{};\n]/.test(suggestion)) return null;
+    return { label: `AI: ${suggestion}`, insertText: suggestion, kind: 1, detail: `Ollama · ${model}`, sortText: '0000' };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 function fullDocumentRange(analysis) {
   const lastLine = Math.max(0, analysis.lines.length - 1);
@@ -133,13 +181,13 @@ function semanticTokens(analysis) {
     const commentAt = raw.indexOf('//');
     const code = commentAt < 0 ? raw : raw.slice(0, commentAt);
     if (commentAt >= 0) tokens.push({ line, start: commentAt, length: raw.length - commentAt, type: 5 });
-    const matcher = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\b|::|->|<-|==|!=|<=|>=|&&|\|\||[+\-*/%=<>!&|^]/g;
+    const matcher = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|@[A-Za-z_]\w*|\b[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\b|::|->|<-|==|!=|<=|>=|&&|\|\||[+\-*/%=<>!&|^]/g;
     for (const match of code.matchAll(matcher)) {
       const text = match[0];
       let type = 6;
       if (text.startsWith('"') || text.startsWith("'")) type = 4;
       else if (/^\d/.test(text)) type = 3;
-      else if (keywordSet.has(text)) type = 0;
+      else if (directiveSet.has(text) || keywordSet.has(text)) type = 0;
       else if (/^[A-Z]/.test(text) || text.includes('::')) type = 1;
       else if (/^[A-Za-z_]/.test(text) && /\(/.test(code.slice(match.index + text.length))) type = 2;
       tokens.push({ line, start: match.index, length: text.length, type });
@@ -164,8 +212,9 @@ function hover(analysis, pos) {
   }
   const word = language.wordAt(analysis, pos);
   const docs = {
-    'Collections::HashMap': 'Open-addressing hash map layout. The bootstrap operational API currently supports `u64` keys and values.',
-    'Collections::HashSet': 'Open-addressing hash set layout. The bootstrap operational API currently supports `u64` elements.',
+    'std::string::String': 'Owned UTF-8 string from the standard library.',
+    'std::string::view::View': 'Borrowed view into UTF-8 string data.',
+    'std::vector::Vector': 'Growable generic standard-library vector.',
     tunnel: 'Writes a value to a named result slot. A slot may execute only once in a function.',
     namespace: 'Introduces a declaration scope. Qualified names preserve every `::` segment.',
   };
@@ -186,7 +235,7 @@ function foldingRanges(analysis) {
 function documentSymbols(analysis) {
   return analysis.symbols.map((symbol) => ({ name: symbol.shortName, detail: symbol.name, kind: symbolKinds[symbol.kind] || 13, range: symbol.range, selectionRange: symbol.selectionRange }));
 }
-function handle(message) {
+async function handle(message) {
   const { id, method, params = {} } = message;
   try {
     switch (method) {
@@ -194,13 +243,15 @@ function handle(message) {
         rootUri = params.rootUri || params.workspaceFolders?.[0]?.uri || null;
         settings = { ...settings, ...(params.initializationOptions || {}) };
         applyCompilerDiscovery();
-        return respond(id, { capabilities: {
-          positionEncoding: 'utf-16', textDocumentSync: { openClose: true, change: 2, save: { includeText: true } },
-          completionProvider: { triggerCharacters: ['.', ':'], resolveProvider: false }, definitionProvider: true,
-          hoverProvider: true, documentFormattingProvider: true, documentSymbolProvider: true,
-          workspaceSymbolProvider: true, foldingRangeProvider: true,
-          semanticTokensProvider: { legend: { tokenTypes, tokenModifiers: [] }, full: true },
-        }, serverInfo: { name: 'shaft-lsp', version: '0.1.0' } });
+        return respond(id, {
+          capabilities: {
+            positionEncoding: 'utf-16', textDocumentSync: { openClose: true, change: 2, save: { includeText: true } },
+            completionProvider: { triggerCharacters: ['.', ':'], resolveProvider: false }, definitionProvider: true,
+            hoverProvider: true, documentFormattingProvider: true, documentSymbolProvider: true,
+            workspaceSymbolProvider: true, foldingRangeProvider: true,
+            semanticTokensProvider: { legend: { tokenTypes, tokenModifiers: [] }, full: true },
+          }, serverInfo: { name: 'shaft-lsp', version: '0.1.0' }
+        });
       }
       case 'initialized': indexWorkspace(); return;
       case 'shutdown': shutdownRequested = true; return respond(id, null);
@@ -226,7 +277,9 @@ function handle(message) {
       }
       case 'textDocument/didClose': documents.delete(params.textDocument.uri); notify('textDocument/publishDiagnostics', { uri: params.textDocument.uri, diagnostics: [] }); return;
       case 'textDocument/completion': {
-        const analysis = documentFor(params.textDocument.uri); const items = analysis ? language.completions(analysis, params.position) : [];
+        const analysis = documentFor(params.textDocument.uri); const items = analysis ? language.completions(analysis, params.position, allSymbols()) : [];
+        const aiSuggestion = analysis ? await ollamaCompletion(analysis, params.position) : null;
+        if (aiSuggestion) items.unshift(aiSuggestion);
         return respond(id, { isIncomplete: false, items: items.map((item) => ({ ...item, kind: completionKinds[item.kind] || 1 })) });
       }
       case 'textDocument/definition': { const analysis = documentFor(params.textDocument.uri); return respond(id, definitionLocation(analysis && (language.findDefinition(analysis, params.position) || allSymbols().find((symbol) => symbol.name === language.wordAt(analysis, params.position))))); }
@@ -254,7 +307,7 @@ function processBuffer() {
     if (buffer.length < bodyStart + length) return;
     const body = buffer.slice(bodyStart, bodyStart + length).toString('utf8');
     buffer = buffer.slice(bodyStart + length);
-    try { handle(JSON.parse(body)); } catch (error) { log(`Invalid JSON-RPC payload: ${error.message}`, 1); }
+    try { Promise.resolve(handle(JSON.parse(body))).catch((error) => log(error.stack || String(error), 1)); } catch (error) { log(`Invalid JSON-RPC payload: ${error.message}`, 1); }
   }
 }
 process.stdin.on('data', (chunk) => { buffer = Buffer.concat([buffer, chunk]); processBuffer(); });

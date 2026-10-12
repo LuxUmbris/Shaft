@@ -73,12 +73,15 @@ function config() {
   return {
     serverPath: extensionSettings.explicitValue(values.inspect('serverPath')),
     compilerPath: extensionSettings.explicitValue(values.inspect('compilerPath')),
+    ollamaEnabled: values.get('ollamaEnabled', true),
+    ollamaModel: values.get('ollamaModel', 'spark-48k'),
+    ollamaUrl: values.get('ollamaUrl', 'http://127.0.0.1:11434'),
   };
 }
 async function startServer(context) {
   if (server) return;
   const settings = config();
-  const launch = serverCommand.resolveShaftlsCommand(settings.serverPath);
+  const launch = serverCommand.resolveShaftlsCommand(settings.serverPath, context.extensionPath);
   const liveDiagnostics = compilerDiscovery.createLiveDiagnosticsOptions(settings);
   server = childProcess.spawn(launch.executable, launch.arguments, { stdio: ['pipe', 'pipe', 'pipe'] });
   server.stdout.on('data', (chunk) => { readBuffer = Buffer.concat([readBuffer, chunk]); processMessages(); });
@@ -120,7 +123,44 @@ function activate(context) {
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => { if (isShaft(document)) notify('textDocument/didClose', { textDocument: { uri: document.uri.toString() } }); }));
   for (const document of vscode.workspace.textDocuments) if (isShaft(document)) notify('textDocument/didOpen', { textDocument: textDocument(document) });
 
-  const semanticLegend = new vscode.SemanticTokensLegend(['keyword', 'type', 'function', 'number', 'string', 'comment', 'operator', 'macro', 'variable', 'error'], []);
+  context.subscriptions.push(vscode.languages.registerCompletionItemProvider({ language: 'shaft' }, {
+    provideCompletionItems(document, position) {
+      return request('textDocument/completion', { textDocument: { uri: document.uri.toString() }, position: { line: position.line, character: position.character } })
+        .then((result) => (result?.items || []).map((item) => {
+          const completion = new vscode.CompletionItem(item.label, item.kind || vscode.CompletionItemKind.Text);
+          completion.detail = item.detail || '';
+          if (item.insertText) completion.insertText = item.insertText;
+          if (item.sortText) completion.sortText = item.sortText;
+          return completion;
+        }));
+    },
+  }, '.', ':'));
+
+  context.subscriptions.push(vscode.languages.registerHoverProvider({ language: 'shaft' }, {
+    provideHover(document, position) {
+      return request('textDocument/hover', { textDocument: { uri: document.uri.toString() }, position: { line: position.line, character: position.character } })
+        .then((result) => result?.contents?.value ? new vscode.Hover(new vscode.MarkdownString(result.contents.value), result.range ? asRange(result.range) : undefined) : undefined);
+    },
+  }));
+
+  context.subscriptions.push(vscode.languages.registerDefinitionProvider({ language: 'shaft' }, {
+    provideDefinition(document, position) {
+      return request('textDocument/definition', { textDocument: { uri: document.uri.toString() }, position: { line: position.line, character: position.character } })
+        .then((result) => (result || []).map((location) => new vscode.Location(asUri(location.uri), asRange(location.range))));
+    },
+  }));
+
+  context.subscriptions.push(vscode.languages.registerDocumentFormattingEditProvider({ language: 'shaft' }, {
+    provideDocumentFormattingEdits(document, options) {
+      return request('textDocument/formatting', { textDocument: { uri: document.uri.toString() }, options })
+        .then((edits) => (edits || []).map((edit) => new vscode.TextEdit(
+          new vscode.Range(edit.range.start.line, edit.range.start.character, edit.range.end.line, edit.range.end.character),
+          edit.newText,
+        )));
+    },
+  }));
+
+  const semanticLegend = new vscode.SemanticTokensLegend(['keyword', 'type', 'function', 'number', 'string', 'comment', 'operator'], []);
   context.subscriptions.push(vscode.languages.registerDocumentSemanticTokensProvider({ language: 'shaft' }, {
     provideDocumentSemanticTokens(document) {
       return request('textDocument/semanticTokens/full', { textDocument: { uri: document.uri.toString() } }).then((result) => new vscode.SemanticTokens(new Uint32Array(result.data)));

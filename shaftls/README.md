@@ -7,7 +7,7 @@
 From the repository root:
 
 ```sh
-./build-linux-x86_64-release/shaftc --build shaftls/Shaft.build
+./build-linux-x86_64-release/shaftc --build shaftls/Shaft.toml
 ./shaftls/build/shaftls
 ```
 
@@ -15,8 +15,9 @@ The server currently provides:
 
 - incremental document synchronization (`didOpen`, full and ranged `didChange`, and `didClose`, which clears published diagnostics)
 - semantic tokens for Shaft keywords, built-in and declared custom types (including lowercase declarations), functions, variables, literals, operators, strings, and comments; `import` and its quoted path; complete `@config.`, `@!config.`, `@asm`, and `@end` directives; `in` and `matches` configuration conditions; a red `@error` directive; and raw-assembly instructions, registers, named operands, and numeric immediates. Prefixes inside ordinary identifiers such as `@configurable` and `@endless` are never treated as directives.
-- live `publishDiagnostics` messages for unmatched closing braces, unclosed opening braces, and unterminated quoted strings; when structural checks succeed and compiler diagnostics are configured, the current in-memory document is also checked with `shaftc --check-only` and its first source diagnostic is translated to an LSP range. Braces in quoted strings and `//` comments are ignored.
+- live `publishDiagnostics` messages for unmatched closing braces, unclosed opening braces, and unterminated quoted strings; when structural checks succeed and compiler diagnostics are configured, the current in-memory document is checked with `shaftc --check-only`. Every source diagnostic record emitted by the compiler is translated to its own LSP range, preserving `help:` text in the diagnostic message. Braces in quoted strings and `//` comments are ignored.
 - LSP initialization, shutdown, and exit lifecycle handling
+- full-document `textDocument/formatting` edits derived from the live buffer, using deterministic four-space brace-aware indentation, ignored braces in quoted strings and comments, trailing-whitespace removal, and a final newline
 
 The LSP semantic-token legend is `keyword`, `type`, `function`, `number`, `string`, `comment`, `operator`, `macro`, `variable`, `error`; directives, configuration conditions, and import keywords use `keyword`; `@error` uses `error`; import paths use `string`; normal Shaft source uses the matching source categories; and raw assembly uses `macro` for instructions, `variable` for registers/named operands, `number` for numeric immediates, and `comment` for `//` comments.
 
@@ -28,11 +29,4 @@ Compiler diagnostics require launcher-provided initialization options because th
 - Vim: `editors/vim`
 - Neovim: `editors/neovim`
 
-The Vim and Neovim integrations can point directly at `shaftls/build/shaftls`. VS Code retains its complete bundled JavaScript server by default; its TextMate grammar highlights the same imports and metaprogramming directives.
-
-## Verify
-
-```sh
-SHAFTC=$PWD/build-linux-x86_64-release/shaftc \
-  python3 -m unittest shaftls.tests.test_protocol -v
-```
+The shipped VS Code, Vim, and Neovim integrations start the native `shaftls` executable. The Vim and Neovim integrations can point directly at `shaftls/build/shaftls`; VS Code uses `shaftls` from `PATH` unless its server-path setting supplies an explicit executable.

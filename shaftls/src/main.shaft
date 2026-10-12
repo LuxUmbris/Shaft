@@ -1,6 +1,6 @@
-// A dependency-free, hosted LSP transport implemented in Shaft.
-// stdin/stdout are reserved exclusively for JSON-RPC framing.
+// dependency-free LSP transport implemented in Shaft
 
+@unsafe
 cdec __sys_read(i64 descriptor, *u8 buffer, u64 count) -> i64;
 
 
@@ -10,9 +10,9 @@ def read_byte(*u8 result) -> bool available
 }
 
 
-def read_message() -> std::String result
+def read_message() -> std::string::String result
 {
-    reserve mut std::String contentLength = std::String::from_str("Content-Length");
+    reserve mut std::string::String contentLength = std::string::String::from_str("Content-Length");
     mut u64 nameOffset = 0;
     mut bool foundLength = false;
     mut bool readingLength = false;
@@ -81,7 +81,7 @@ def read_message() -> std::String result
         }
     }
 
-    reserve mut std::String message = std::String::with_capacity(length);
+    reserve mut std::string::String message = std::string::String::with_capacity(length);
     mut u64 offset = 0;
     while (inputOpen && offset < length)
     {
@@ -93,11 +93,11 @@ def read_message() -> std::String result
     }
     message.length = offset;
     message.data[offset] = 0;
-    tunnel message -> std::String result;
+    tunnel message -> std::string::String result;
 }
 
 
-def contains(*std::String message, *std::String needle) -> bool found
+def contains(*std::string::String message, *std::string::String needle) -> bool found
 {
     mut bool present = false;
     if (needle.length == 0)
@@ -132,7 +132,7 @@ def contains(*std::String message, *std::String needle) -> bool found
 }
 
 
-def matches_at(*std::String text, u64 offset, *std::String expected) -> bool matches
+def matches_at(*std::string::String text, u64 offset, *std::string::String expected) -> bool matches
 {
     mut bool equal = offset + expected.length <= text.length;
     mut u64 characterOffset = 0;
@@ -147,9 +147,9 @@ def matches_at(*std::String text, u64 offset, *std::String expected) -> bool mat
     tunnel equal -> bool matches;
 }
 
-def json_string(*std::String message, *std::String marker) -> std::String result
+def json_string(*std::string::String message, *std::string::String marker) -> std::string::String result
 {
-    reserve mut std::String value = std::String::with_capacity(message.length);
+    reserve mut std::string::String value = std::string::String::with_capacity(message.length);
     mut u64 markerStart = 0;
     mut bool found = false;
     while (!found && markerStart + marker.length <= message.length)
@@ -194,11 +194,11 @@ def json_string(*std::String message, *std::String marker) -> std::String result
         }
     }
     value.data[value.length] = 0;
-    tunnel value -> std::String result;
+    tunnel value -> std::string::String result;
 }
 
 
-def json_number(*std::String message, *std::String marker, u64 occurrence) -> u64 result
+def json_number(*std::string::String message, *std::string::String marker, u64 occurrence) -> u64 result
 {
     mut u64 search = 0;
     mut u64 seen = 0;
@@ -236,7 +236,7 @@ def json_number(*std::String message, *std::String marker, u64 occurrence) -> u6
 }
 
 
-def document_offset(*std::String text, u64 wantedLine, u64 wantedColumn) -> u64 result
+def document_offset(*std::string::String text, u64 wantedLine, u64 wantedColumn) -> u64 result
 {
     mut u64 offset = 0;
     mut u64 line = 0;
@@ -258,9 +258,9 @@ def document_offset(*std::String text, u64 wantedLine, u64 wantedColumn) -> u64 
 }
 
 
-def replace_document_range(*std::String source, u64 rangeStart, u64 rangeEnd, *std::String replacement) -> std::String result
+def replace_document_range(*std::string::String source, u64 rangeStart, u64 rangeEnd, *std::string::String replacement) -> std::string::String result
 {
-    reserve mut std::String value = std::String::with_capacity(source.length + replacement.length);
+    reserve mut std::string::String value = std::string::String::with_capacity(source.length + replacement.length);
     mut u64 offset = 0;
     while (offset < rangeStart && offset < source.length)
     {
@@ -283,13 +283,13 @@ def replace_document_range(*std::String source, u64 rangeStart, u64 rangeEnd, *s
         offset = offset + 1;
     }
     value.data[value.length] = 0;
-    tunnel value -> std::String result;
+    tunnel value -> std::string::String result;
 }
 
 
-def request_id(*std::String message) -> u64 result
+def request_id(*std::string::String message) -> u64 result
 {
-    reserve std::String marker = std::String::from_str("\"id\":");
+    reserve std::string::String marker = std::string::String::from_str("\"id\":");
     mut u64 identifier = 0;
     mut u64 markerOffset = 0;
     mut bool reading = false;
@@ -330,21 +330,21 @@ def request_id(*std::String message) -> u64 result
 }
 
 
-def send_body(*std::String body)
+def send_body(*std::string::String body)
 {
-    reserve mut std::String frame = std::String::from_str("Content-Length: ");
-    reserve std::String sizeText = std::String::from_u64(body.length);
+    reserve mut std::string::String frame = std::string::String::from_str("Content-Length: ");
+    reserve std::string::String sizeText = std::string::String::from_u64(body.length);
     frame.append(sizeText.get_view());
     frame.append("\r\n\r\n");
     frame.append(body.get_view());
-    std::print(frame.get_view());
+    std::io::print(frame.get_view());
 }
 
 
-def send_response(u64 identifier, *std::String result)
+def send_response(u64 identifier, *std::string::String result)
 {
-    reserve mut std::String body = std::String::from_str("{\"jsonrpc\":\"2.0\",\"id\":");
-    reserve std::String idText = std::String::from_u64(identifier);
+    reserve mut std::string::String body = std::string::String::from_str("{\"jsonrpc\":\"2.0\",\"id\":");
+    reserve std::string::String idText = std::string::String::from_u64(identifier);
     body.append(idText.get_view());
     body.append(",\"result\":");
     body.append(result.get_view());
@@ -353,9 +353,9 @@ def send_response(u64 identifier, *std::String result)
 }
 
 
-def send_notification(*std::String method, *std::String params)
+def send_notification(*std::string::String method, *std::string::String params)
 {
-    reserve mut std::String body = std::String::from_str("{\"jsonrpc\":\"2.0\",\"method\":\"");
+    reserve mut std::string::String body = std::string::String::from_str("{\"jsonrpc\":\"2.0\",\"method\":\"");
     body.append(method.get_view());
     body.append("\",\"params\":");
     body.append(params.get_view());
@@ -364,14 +364,14 @@ def send_notification(*std::String method, *std::String params)
 }
 
 
-def append_number(*std::String output, u64 value)
+def append_number(*std::string::String output, u64 value)
 {
-    reserve std::String text = std::String::from_u64(value);
+    reserve std::string::String text = std::string::String::from_u64(value);
     output.append(text.get_view());
 }
 
 
-def append_token(*std::String output, u64 line, u64 column, u64 tokenLength, u64 kind, *u64 previousLine, *u64 previousStart, *bool first)
+def append_token(*std::string::String output, u64 line, u64 column, u64 tokenLength, u64 kind, *u64 previousLine, *u64 previousStart, *bool first)
 {
     if (!first[0])
     {
@@ -416,7 +416,7 @@ def is_assembly_name_part(u8 byte) -> bool result
 }
 
 
-def matches_config_directive(*std::String text, u64 offset, *std::String directive) -> bool matches
+def matches_config_directive(*std::string::String text, u64 offset, *std::string::String directive) -> bool matches
 {
     mut bool complete = matches_at(text, offset, directive);
     if (complete)
@@ -427,7 +427,7 @@ def matches_config_directive(*std::String text, u64 offset, *std::String directi
 }
 
 
-def matches_line_directive(*std::String text, u64 offset, u64 lineEnd, *std::String directive) -> bool matches
+def matches_line_directive(*std::string::String text, u64 offset, u64 lineEnd, *std::string::String directive) -> bool matches
 {
     mut bool complete = matches_at(text, offset, directive);
     if (complete && offset + directive.length < lineEnd)
@@ -439,8 +439,8 @@ def matches_line_directive(*std::String text, u64 offset, u64 lineEnd, *std::Str
 }
 
 
-def append_assembly_tokens(*std::String text, u64 offset, u64 lineEnd, u64 line, *std::String output,
-                           *u64 previousLine, *u64 previousStart, *bool first)
+def append_assembly_tokens(*std::string::String text, u64 offset, u64 lineEnd, u64 line, *std::string::String output,
+*u64 previousLine, *u64 previousStart, *bool first)
 {
     mut u64 cursor = offset;
     while (cursor < lineEnd && is_space(text.data[cursor]))
@@ -502,7 +502,7 @@ def append_assembly_tokens(*std::String text, u64 offset, u64 lineEnd, u64 line,
 }
 
 
-def word_in_list(*std::String text, u64 startOffset, u64 endOffset, *std::String words) -> bool found
+def word_in_list(*std::string::String text, u64 startOffset, u64 endOffset, *std::string::String words) -> bool found
 {
     mut bool present = false;
     mut u64 offset = 0;
@@ -533,9 +533,134 @@ def word_in_list(*std::String text, u64 startOffset, u64 endOffset, *std::String
 }
 
 
-def is_declared_custom_type(*std::String text, u64 candidateStart, u64 candidateEnd) -> bool found
+
+def completion_ignored(*std::string::String text, u64 startOffset, u64 endOffset) -> bool ignored
 {
-    reserve std::String declarations = std::String::from_str("class|enum|struct");
+    reserve std::string::String words = std::string::String::from_str("mut|i8|i16|i32|i64|u8|u16|u32|u64|bool|void|return|tunnel|as|export|async|naked");
+    tunnel word_in_list(text, startOffset, endOffset, &words) -> bool ignored;
+}
+
+
+def append_completion_item(*std::string::String output, *std::string::String text, u64 startOffset, u64 endOffset, u64 kind, *bool first)
+{
+    if (!first[0])
+    {
+        output.append(",");
+    }
+    output.append("{\"label\":\"");
+    mut u64 cursor = startOffset;
+    while (cursor < endOffset)
+    {
+        output.data[output.length] = text.data[cursor];
+        output.length = output.length + 1;
+        cursor = cursor + 1;
+    }
+    output.data[output.length] = 0;
+    output.append("\",\"kind\":");
+    append_number(output, kind);
+    output.append("}");
+    first[0] = false;
+}
+
+def append_completion_literal(*std::string::String output, *std::string::String label, u64 kind, *bool first)
+{
+    if (!first[0])
+    {
+        output.append(",");
+    }
+    output.append("{\"label\":\"");
+    output.append(label.get_view());
+    output.append("\",\"kind\":");
+    append_number(output, kind);
+    output.append("}");
+    first[0] = false;
+}
+
+def completion_items(*std::string::String text) -> std::string::String result
+{
+    reserve std::string::String namespaceWords = std::string::String::from_str("namespace");
+    reserve std::string::String structWords = std::string::String::from_str("struct|union|class");
+    reserve std::string::String traitWords = std::string::String::from_str("trait");
+    reserve std::string::String enumWords = std::string::String::from_str("enum");
+    reserve std::string::String implWords = std::string::String::from_str("impl");
+    reserve std::string::String functionWords = std::string::String::from_str("def|dec|cdef|cdec");
+    reserve std::string::String reserveWords = std::string::String::from_str("reserve");
+    reserve std::string::String namespaceKeyword = std::string::String::from_str("namespace");
+    reserve std::string::String structKeyword = std::string::String::from_str("struct");
+    reserve std::string::String traitKeyword = std::string::String::from_str("trait");
+    reserve std::string::String implKeyword = std::string::String::from_str("impl");
+    reserve std::string::String enumKeyword = std::string::String::from_str("enum");
+    reserve std::string::String unionKeyword = std::string::String::from_str("union");
+    reserve std::string::String defKeyword = std::string::String::from_str("def");
+    reserve mut std::string::String output = std::string::String::with_capacity(text.length * 48 + 512);
+    output.append("{\"isIncomplete\":false,\"items\":[");
+    mut bool first = true;
+    append_completion_literal(&output, &namespaceKeyword, 9, &first);
+    append_completion_literal(&output, &structKeyword, 22, &first);
+    append_completion_literal(&output, &traitKeyword, 8, &first);
+    append_completion_literal(&output, &implKeyword, 7, &first);
+    append_completion_literal(&output, &enumKeyword, 13, &first);
+    append_completion_literal(&output, &unionKeyword, 22, &first);
+    append_completion_literal(&output, &defKeyword, 3, &first);
+    mut u64 expectation = 0;
+    mut u64 cursor = 0;
+    while (cursor < text.length)
+    {
+        if (is_assembly_name_start(text.data[cursor]))
+        {
+            mut u64 wordEnd = cursor + 1;
+            while (wordEnd < text.length && is_assembly_name_part(text.data[wordEnd]))
+            {
+                wordEnd = wordEnd + 1;
+            }
+            if (expectation != 0 && !completion_ignored(text, cursor, wordEnd))
+            {
+                append_completion_item(&output, text, cursor, wordEnd, expectation, &first);
+                expectation = 0;
+            }
+            else if (word_in_list(text, cursor, wordEnd, &namespaceWords))
+            {
+                expectation = 9;
+            }
+            else if (word_in_list(text, cursor, wordEnd, &structWords))
+            {
+                expectation = 22;
+            }
+            else if (word_in_list(text, cursor, wordEnd, &traitWords))
+            {
+                expectation = 8;
+            }
+            else if (word_in_list(text, cursor, wordEnd, &enumWords))
+            {
+                expectation = 13;
+            }
+            else if (word_in_list(text, cursor, wordEnd, &implWords))
+            {
+                expectation = 22;
+            }
+            else if (word_in_list(text, cursor, wordEnd, &functionWords))
+            {
+                expectation = 3;
+            }
+            else if (word_in_list(text, cursor, wordEnd, &reserveWords))
+            {
+                expectation = 6;
+            }
+            cursor = wordEnd;
+        }
+        else
+        {
+            cursor = cursor + 1;
+        }
+    }
+    output.append("]}");
+    tunnel output -> std::string::String result;
+}
+
+
+def is_declared_custom_type(*std::string::String text, u64 candidateStart, u64 candidateEnd) -> bool found
+{
+    reserve std::string::String declarations = std::string::String::from_str("trait|impl|union|enum|struct");
     mut u64 cursor = 0;
     mut bool declared = false;
     while (!declared && cursor < text.length)
@@ -638,10 +763,10 @@ def is_declared_custom_type(*std::String text, u64 candidateStart, u64 candidate
 }
 
 
-def append_config_condition_tokens(*std::String text, u64 startOffset, u64 lineEnd, u64 line, u64 lineStart,
-                                   *std::String output, *u64 previousLine, *u64 previousStart, *bool first)
+def append_config_condition_tokens(*std::string::String text, u64 startOffset, u64 lineEnd, u64 line, u64 lineStart,
+*std::string::String output, *u64 previousLine, *u64 previousStart, *bool first)
 {
-    reserve std::String conditions = std::String::from_str("in|matches");
+    reserve std::string::String conditions = std::string::String::from_str("in|matches");
     mut u64 cursor = startOffset;
     while (cursor < lineEnd && !is_space(text.data[cursor]) && text.data[cursor] != 61)
     {
@@ -666,11 +791,11 @@ def append_config_condition_tokens(*std::String text, u64 startOffset, u64 lineE
 }
 
 
-def append_source_tokens(*std::String text, u64 offset, u64 lineEnd, u64 line, *std::String output,
-                         *u64 previousLine, *u64 previousStart, *bool first)
+def append_source_tokens(*std::string::String text, u64 offset, u64 lineEnd, u64 line, *std::string::String output,
+*u64 previousLine, *u64 previousStart, *bool first)
 {
-    reserve std::String keywords = std::String::from_str("align|async|await|break|case|cdec|cdef|class|continue|dec|default|def|else|enum|export|for|foreach|global|if|import|index|init|inline|match|move|mut|naked|namespace|raw|ref|reserve|return|self|sizeof|start|struct|tunnel|using|valid|while");
-    reserve std::String types = std::String::from_str("bool|char|State|Thread|u8|u16|u32|u64|usize|i8|i16|i32|i64|f32|f64");
+    reserve std::string::String keywords = std::string::String::from_str("align|as|async|await|break|case|cdec|cdef|continue|dec|default|def|do|else|enum|export|for|foreach|global|if|impl|import|index|init|inline|match|move|mut|naked|namespace|raw|ref|reserve|return|self|sizeof|start|struct|terminate|trait|tunnel|union|using|valid|while|yield");
+    reserve std::string::String types = std::string::String::from_str("bool|char|State|Thread|u8|u16|u32|u64|usize|i8|i16|i32|i64|f32|f64");
     mut u64 cursor = offset;
     while (cursor < lineEnd)
     {
@@ -717,8 +842,8 @@ def append_source_tokens(*std::String text, u64 offset, u64 lineEnd, u64 line, *
                 kind = 0;
             }
             else if (word_in_list(text, cursor, end, &types) ||
-                     is_declared_custom_type(text, cursor, end) ||
-                     (text.data[cursor] >= 65 && text.data[cursor] <= 90))
+            is_declared_custom_type(text, cursor, end) ||
+            (text.data[cursor] >= 65 && text.data[cursor] <= 90))
             {
                 kind = 1;
             }
@@ -741,9 +866,9 @@ def append_source_tokens(*std::String text, u64 offset, u64 lineEnd, u64 line, *
         {
             mut u64 end = cursor + 1;
             while (end < lineEnd && ((text.data[end] >= 48 && text.data[end] <= 57) ||
-                                     (text.data[end] >= 65 && text.data[end] <= 70) ||
-                                     (text.data[end] >= 97 && text.data[end] <= 102) ||
-                                     text.data[end] == 95 || text.data[end] == 46 || text.data[end] == 120 || text.data[end] == 98))
+            (text.data[end] >= 65 && text.data[end] <= 70) ||
+            (text.data[end] >= 97 && text.data[end] <= 102) ||
+            text.data[end] == 95 || text.data[end] == 46 || text.data[end] == 120 || text.data[end] == 98))
             {
                 end = end + 1;
             }
@@ -783,15 +908,16 @@ def append_source_tokens(*std::String text, u64 offset, u64 lineEnd, u64 line, *
 }
 
 
-def semantic_tokens(*std::String text) -> std::String result
+def semantic_tokens(*std::string::String text) -> std::string::String result
 {
-    reserve std::String importWord = std::String::from_str("import");
-    reserve std::String configWord = std::String::from_str("@config");
-    reserve std::String negatedConfigWord = std::String::from_str("@!config");
-    reserve std::String errorWord = std::String::from_str("@error");
-    reserve std::String asmWord = std::String::from_str("@asm");
-    reserve std::String endWord = std::String::from_str("@end");
-    reserve mut std::String output = std::String::with_capacity(text.length * 4 + 32);
+    reserve std::string::String importWord = std::string::String::from_str("import");
+    reserve std::string::String configWord = std::string::String::from_str("@config");
+    reserve std::string::String negatedConfigWord = std::string::String::from_str("@!config");
+    reserve std::string::String errorWord = std::string::String::from_str("@error");
+    reserve std::string::String asmWord = std::string::String::from_str("@asm");
+    reserve std::string::String unsafeWord = std::string::String::from_str("@unsafe");
+    reserve std::string::String endWord = std::string::String::from_str("@end");
+    reserve mut std::string::String output = std::string::String::with_capacity(text.length * 4 + 32);
     output.append("{\"data\":[");
     mut u64 previousLine = 0;
     mut u64 previousStart = 0;
@@ -864,6 +990,10 @@ def semantic_tokens(*std::String text) -> std::String result
             append_token(&output, line, code - offset, asmWord.length, 0, &previousLine, &previousStart, &first);
             inAssembly = true;
         }
+        else if (!comment && matches_line_directive(text, code, lineEnd, &unsafeWord))
+        {
+            append_token(&output, line, code - offset, unsafeWord.length, 0, &previousLine, &previousStart, &first);
+        }
         else if (!comment && matches_line_directive(text, code, lineEnd, &endWord))
         {
             append_token(&output, line, code - offset, endWord.length, 0, &previousLine, &previousStart, &first);
@@ -889,11 +1019,11 @@ def semantic_tokens(*std::String text) -> std::String result
         }
     }
     output.append("]}");
-    tunnel output -> std::String result;
+    tunnel output -> std::string::String result;
 }
 
 
-def append_json_escaped(*std::String output, *std::String value)
+def append_json_escaped(*std::string::String output, *std::string::String value)
 {
     mut u64 offset = 0;
     while (offset < value.length)
@@ -944,8 +1074,631 @@ def append_json_escaped(*std::String output, *std::String value)
     output.data[output.length] = 0;
 }
 
+def scan_format_braces(*std::string::String text, u64 startOffset, u64 endOffset, *u64 depth,
+*bool inBlockComment, *bool inString, *u8 stringDelimiter, *bool escaped)
+{
+    mut u64 offset = startOffset;
+    while (offset < endOffset)
+    {
+        mut u8 byte = text.data[offset];
+        if (inBlockComment[0])
+        {
+            if (byte == 42 && offset + 1 < endOffset && text.data[offset + 1] == 47)
+            {
+                inBlockComment[0] = false;
+                offset = offset + 2;
+            }
+            else
+            {
+                offset = offset + 1;
+            }
+        }
+        else if (inString[0])
+        {
+            if (!escaped[0] && byte == stringDelimiter[0])
+            {
+                inString[0] = false;
+            }
+            if (!escaped[0] && byte == 92)
+            {
+                escaped[0] = true;
+            }
+            else
+            {
+                escaped[0] = false;
+            }
+            offset = offset + 1;
+        }
+        else if (byte == 47 && offset + 1 < endOffset && text.data[offset + 1] == 47)
+        {
+            offset = endOffset;
+        }
+        else if (byte == 47 && offset + 1 < endOffset && text.data[offset + 1] == 42)
+        {
+            inBlockComment[0] = true;
+            offset = offset + 2;
+        }
+        else if (byte == 34 || byte == 39)
+        {
+            inString[0] = true;
+            stringDelimiter[0] = byte;
+            escaped[0] = false;
+            offset = offset + 1;
+        }
+        else
+        {
+            if (byte == 123)
+            {
+                depth[0] = depth[0] + 1;
+            }
+            else if (byte == 125 && depth[0] > 0)
+            {
+                depth[0] = depth[0] - 1;
+            }
+            offset = offset + 1;
+        }
+    }
+}
 
-def append_diagnostic(*std::String output, u64 line, u64 column, *std::String message, *std::String source, *bool first)
+def workspace_indent_width(*std::string::String rootUri) -> u64 result
+{
+    mut u64 indentWidth = 4;
+    reserve std::string::String filePrefix = std::string::String::from_str("file://");
+    if (rootUri.length >= filePrefix.length && matches_at(rootUri, 0, &filePrefix))
+    {
+        reserve mut std::string::String configPath = std::string::String::with_capacity(rootUri.length + 12);
+        mut u64 uriOffset = filePrefix.length;
+        while (uriOffset < rootUri.length)
+        {
+            configPath.data[configPath.length] = rootUri.data[uriOffset];
+            configPath.length = configPath.length + 1;
+            uriOffset = uriOffset + 1;
+        }
+        if (configPath.length == 0 || configPath.data[configPath.length - 1] != 47)
+        {
+            configPath.data[configPath.length] = 47;
+            configPath.length = configPath.length + 1;
+        }
+        configPath.append("Shaft.toml");
+        reserve std::string::String config = std::filesystem::read(configPath.get_view());
+        reserve std::string::String formatTable = std::string::String::from_str("[format]");
+        reserve std::string::String indentKey = std::string::String::from_str("indent_width");
+        mut u64 offset = 0;
+        mut bool inFormatTable = false;
+        while (offset < config.length)
+        {
+            mut u64 lineEnd = offset;
+            while (lineEnd < config.length && config.data[lineEnd] != 10)
+            {
+                lineEnd = lineEnd + 1;
+            }
+            mut u64 contentStart = offset;
+            while (contentStart < lineEnd && is_space(config.data[contentStart]))
+            {
+                contentStart = contentStart + 1;
+            }
+            mut u64 contentEnd = lineEnd;
+            while (contentEnd > contentStart && is_space(config.data[contentEnd - 1]))
+            {
+                contentEnd = contentEnd - 1;
+            }
+            if (contentEnd - contentStart == formatTable.length && matches_at(&config, contentStart, &formatTable))
+            {
+                inFormatTable = true;
+            }
+            else if (contentStart < contentEnd && config.data[contentStart] == 91)
+            {
+                inFormatTable = false;
+            }
+            else if (inFormatTable && contentEnd >= contentStart + indentKey.length && matches_at(&config, contentStart, &indentKey))
+            {
+                mut u64 valueStart = contentStart + indentKey.length;
+                while (valueStart < contentEnd && is_space(config.data[valueStart]))
+                {
+                    valueStart = valueStart + 1;
+                }
+                if (valueStart < contentEnd && config.data[valueStart] == 61)
+                {
+                    valueStart = valueStart + 1;
+                    while (valueStart < contentEnd && is_space(config.data[valueStart]))
+                    {
+                        valueStart = valueStart + 1;
+                    }
+                    mut u64 value = 0;
+                    mut bool positive = valueStart < contentEnd && config.data[valueStart] >= 49 && config.data[valueStart] <= 57;
+                    while (valueStart < contentEnd && config.data[valueStart] >= 48 && config.data[valueStart] <= 57)
+                    {
+                        value = value * 10 + config.data[valueStart] - 48;
+                        valueStart = valueStart + 1;
+                    }
+                    if (positive)
+                    {
+                        indentWidth = value;
+                    }
+                }
+            }
+            if (lineEnd < config.length)
+            {
+                offset = lineEnd + 1;
+            }
+            else
+            {
+                offset = lineEnd;
+            }
+        }
+    }
+    tunnel indentWidth -> u64 result;
+}
+
+def workspace_format_boolean(*std::string::String rootUri, *std::string::String key, bool defaultValue) -> bool result
+{
+    mut bool value = defaultValue;
+    reserve std::string::String filePrefix = std::string::String::from_str("file://");
+    if (rootUri.length >= filePrefix.length && matches_at(rootUri, 0, &filePrefix))
+    {
+        reserve mut std::string::String configPath = std::string::String::with_capacity(rootUri.length + 12);
+        mut u64 uriOffset = filePrefix.length;
+        while (uriOffset < rootUri.length)
+        {
+            configPath.data[configPath.length] = rootUri.data[uriOffset];
+            configPath.length = configPath.length + 1;
+            uriOffset = uriOffset + 1;
+        }
+        if (configPath.length == 0 || configPath.data[configPath.length - 1] != 47)
+        {
+            configPath.append("/");
+        }
+        configPath.append("Shaft.toml");
+        reserve std::string::String config = std::filesystem::read(configPath.get_view());
+        reserve std::string::String formatTable = std::string::String::from_str("[format]");
+        reserve std::string::String trueValue = std::string::String::from_str("true");
+        reserve std::string::String falseValue = std::string::String::from_str("false");
+        mut u64 offset = 0;
+        mut bool inFormatTable = false;
+        while (offset < config.length)
+        {
+            mut u64 lineEnd = offset;
+            while (lineEnd < config.length && config.data[lineEnd] != 10)
+            {
+                lineEnd = lineEnd + 1;
+            }
+            mut u64 contentStart = offset;
+            while (contentStart < lineEnd && is_space(config.data[contentStart]))
+            {
+                contentStart = contentStart + 1;
+            }
+            mut u64 contentEnd = lineEnd;
+            while (contentEnd > contentStart && is_space(config.data[contentEnd - 1]))
+            {
+                contentEnd = contentEnd - 1;
+            }
+            if (contentEnd - contentStart == formatTable.length && matches_at(&config, contentStart, &formatTable))
+            {
+                inFormatTable = true;
+            }
+            else if (contentStart < contentEnd && config.data[contentStart] == 91)
+            {
+                inFormatTable = false;
+            }
+            else if (inFormatTable && contentEnd >= contentStart + key.length && matches_at(&config, contentStart, key))
+            {
+                mut u64 valueStart = contentStart + key.length;
+                while (valueStart < contentEnd && is_space(config.data[valueStart]))
+                {
+                    valueStart = valueStart + 1;
+                }
+                if (valueStart < contentEnd && config.data[valueStart] == 61)
+                {
+                    valueStart = valueStart + 1;
+                    while (valueStart < contentEnd && is_space(config.data[valueStart]))
+                    {
+                        valueStart = valueStart + 1;
+                    }
+                    if (contentEnd - valueStart == trueValue.length && matches_at(&config, valueStart, &trueValue))
+                    {
+                        value = true;
+                    }
+                    else if (contentEnd - valueStart == falseValue.length && matches_at(&config, valueStart, &falseValue))
+                    {
+                        value = false;
+                    }
+                }
+            }
+            if (lineEnd < config.length)
+            {
+                offset = lineEnd + 1;
+            }
+            else
+            {
+                offset = lineEnd;
+            }
+        }
+    }
+    tunnel value -> bool result;
+}
+
+
+def workspace_use_tabs(*std::string::String rootUri) -> bool result
+{
+    reserve std::string::String key = std::string::String::from_str("use_tabs");
+    tunnel workspace_format_boolean(rootUri, &key, false) -> bool result;
+}
+
+
+def workspace_final_newline(*std::string::String rootUri) -> bool result
+{
+    reserve std::string::String key = std::string::String::from_str("final_newline");
+    tunnel workspace_format_boolean(rootUri, &key, true) -> bool result;
+}
+
+
+def workspace_namespace_indent(*std::string::String rootUri) -> bool result
+{
+    reserve std::string::String key = std::string::String::from_str("namespace_indent");
+    tunnel workspace_format_boolean(rootUri, &key, true) -> bool result;
+}
+
+
+def workspace_match_case_indent(*std::string::String rootUri) -> bool result
+{
+    reserve std::string::String key = std::string::String::from_str("match_case_indent");
+    tunnel workspace_format_boolean(rootUri, &key, true) -> bool result;
+}
+
+def workspace_kr_brace_style(*std::string::String rootUri) -> bool result
+{
+    mut bool kr = false;
+    reserve std::string::String filePrefix = std::string::String::from_str("file://");
+    if (rootUri.length >= filePrefix.length && matches_at(rootUri, 0, &filePrefix))
+    {
+        reserve mut std::string::String configPath = std::string::String::with_capacity(rootUri.length + 12);
+        mut u64 uriOffset = filePrefix.length;
+        while (uriOffset < rootUri.length)
+        {
+            configPath.data[configPath.length] = rootUri.data[uriOffset];
+            configPath.length = configPath.length + 1;
+            uriOffset = uriOffset + 1;
+        }
+        if (configPath.length == 0 || configPath.data[configPath.length - 1] != 47)
+        {
+            configPath.append("/");
+        }
+        configPath.append("Shaft.toml");
+        reserve std::string::String config = std::filesystem::read(configPath.get_view());
+        reserve std::string::String formatTable = std::string::String::from_str("[format]");
+        reserve std::string::String key = std::string::String::from_str("brace_style");
+        reserve std::string::String krValue = std::string::String::from_str("\"kr\"");
+        mut u64 offset = 0;
+        mut bool inFormatTable = false;
+        while (offset < config.length)
+        {
+            mut u64 lineEnd = offset;
+            while (lineEnd < config.length && config.data[lineEnd] != 10)
+            {
+                lineEnd = lineEnd + 1;
+            }
+            mut u64 contentStart = offset;
+            while (contentStart < lineEnd && is_space(config.data[contentStart]))
+            {
+                contentStart = contentStart + 1;
+            }
+            mut u64 contentEnd = lineEnd;
+            while (contentEnd > contentStart && is_space(config.data[contentEnd - 1]))
+            {
+                contentEnd = contentEnd - 1;
+            }
+            if (contentEnd - contentStart == formatTable.length && matches_at(&config, contentStart, &formatTable))
+            {
+                inFormatTable = true;
+            }
+            else if (contentStart < contentEnd && config.data[contentStart] == 91)
+            {
+                inFormatTable = false;
+            }
+            else if (inFormatTable && contentEnd >= contentStart + key.length && matches_at(&config, contentStart, &key))
+            {
+                mut u64 valueStart = contentStart + key.length;
+                while (valueStart < contentEnd && is_space(config.data[valueStart]))
+                {
+                    valueStart = valueStart + 1;
+                }
+                if (valueStart < contentEnd && config.data[valueStart] == 61)
+                {
+                    valueStart = valueStart + 1;
+                    while (valueStart < contentEnd && is_space(config.data[valueStart]))
+                    {
+                        valueStart = valueStart + 1;
+                    }
+                    kr = contentEnd - valueStart == krValue.length && matches_at(&config, valueStart, &krValue);
+                }
+            }
+            if (lineEnd < config.length)
+            {
+                offset = lineEnd + 1;
+            }
+            else
+            {
+                offset = lineEnd;
+            }
+        }
+    }
+    tunnel kr -> bool result;
+}
+
+
+def format_line_has_line_comment(*std::string::String text, u64 startOffset, u64 endOffset) -> bool found
+{
+    mut u64 cursor = startOffset;
+    mut bool resultValue = false;
+    mut bool inString = false;
+    mut u8 delimiter = 0;
+    mut bool escaped = false;
+    while (!resultValue && cursor < endOffset)
+    {
+        mut u8 byte = text.data[cursor];
+        if (inString)
+        {
+            if (!escaped && byte == delimiter)
+            {
+                inString = false;
+            }
+            if (!escaped && byte == 92)
+            {
+                escaped = true;
+            }
+            else
+            {
+                escaped = false;
+            }
+        }
+        else if (byte == 34 || byte == 39)
+        {
+            inString = true;
+            delimiter = byte;
+            escaped = false;
+        }
+        else if (byte == 47 && cursor + 1 < endOffset && text.data[cursor + 1] == 47)
+        {
+            resultValue = true;
+        }
+        cursor = cursor + 1;
+    }
+    tunnel resultValue -> bool found;
+}
+
+
+def format_line_starts_with(*std::string::String text, u64 startOffset, u64 endOffset, *std::string::String word) -> bool matches
+{
+    mut bool resultValue = endOffset - startOffset >= word.length && matches_at(text, startOffset, word);
+    if (resultValue && endOffset - startOffset > word.length)
+    {
+        mut u8 following = text.data[startOffset + word.length];
+        resultValue = is_space(following) || following == 40 || following == 123;
+    }
+    tunnel resultValue -> bool matches;
+}
+
+
+def format_document(*std::string::String text, u64 indentWidth, bool useTabs, bool finalNewline, bool krBraceStyle, bool namespaceIndent, bool matchCaseIndent) -> std::string::String result
+{
+    reserve mut std::string::String formatted = std::string::String::with_capacity(text.length * 5 + 8);
+    reserve std::string::String namespaceWord = std::string::String::from_str("namespace");
+    reserve std::string::String matchWord = std::string::String::from_str("match");
+    mut bool[] namespaceBraces = __shaft_alloc_or_exit(text.length + 1);
+    mut bool[] matchBraces = __shaft_alloc_or_exit(text.length + 1);
+    mut u64 namespaceUnindented = 0;
+    mut u64 matchUnindented = 0;
+    mut bool pendingNamespace = false;
+    mut bool pendingMatch = false;
+    mut u64 offset = 0;
+    mut u64 depth = 0;
+    mut bool inBlockComment = false;
+    mut bool inString = false;
+    mut u8 stringDelimiter = 0;
+    mut bool escaped = false;
+    while (offset < text.length)
+    {
+        mut u64 lineEnd = offset;
+        while (lineEnd < text.length && text.data[lineEnd] != 10)
+        {
+            lineEnd = lineEnd + 1;
+        }
+        mut u64 contentStart = offset;
+        while (contentStart < lineEnd && is_space(text.data[contentStart]))
+        {
+            contentStart = contentStart + 1;
+        }
+        mut u64 contentEnd = lineEnd;
+        while (contentEnd > contentStart && is_space(text.data[contentEnd - 1]))
+        {
+            contentEnd = contentEnd - 1;
+        }
+        mut u64 scanEnd = contentEnd;
+        mut bool closingBrace = !inBlockComment && !inString && contentStart < contentEnd && text.data[contentStart] == 125;
+        mut bool loneOpenBrace = !inBlockComment && !inString && contentEnd - contentStart == 1 && text.data[contentStart] == 123;
+        mut bool headerNamespace = !inBlockComment && !inString && format_line_starts_with(text, contentStart, contentEnd, &namespaceWord);
+        mut bool headerMatch = !inBlockComment && !inString && format_line_starts_with(text, contentStart, contentEnd, &matchWord);
+        mut bool opensNamespace = !inBlockComment && !inString && (headerNamespace && text.data[contentEnd - 1] == 123 || pendingNamespace && loneOpenBrace);
+        mut bool opensMatch = !inBlockComment && !inString && (headerMatch && text.data[contentEnd - 1] == 123 || pendingMatch && loneOpenBrace);
+        mut bool splitAllman = !krBraceStyle && !inBlockComment && !inString && !format_line_has_line_comment(text, contentStart, contentEnd) && contentEnd > contentStart + 1 && text.data[contentEnd - 1] == 123;
+        if (splitAllman)
+        {
+            contentEnd = contentEnd - 1;
+            while (contentEnd > contentStart && is_space(text.data[contentEnd - 1]))
+            {
+                contentEnd = contentEnd - 1;
+            }
+        }
+        if (contentStart < contentEnd)
+        {
+            mut u64 indentation = depth;
+            if (closingBrace && indentation > 0)
+            {
+                indentation = indentation - 1;
+            }
+            mut u64 suppressedIndentation = 0;
+            if (!namespaceIndent)
+            {
+                suppressedIndentation = suppressedIndentation + namespaceUnindented;
+            }
+            if (!matchCaseIndent)
+            {
+                mut u64 activeMatches = matchUnindented;
+                if (closingBrace && depth > 0 && matchBraces[depth - 1] && activeMatches > 0)
+                {
+                    activeMatches = activeMatches - 1;
+                }
+                suppressedIndentation = suppressedIndentation + activeMatches;
+            }
+            if (suppressedIndentation >= indentation)
+            {
+                indentation = 0;
+            }
+            else
+            {
+                indentation = indentation - suppressedIndentation;
+            }
+            if (krBraceStyle && contentEnd - contentStart == 1 && text.data[contentStart] == 123 && formatted.length > 0)
+            {
+                formatted.length = formatted.length - 1;
+                formatted.append(" ");
+                indentation = 0;
+            }
+            mut u64 indentationBytes = 0;
+            if (useTabs)
+            {
+                while (indentationBytes < indentation)
+                {
+                    formatted.data[formatted.length] = 9;
+                    formatted.length = formatted.length + 1;
+                    indentationBytes = indentationBytes + 1;
+                }
+            }
+            else
+            {
+                while (indentationBytes < indentation * indentWidth)
+                {
+                    formatted.data[formatted.length] = 32;
+                    formatted.length = formatted.length + 1;
+                    indentationBytes = indentationBytes + 1;
+                }
+            }
+            mut u64 character = contentStart;
+            while (character < contentEnd)
+            {
+                formatted.data[formatted.length] = text.data[character];
+                formatted.length = formatted.length + 1;
+                character = character + 1;
+            }
+            if (splitAllman)
+            {
+                formatted.data[formatted.length] = 10;
+                formatted.length = formatted.length + 1;
+                indentationBytes = 0;
+                if (useTabs)
+                {
+                    while (indentationBytes < indentation)
+                    {
+                        formatted.data[formatted.length] = 9;
+                        formatted.length = formatted.length + 1;
+                        indentationBytes = indentationBytes + 1;
+                    }
+                }
+                else
+                {
+                    while (indentationBytes < indentation * indentWidth)
+                    {
+                        formatted.data[formatted.length] = 32;
+                        formatted.length = formatted.length + 1;
+                        indentationBytes = indentationBytes + 1;
+                    }
+                }
+                formatted.data[formatted.length] = 123;
+                formatted.length = formatted.length + 1;
+            }
+        }
+        formatted.data[formatted.length] = 10;
+        formatted.length = formatted.length + 1;
+        if (closingBrace && depth > 0 && namespaceBraces[depth - 1] && namespaceUnindented > 0)
+        {
+            namespaceUnindented = namespaceUnindented - 1;
+        }
+        if (closingBrace && depth > 0 && matchBraces[depth - 1] && matchUnindented > 0)
+        {
+            matchUnindented = matchUnindented - 1;
+        }
+        if (opensNamespace)
+        {
+            namespaceBraces[depth] = true;
+            namespaceUnindented = namespaceUnindented + 1;
+        }
+        else if (opensMatch)
+        {
+            matchBraces[depth] = true;
+            matchUnindented = matchUnindented + 1;
+        }
+        else if (contentStart < scanEnd && text.data[scanEnd - 1] == 123)
+        {
+            namespaceBraces[depth] = false;
+            matchBraces[depth] = false;
+        }
+        pendingNamespace = headerNamespace && !opensNamespace;
+        pendingMatch = headerMatch && !opensMatch;
+        scan_format_braces(text, contentStart, scanEnd, &depth, &inBlockComment, &inString, &stringDelimiter, &escaped);
+        if (lineEnd < text.length)
+        {
+            offset = lineEnd + 1;
+        }
+        else
+        {
+            offset = lineEnd;
+        }
+    }
+    if (formatted.length == 0 && finalNewline)
+    {
+        formatted.data[formatted.length] = 10;
+        formatted.length = formatted.length + 1;
+    }
+    else if (!finalNewline && formatted.length > 0)
+    {
+        formatted.length = formatted.length - 1;
+    }
+    formatted.data[formatted.length] = 0;
+    tunnel formatted -> std::string::String result;
+}
+
+def formatting_edits(*std::string::String text, u64 indentWidth, bool useTabs, bool finalNewline, bool krBraceStyle, bool namespaceIndent, bool matchCaseIndent) -> std::string::String result
+{
+    reserve std::string::String formatted = format_document(text, indentWidth, useTabs, finalNewline, krBraceStyle, namespaceIndent, matchCaseIndent);
+    reserve mut std::string::String edits = std::string::String::with_capacity(formatted.length * 2 + 256);
+    mut u64 endLine = 0;
+    mut u64 endCharacter = 0;
+    mut u64 offset = 0;
+    while (offset < text.length)
+    {
+        if (text.data[offset] == 10)
+        {
+            endLine = endLine + 1;
+            endCharacter = 0;
+        }
+        else
+        {
+            endCharacter = endCharacter + 1;
+        }
+        offset = offset + 1;
+    }
+    edits.append("[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":");
+    append_number(&edits, endLine);
+    edits.append(",\"character\":");
+    append_number(&edits, endCharacter);
+    edits.append("}},\"newText\":\"");
+    append_json_escaped(&edits, &formatted);
+    edits.append("\"}]");
+    tunnel edits -> std::string::String result;
+}
+
+
+def append_diagnostic(*std::string::String output, u64 line, u64 column, *std::string::String message, *std::string::String source, *bool first)
 {
     if (!first[0])
     {
@@ -968,9 +1721,9 @@ def append_diagnostic(*std::String output, u64 line, u64 column, *std::String me
 }
 
 
-def publish_empty_diagnostics(*std::String uri, *std::String notificationMethod)
+def publish_empty_diagnostics(*std::string::String uri, *std::string::String notificationMethod)
 {
-    reserve mut std::String params = std::String::with_capacity(uri.length + 32);
+    reserve mut std::string::String params = std::string::String::with_capacity(uri.length + 32);
     params.append("{\"uri\":\"");
     append_json_escaped(&params, uri);
     params.append("\",\"diagnostics\":[]}");
@@ -978,7 +1731,7 @@ def publish_empty_diagnostics(*std::String uri, *std::String notificationMethod)
 }
 
 
-def find_text(*std::String text, *std::String needle, u64 startOffset) -> u64 result
+def find_text(*std::string::String text, *std::string::String needle, u64 startOffset) -> u64 result
 {
     mut u64 offset = startOffset;
     mut bool found = false;
@@ -1002,9 +1755,9 @@ def find_text(*std::String text, *std::String needle, u64 startOffset) -> u64 re
 
 
 
-def strip_ansi(*std::String input) -> std::String result
+def strip_ansi(*std::string::String input) -> std::string::String result
 {
-    reserve mut std::String clean = std::String::with_capacity(input.length);
+    reserve mut std::string::String clean = std::string::String::with_capacity(input.length);
     mut u64 offset = 0;
     while (offset < input.length)
     {
@@ -1028,39 +1781,38 @@ def strip_ansi(*std::String input) -> std::String result
         }
     }
     clean.data[clean.length] = 0;
-    tunnel clean -> std::String result;
+    tunnel clean -> std::string::String result;
 }
 
-
-
-def append_compiler_diagnostic(*std::String output, *std::String text, *std::String compilerPath, *std::String diagnosticPath, *bool first)
+def append_compiler_diagnostic(*std::string::String output, *std::string::String text, *std::string::String compilerPath, *std::string::String diagnosticPath, *bool first, u64 errorSearchOffset)
 {
     if (compilerPath.length != 0 && diagnosticPath.length != 0 &&
-        std::File::write(diagnosticPath.get_view(), text.get_view()) == text.length)
+    std::filesystem::write(diagnosticPath.get_view(), text.get_view()) == text.length)
     {
-        reserve mut std::Process::Command command = std::Process::Command::new(compilerPath.get_view());
+        reserve mut std::process::Command command = std::process::Command::new(compilerPath.get_view());
         command.arg("--check-only");
         command.arg(diagnosticPath.get_view());
-        reserve std::Process::Output compilerOutput = command.output();
+        reserve std::process::Output compilerOutput = command.output();
         if (compilerOutput.status != 0)
         {
-            reserve std::String compilerError = strip_ansi(&compilerOutput.stderr);
-            reserve std::String errorMarker = std::String::from_str("error: ");
-            reserve std::String locationMarker = std::String::from_str("--> ");
-            reserve std::String compilerSource = std::String::from_str("shaftc");
-            reserve u64 errorStart = find_text(&compilerError, &errorMarker, 0);
-            reserve u64 locationStart = find_text(&compilerError, &locationMarker, 0);
+            reserve mut std::string::String compilerError = strip_ansi(&compilerOutput.stderr);
+            reserve mut std::string::String errorMarker = std::string::String::from_str("error: ");
+            reserve std::string::String locationMarker = std::string::String::from_str("--> ");
+            reserve std::string::String helpMarker = std::string::String::from_str("help: ");
+            reserve std::string::String compilerSource = std::string::String::from_str("shaftc");
+            reserve u64 errorStart = find_text(&compilerError, &errorMarker, errorSearchOffset);
+            reserve u64 locationStart = find_text(&compilerError, &locationMarker, errorStart);
             if (errorStart < compilerError.length &&
-                locationStart + locationMarker.length + diagnosticPath.length < compilerError.length &&
-                matches_at(&compilerError, locationStart + locationMarker.length, diagnosticPath) &&
-                compilerError.data[locationStart + locationMarker.length + diagnosticPath.length] == 58)
+            locationStart + locationMarker.length + diagnosticPath.length < compilerError.length &&
+            matches_at(&compilerError, locationStart + locationMarker.length, diagnosticPath) &&
+            compilerError.data[locationStart + locationMarker.length + diagnosticPath.length] == 58)
             {
                 mut u64 messageEnd = errorStart + errorMarker.length;
                 while (messageEnd < compilerError.length && compilerError.data[messageEnd] != 10)
                 {
                     messageEnd = messageEnd + 1;
                 }
-                reserve mut std::String message = std::String::with_capacity(messageEnd - errorStart - errorMarker.length);
+                reserve mut std::string::String message = std::string::String::with_capacity(messageEnd - errorStart - errorMarker.length);
                 mut u64 character = errorStart + errorMarker.length;
                 while (character < messageEnd)
                 {
@@ -1069,6 +1821,25 @@ def append_compiler_diagnostic(*std::String output, *std::String text, *std::Str
                     character = character + 1;
                 }
                 message.data[message.length] = 0;
+
+                reserve u64 helpStart = find_text(&compilerError, &helpMarker, locationStart);
+                if (helpStart < compilerError.length)
+                {
+                    reserve mut u64 helpEnd = helpStart + helpMarker.length;
+                    while (helpEnd < compilerError.length && compilerError.data[helpEnd] != 10)
+                    {
+                        helpEnd = helpEnd + 1;
+                    }
+                    message.append(std::string::view::View::from_str("\nhelp: "));
+                    character = helpStart + helpMarker.length;
+                    while (character < helpEnd)
+                    {
+                        message.data[message.length] = compilerError.data[character];
+                        message.length = message.length + 1;
+                        character = character + 1;
+                    }
+                    message.data[message.length] = 0;
+                }
 
                 mut u64 cursor = locationStart + locationMarker.length + diagnosticPath.length;
                 mut u64 diagnosticLine = 0;
@@ -1104,23 +1875,23 @@ def append_compiler_diagnostic(*std::String output, *std::String text, *std::Str
                 {
                     append_diagnostic(output, diagnosticLine - 1, diagnosticColumn - 1, &message, &compilerSource, first);
                 }
+                reserve u64 nextError = find_text(&compilerError, &errorMarker, errorStart + errorMarker.length);
+                if (nextError < compilerError.length)
+                {
+                    append_compiler_diagnostic(output, text, compilerPath, diagnosticPath, first, nextError);
+                }
             }
         }
     }
 }
 
-
-// Braces in strings and line comments do not participate in structure. Every
-// unmatched close and every remaining open is reported at its source position.
-def publish_structure_diagnostics(*std::String uri, *std::String text, *std::String compilerPath, *std::String diagnosticPath, *std::String notificationMethod, *std::String unmatchedMessage, *std::String unclosedMessage)
+def publish_structure_diagnostics(*std::string::String uri, *std::string::String text, *std::string::String compilerPath, *std::string::String diagnosticPath, *std::string::String notificationMethod, *std::string::String unmatchedMessage, *std::string::String unclosedMessage)
 {
-    // A source byte can produce one complete diagnostic object, not merely one
-    // output byte (for example, a document of unmatched closing braces).
-    reserve mut std::String params = std::String::with_capacity(text.length * 160 + uri.length + 128);
+    reserve mut std::string::String params = std::string::String::with_capacity(text.length * 160 + uri.length + 128);
     params.append("{\"uri\":\"");
     append_json_escaped(&params, uri);
     params.append("\",\"diagnostics\":[");
-    reserve std::String structureSource = std::String::from_str("shaftls");
+    reserve std::string::String structureSource = std::string::String::from_str("shaftls");
     mut bool first = true;
     mut u64[] braceLines = __shaft_alloc_or_exit((text.length + 1) * 8);
     mut u64[] braceColumns = __shaft_alloc_or_exit((text.length + 1) * 8);
@@ -1203,7 +1974,7 @@ def publish_structure_diagnostics(*std::String uri, *std::String text, *std::Str
     }
     if (inString)
     {
-        reserve std::String unterminatedStringMessage = std::String::from_str("Unterminated string literal");
+        reserve std::string::String unterminatedStringMessage = std::string::String::from_str("Unterminated string literal");
         append_diagnostic(&params, stringLine, stringColumn, &unterminatedStringMessage, &structureSource, &first);
     }
     while (depth > 0)
@@ -1213,61 +1984,81 @@ def publish_structure_diagnostics(*std::String uri, *std::String text, *std::Str
     }
     if (first)
     {
-        append_compiler_diagnostic(&params, text, compilerPath, diagnosticPath, &first);
+        append_compiler_diagnostic(&params, text, compilerPath, diagnosticPath, &first, 0);
     }
     params.append("]}");
     send_notification(notificationMethod, &params);
 }
 
 
-def main(std::String[] args)
+
+def main(std::string::String[] args)
 {
-    reserve std::String initializeMarker = std::String::from_str("\"method\":\"initialize\"");
-    reserve std::String shutdownMarker = std::String::from_str("\"method\":\"shutdown\"");
-    reserve std::String exitMarker = std::String::from_str("\"method\":\"exit\"");
-    reserve std::String didOpenMarker = std::String::from_str("\"method\":\"textDocument/didOpen\"");
-    reserve std::String didChangeMarker = std::String::from_str("\"method\":\"textDocument/didChange\"");
-    reserve std::String didCloseMarker = std::String::from_str("\"method\":\"textDocument/didClose\"");
-    reserve std::String semanticMarker = std::String::from_str("\"method\":\"textDocument/semanticTokens/full\"");
-    reserve std::String uriMarker = std::String::from_str("\"uri\":\"");
-    reserve std::String textMarker = std::String::from_str("\"text\":\"");
-    reserve std::String rangeMarker = std::String::from_str("\"range\":");
-    reserve std::String startLineMarker = std::String::from_str("\"start\":{\"line\":");
-    reserve std::String endLineMarker = std::String::from_str("\"end\":{\"line\":");
-    reserve std::String characterMarker = std::String::from_str("\"character\":");
-    reserve std::String compilerPathMarker = std::String::from_str("\"compilerPath\":\"");
-    reserve std::String diagnosticPathMarker = std::String::from_str("\"diagnosticPath\":\"");
-    reserve std::String diagnosticsMethod = std::String::from_str("textDocument/publishDiagnostics");
-    reserve std::String unmatchedMessage = std::String::from_str("Unmatched closing brace");
-    reserve std::String unclosedMessage = std::String::from_str("Unclosed opening brace");
-    reserve std::String initializeResult = std::String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\",\"macro\",\"variable\",\"error\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
-    reserve std::String nullResult = std::String::from_str("null");
-    reserve mut std::String documentUri = std::String::with_capacity(1);
-    reserve mut std::String documentText = std::String::with_capacity(1);
-    reserve mut std::String compilerPath = std::String::with_capacity(1);
-    reserve mut std::String diagnosticPath = std::String::with_capacity(1);
+    reserve std::string::String initializeMarker = std::string::String::from_str("\"method\":\"initialize\"");
+    reserve std::string::String shutdownMarker = std::string::String::from_str("\"method\":\"shutdown\"");
+    reserve std::string::String exitMarker = std::string::String::from_str("\"method\":\"exit\"");
+    reserve std::string::String didOpenMarker = std::string::String::from_str("\"method\":\"textDocument/didOpen\"");
+    reserve std::string::String didChangeMarker = std::string::String::from_str("\"method\":\"textDocument/didChange\"");
+    reserve std::string::String didCloseMarker = std::string::String::from_str("\"method\":\"textDocument/didClose\"");
+    reserve std::string::String semanticMarker = std::string::String::from_str("\"method\":\"textDocument/semanticTokens/full\"");
+    reserve std::string::String formattingMarker = std::string::String::from_str("\"method\":\"textDocument/formatting\"");
+    reserve std::string::String completionMarker = std::string::String::from_str("\"method\":\"textDocument/completion\"");
+    reserve std::string::String uriMarker = std::string::String::from_str("\"uri\":\"");
+    reserve std::string::String textMarker = std::string::String::from_str("\"text\":\"");
+    reserve std::string::String rangeMarker = std::string::String::from_str("\"range\":");
+    reserve std::string::String startLineMarker = std::string::String::from_str("\"start\":{\"line\":");
+    reserve std::string::String endLineMarker = std::string::String::from_str("\"end\":{\"line\":");
+    reserve std::string::String characterMarker = std::string::String::from_str("\"character\":");
+    reserve std::string::String compilerPathMarker = std::string::String::from_str("\"compilerPath\":\"");
+    reserve std::string::String rootUriMarker = std::string::String::from_str("\"rootUri\":\"");
+    reserve std::string::String diagnosticPathMarker = std::string::String::from_str("\"diagnosticPath\":\"");
+    reserve std::string::String diagnosticsMethod = std::string::String::from_str("textDocument/publishDiagnostics");
+    reserve std::string::String unmatchedMessage = std::string::String::from_str("Unmatched closing brace");
+    reserve std::string::String unclosedMessage = std::string::String::from_str("Unclosed opening brace");
+    reserve std::string::String initializeResult = std::string::String::from_str("{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"completionProvider\":{},\"documentFormattingProvider\":true,\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"number\",\"string\",\"comment\",\"operator\",\"macro\",\"variable\",\"error\"],\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"shaftls\",\"version\":\"0.1.0\"}}");
+    reserve std::string::String nullResult = std::string::String::from_str("null");
+    reserve mut std::string::String documentUri = std::string::String::with_capacity(1);
+    reserve mut std::string::String documentText = std::string::String::with_capacity(1);
+    mut u64 formatIndentWidth = 4;
+    mut bool formatUseTabs = false;
+    mut bool formatFinalNewline = true;
+    mut bool formatKrBraceStyle = false;
+    mut bool formatNamespaceIndent = true;
+    mut bool formatMatchCaseIndent = true;
+    reserve mut std::string::String compilerPath = std::string::String::with_capacity(1);
+    reserve mut std::string::String diagnosticPath = std::string::String::with_capacity(1);
     mut bool running = true;
     mut bool shutdownRequested = false;
     mut bool exitReceived = false;
 
     while (running)
     {
-        reserve std::String message = read_message();
+        reserve std::string::String message = read_message();
         if (message.length == 0)
         {
             running = false;
         }
         else if (contains(&message, &initializeMarker))
         {
-            reserve std::String configuredCompilerPath = json_string(&message, &compilerPathMarker);
+            reserve std::string::String configuredCompilerPath = json_string(&message, &compilerPathMarker);
             if (configuredCompilerPath.length != 0)
             {
-                compilerPath = std::String::from_str(configuredCompilerPath.get_view());
+                compilerPath = std::string::String::from_view(configuredCompilerPath.get_view());
             }
-            reserve std::String configuredDiagnosticPath = json_string(&message, &diagnosticPathMarker);
+            reserve std::string::String configuredDiagnosticPath = json_string(&message, &diagnosticPathMarker);
             if (configuredDiagnosticPath.length != 0)
             {
-                diagnosticPath = std::String::from_str(configuredDiagnosticPath.get_view());
+                diagnosticPath = std::string::String::from_view(configuredDiagnosticPath.get_view());
+            }
+            reserve std::string::String configuredRootUri = json_string(&message, &rootUriMarker);
+            if (configuredRootUri.length != 0)
+            {
+                formatIndentWidth = workspace_indent_width(&configuredRootUri);
+                formatUseTabs = workspace_use_tabs(&configuredRootUri);
+                formatFinalNewline = workspace_final_newline(&configuredRootUri);
+                formatKrBraceStyle = workspace_kr_brace_style(&configuredRootUri);
+                formatNamespaceIndent = workspace_namespace_indent(&configuredRootUri);
+                formatMatchCaseIndent = workspace_match_case_indent(&configuredRootUri);
             }
             send_response(request_id(&message), &initializeResult);
         }
@@ -1291,17 +2082,16 @@ def main(std::String[] args)
         {
             if (contains(&message, &rangeMarker))
             {
-                reserve std::String replacement = json_string(&message, &textMarker);
+                reserve std::string::String replacement = json_string(&message, &textMarker);
                 reserve u64 rangeStart = document_offset(&documentText, json_number(&message, &startLineMarker, 0), json_number(&message, &characterMarker, 0));
                 reserve u64 rangeEnd = document_offset(&documentText, json_number(&message, &endLineMarker, 0), json_number(&message, &characterMarker, 1));
                 documentText = replace_document_range(&documentText, rangeStart, rangeEnd, &replacement);
             }
             else
             {
-                // Full-content changes replace the stored text.
                 documentText = json_string(&message, &textMarker);
             }
-            reserve std::String changedUri = json_string(&message, &uriMarker);
+            reserve std::string::String changedUri = json_string(&message, &uriMarker);
             if (changedUri.length != 0)
             {
                 documentUri = changedUri;
@@ -1310,17 +2100,28 @@ def main(std::String[] args)
         }
         else if (contains(&message, &didCloseMarker))
         {
-            reserve std::String closedUri = json_string(&message, &uriMarker);
+            reserve std::string::String closedUri = json_string(&message, &uriMarker);
             publish_empty_diagnostics(&closedUri, &diagnosticsMethod);
+        }
+        else if (contains(&message, &formattingMarker))
+        {
+            reserve std::string::String edits = formatting_edits(&documentText, formatIndentWidth, formatUseTabs, formatFinalNewline, formatKrBraceStyle, formatNamespaceIndent, formatMatchCaseIndent);
+            send_response(request_id(&message), &edits);
+        }
+        else if (contains(&message, &completionMarker))
+        {
+            reserve std::string::String items = completion_items(&documentText);
+            send_response(request_id(&message), &items);
         }
         else if (contains(&message, &semanticMarker))
         {
-            reserve std::String tokens = semantic_tokens(&documentText);
+            reserve std::string::String tokens = semantic_tokens(&documentText);
             send_response(request_id(&message), &tokens);
         }
     }
     if (exitReceived && !shutdownRequested)
     {
-        exit(1);
+        std::exit(1);
     }
 }
+@end

@@ -9,6 +9,7 @@ function launch(options = {}) {
   const server = childProcess.spawn(process.execPath, [path.join(__dirname, '..', 'server', 'shaft-lsp.cjs')], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...(options.env || {}) } });
   let buffer = Buffer.alloc(0);
   let nextId = 0;
+  let serverError = '';
   const pending = new Map();
   const notifications = [];
   const waiters = [];
@@ -39,6 +40,7 @@ function launch(options = {}) {
       } else if (message.method) publishNotification(message);
     }
   });
+  server.stderr.on('data', (chunk) => { serverError += chunk.toString(); });
   const send = (message) => {
     const body = Buffer.from(JSON.stringify(message));
     server.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
@@ -55,12 +57,20 @@ function launch(options = {}) {
       const existing = notifications.find(predicate);
       if (existing) return Promise.resolve(existing);
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('timed out waiting for LSP notification')), timeout);
+        const timer = setTimeout(() => reject(new Error(`timed out waiting for LSP notification; received: ${JSON.stringify(notifications)}${serverError ? `; server stderr: ${serverError}` : ''}`)), timeout);
         waiters.push({ predicate, resolve, reject, timer });
       });
     },
     async close() { try { await this.request('shutdown', {}); this.notify('exit', {}); } catch { server.kill(); } },
   };
+}
+
+function compilerPath(repository) {
+  for (const candidate of ['build/shaftc', 'build-linux-x86_64-release/shaftc']) {
+    const absolute = path.join(repository, candidate);
+    if (fs.existsSync(absolute)) return absolute;
+  }
+  return path.join(repository, 'build', 'shaftc');
 }
 
 test('the stdio server exposes LSP analysis, completion, definition, and formatting', async (t) => {
@@ -87,13 +97,27 @@ test('the stdio server exposes LSP analysis, completion, definition, and formatt
   assert.ok(tokens.data.length > 0);
 });
 
+test('the server highlights unsafe block directives while preserving their source region', async (t) => {
+  const client = launch();
+  t.after(() => client.close());
+  await client.request('initialize', { processId: process.pid, rootUri: null, capabilities: {}, initializationOptions: { diagnostics: 'off' } });
+  const uri = 'file:///workspace/unsafe.shaft';
+  client.notify('textDocument/didOpen', { textDocument: { uri, version: 1, languageId: 'shaft', text: '@unsafe\n// raw pointer and C ABI code are allowed in this region.\n@end\n' } });
+  const tokens = await client.request('textDocument/semanticTokens/full', { textDocument: { uri } });
+  assert.deepEqual(tokens.data, [
+    0, 0, 7, 0, 0,  // @unsafe
+    1, 0, 57, 5, 0, // comment within the unsafe region
+    1, 0, 4, 0, 0,  // @end
+  ]);
+});
+
 test('the server marks lexer errors such as invalid tokens immediately', async (t) => {
   const client = launch();
   t.after(() => client.close());
   const repository = path.resolve(__dirname, '..', '..', '..');
   await client.request('initialize', {
     processId: process.pid, rootUri: `file://${repository}`, capabilities: {},
-    initializationOptions: { compilerPath: path.join(repository, 'build', 'shaftc'), diagnostics: 'onChange' },
+    initializationOptions: { compilerPath: compilerPath(repository), diagnostics: 'onChange' },
   });
   client.notify('initialized', {});
   const uri = 'file:///workspace/invalid-token.shaft';
@@ -114,7 +138,7 @@ test('the server marks parser errors such as missing semicolons immediately', as
   const repository = path.resolve(__dirname, '..', '..', '..');
   await client.request('initialize', {
     processId: process.pid, rootUri: `file://${repository}`, capabilities: {},
-    initializationOptions: { compilerPath: path.join(repository, 'build', 'shaftc'), diagnostics: 'onChange' },
+    initializationOptions: { compilerPath: compilerPath(repository), diagnostics: 'onChange' },
   });
   client.notify('initialized', {});
   const uri = 'file:///workspace/missing-semicolon.shaft';
@@ -134,18 +158,18 @@ test('the server marks checker errors such as undeclared identifiers immediately
   const repository = path.resolve(__dirname, '..', '..', '..');
   await client.request('initialize', {
     processId: process.pid, rootUri: `file://${repository}`, capabilities: {},
-    initializationOptions: { compilerPath: path.join(repository, 'build', 'shaftc'), diagnostics: 'onChange' },
+    initializationOptions: { compilerPath: compilerPath(repository), diagnostics: 'onChange' },
   });
   client.notify('initialized', {});
   const uri = 'file:///workspace/undeclared-identifier.shaft';
-  const text = 'cdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return unknownValue;\n}\n';
+  const text = '@unsafe\ncdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return unknownValue;\n}\n@end\n';
   const published = client.nextNotification((message) => message.method === 'textDocument/publishDiagnostics' && message.params.uri === uri && message.params.diagnostics.some((diagnostic) => /Use of undeclared identifier/.test(diagnostic.message)));
   client.notify('textDocument/didOpen', { textDocument: { uri, version: 1, languageId: 'shaft', text } });
   const message = await published;
   const diagnostic = message.params.diagnostics.find((item) => /Use of undeclared identifier/.test(item.message));
   assert.equal(diagnostic.severity, 1);
   assert.equal(diagnostic.source, 'shaftc');
-  assert.equal(diagnostic.range.start.line, 2);
+  assert.equal(diagnostic.range.start.line, 3);
   assert.equal(diagnostic.range.start.character, 11);
 });
 
@@ -155,17 +179,17 @@ test('the server marks compiler errors immediately when diagnostics are onChange
   const repository = path.resolve(__dirname, '..', '..', '..');
   await client.request('initialize', {
     processId: process.pid, rootUri: `file://${repository}`, capabilities: {},
-    initializationOptions: { compilerPath: path.join(repository, 'build', 'shaftc'), diagnostics: 'onChange' },
+    initializationOptions: { compilerPath: compilerPath(repository), diagnostics: 'onChange' },
   });
   client.notify('initialized', {});
   const uri = 'file:///workspace/on-change-error.shaft';
-  client.notify('textDocument/didOpen', { textDocument: { uri, version: 1, languageId: 'shaft', text: 'cdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return 0;\n}\n' } });
+  client.notify('textDocument/didOpen', { textDocument: { uri, version: 1, languageId: 'shaft', text: '@unsafe\ncdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return 0;\n}\n@end\n' } });
   const published = client.nextNotification((message) => message.method === 'textDocument/publishDiagnostics' && message.params.uri === uri && message.params.diagnostics.some((diagnostic) => /Unknown function 'missing'/.test(diagnostic.message)));
-  client.notify('textDocument/didChange', { textDocument: { uri, version: 2 }, contentChanges: [{ text: 'cdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return missing(42);\n}\n' }] });
+  client.notify('textDocument/didChange', { textDocument: { uri, version: 2 }, contentChanges: [{ text: '@unsafe\ncdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return missing(42);\n}\n@end\n' }] });
   const message = await published;
   const diagnostic = message.params.diagnostics.find((item) => /Unknown function 'missing'/.test(item.message));
   assert.equal(diagnostic.severity, 1);
-  assert.equal(diagnostic.range.start.line, 2);
+  assert.equal(diagnostic.range.start.line, 3);
 });
 
 test('the server discovers an installer-registered compiler outside PATH', async (t) => {
@@ -177,7 +201,7 @@ test('the server discovers an installer-registered compiler outside PATH', async
   const standardLibrary = path.join(prefix, 'share', 'shaft', 'std', 'std.shaft');
   fs.mkdirSync(path.dirname(compiler), { recursive: true });
   fs.mkdirSync(path.dirname(standardLibrary), { recursive: true });
-  fs.copyFileSync(path.join(repository, 'build', 'shaftc'), compiler);
+  fs.copyFileSync(compilerPath(repository), compiler);
   fs.copyFileSync(path.join(repository, 'std', 'std.shaft'), standardLibrary);
   for (const runtime of ['linux.shaft', 'darwin.shaft', 'windows.shaft']) {
     const target = path.join(prefix, 'share', 'shaft', 'std', 'runtime', runtime);
@@ -195,7 +219,7 @@ test('the server discovers an installer-registered compiler outside PATH', async
   assert.equal(initialized.serverInfo.name, 'shaft-lsp');
   client.notify('initialized', {});
   const uri = 'file:///workspace/registered-compiler.shaft';
-  client.notify('textDocument/didOpen', { textDocument: { uri, version: 1, languageId: 'shaft', text: 'cdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return missing(42);\n}\n' } });
+  client.notify('textDocument/didOpen', { textDocument: { uri, version: 1, languageId: 'shaft', text: '@unsafe\ncdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return missing(42);\n}\n@end\n' } });
   const published = client.nextNotification((message) => message.method === 'textDocument/publishDiagnostics' && message.params.uri === uri && message.params.diagnostics.some((diagnostic) => /Unknown function/.test(diagnostic.message)));
   client.notify('textDocument/didSave', { textDocument: { uri } });
   const message = await published;
@@ -208,15 +232,15 @@ test('the server publishes live shaftc diagnostics with source-line correction',
   const repository = path.resolve(__dirname, '..', '..', '..');
   await client.request('initialize', {
     processId: process.pid, rootUri: `file://${repository}`, capabilities: {},
-    initializationOptions: { compilerPath: path.join(repository, 'build', 'shaftc'), diagnostics: 'onSave' },
+    initializationOptions: { compilerPath: compilerPath(repository), diagnostics: 'onSave' },
   });
   client.notify('initialized', {});
   const uri = 'file:///workspace/unknown-call.shaft';
-  client.notify('textDocument/didOpen', { textDocument: { uri, version: 1, languageId: 'shaft', text: 'cdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return missing(42);\n}\n' } });
+  client.notify('textDocument/didOpen', { textDocument: { uri, version: 1, languageId: 'shaft', text: '@unsafe\ncdef __shaft_entry(i32 argc, *i8 argv) -> i32\n{\n    return missing(42);\n}\n@end\n' } });
   const published = client.nextNotification((message) => message.method === 'textDocument/publishDiagnostics' && message.params.uri === uri && message.params.diagnostics.some((diagnostic) => /Unknown function/.test(diagnostic.message)));
   client.notify('textDocument/didSave', { textDocument: { uri } });
   const message = await published;
   const diagnostic = message.params.diagnostics.find((item) => /Unknown function/.test(item.message));
-  assert.equal(diagnostic.range.start.line, 2);
+  assert.equal(diagnostic.range.start.line, 3);
   assert.equal(diagnostic.source, 'shaftc');
 });

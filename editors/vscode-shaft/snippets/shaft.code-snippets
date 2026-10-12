@@ -24,26 +24,22 @@
     "description": "Shaft namespace declaration",
     "body": ["namespace ${1:Name}", "{", "    ${0}", "}"]
   },
-  "Shaft class": {
-    "prefix": "shaft-class",
-    "description": "Shaft class declaration",
-    "body": ["class${1:<T>} ${2:Name}", "{", "    ${0}", "}"]
+  "Shaft trait": {
+    "prefix": "shaft-trait",
+    "description": "Shaft trait declaration",
+    "body": ["trait${1:<T>} ${2:Name}", "{", "    ${0}", "}"]
   },
-  "Shaft HashMap": {
-    "prefix": "shaft-hashmap",
-    "description": "Initialize a Collections::HashMap<u64, u64>",
-    "body": [
-      "Collections::HashMap<u64, u64> ${1:map};",
-      "Collections::hash_map_u64_init(&${1:map}, ${2:8});",
-      "${0}"
-    ]
+  "Shaft struct": {
+    "prefix": "shaft-struct",
+    "description": "Shaft struct declaration",
+    "body": ["struct${1:<T>} ${2:Name}", "{", "    ${0}", "}"]
   },
-  "Shaft HashSet": {
-    "prefix": "shaft-hashset",
-    "description": "Initialize a Collections::HashSet<u64>",
+  "Shaft Vector": {
+    "prefix": "shaft-vector",
+    "description": "Initialize a std::vector::Vector<T>",
     "body": [
-      "Collections::HashSet<u64> ${1:set};",
-      "Collections::hash_set_u64_init(&${1:set}, ${2:8});",
+      "std::vector::Vector<${1:T}> ${2:values};",
+      "std::vector::init(&${2:values}, ${3:8});",
       "${0}"
     ]
   }

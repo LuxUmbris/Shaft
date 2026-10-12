@@ -38,10 +38,25 @@ function resolveCompilerSettings(settings = {}, options = {}) {
   return { ...settings, compilerPath: 'shaftc', source: 'PATH' };
 }
 
+function resolveExecutablePath(command, options = {}) {
+  if (!command) return '';
+  if (path.isAbsolute(command)) return fs.existsSync(command) ? command : '';
+  const environment = options.env || process.env;
+  const candidates = (environment.PATH || '').split(path.delimiter);
+  const suffixes = options.platform === 'win32' || process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
+  for (const directory of candidates) {
+    for (const suffix of suffixes) {
+      const candidate = path.join(directory, `${command}${suffix}`);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return '';
+}
+
 function createLiveDiagnosticsOptions(settings = {}, options = {}) {
   const resolved = resolveCompilerSettings(settings, options);
-  const compilerPath = resolved.compilerPath;
-  if (!path.isAbsolute(compilerPath) || !fs.existsSync(compilerPath)) return { options: {}, directory: '' };
+  const compilerPath = resolveExecutablePath(resolved.compilerPath, options);
+  if (!compilerPath) return { options: {}, directory: '' };
   try {
     const directory = fs.mkdtempSync(path.join(options.temporaryDirectory || os.tmpdir(), 'shaftls-'));
     return {

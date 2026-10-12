@@ -7,3 +7,7 @@ entry = "src/main.shaft"
 output = "build/shaftls"
 hosted = false
 optimization = "O3"
+
+[format]
+brace_style = "allman"
+namespace_indent = true

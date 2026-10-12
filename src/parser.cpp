@@ -13,6 +13,7 @@ namespace Parser
     static ASTNode parse_postfix();
     static ASTNode parse_primary();
     static ASTNode parse_struct_init();
+    static ASTNode parse_do_expression();
     static std::vector<ASTNode> parse_arg_list();
     static ASTNode parse_type_node();
     static ASTNode parse_type_node_base();
@@ -34,19 +35,22 @@ namespace Parser
     static ASTNode parse_state_binding_decl();
     static std::vector<ASTNode> parse_param_list();
     static std::vector<ASTNode> parse_generic_param_list();
-    static ASTNode parse_function_common(NodeType nodeType, bool hasBody, bool allowGenerics,
-                                         bool allowAsync, bool isCFunction);
+    static ASTNode parse_function_common(NodeType nodeType, bool hasBody, bool allowGenerics, bool allowAsync,
+                                         bool isCFunction);
     static ASTNode parse_namespace_declaration();
     static ASTNode parse_function_declaration();
     static ASTNode parse_function_definition();
+    static ASTNode parse_comptime_function_definition();
     static ASTNode parse_c_function_declaration();
     static ASTNode parse_c_function_definition();
     static ASTNode parse_struct_declaration();
     static ASTNode parse_aligned_struct_declaration();
-    static ASTNode parse_class_declaration();
+    static ASTNode parse_trait_declaration();
+    static ASTNode parse_impl_declaration();
     static ASTNode parse_enum_declaration();
     static ASTNode parse_import_statement();
     static ASTNode parse_export_declaration();
+    static ASTNode parse_using_namespace_declaration();
     static ASTNode parse_using_macro_declaration();
     static ASTNode parse_variable_declaration();
     static ASTNode parse_variable_declaration_with_custom_type();
@@ -60,35 +64,22 @@ namespace Parser
 
     static inline Lexer::Token peek(uint64_t offset = 0)
     {
-        if (pos + offset >= tokens.size()) {
-            static Lexer::Token eof{
-                Lexer::TokenType::EndOfFile,
-                0,
-                std::monostate{},
-                nullptr,
-                nullptr
-            };
+        if (pos + offset >= tokens.size())
+        {
+            static Lexer::Token eof{Lexer::TokenType::EndOfFile, 0, std::monostate{}, nullptr, nullptr};
             return eof;
         }
         return tokens[pos + offset];
     }
-
 
     static inline Lexer::Token advance()
     {
         if (pos < tokens.size())
             return tokens[pos++];
 
-        static Lexer::Token eof{
-            Lexer::TokenType::EndOfFile,
-            0,
-            std::monostate{},
-            nullptr,
-            nullptr
-        };
+        static Lexer::Token eof{Lexer::TokenType::EndOfFile, 0, std::monostate{}, nullptr, nullptr};
         return eof;
     }
-
 
     static inline bool check(Lexer::TokenType type, uint64_t offset = 0)
     {
@@ -99,14 +90,12 @@ namespace Parser
 
     static inline bool check_op(Lexer::Operator op, uint64_t offset = 0)
     {
-        return check(Lexer::TokenType::Operator, offset) &&
-               std::get<Lexer::Operator>(peek(offset).value) == op;
+        return check(Lexer::TokenType::Operator, offset) && std::get<Lexer::Operator>(peek(offset).value) == op;
     }
 
     static inline bool check_kw(Lexer::Keyword kw, uint64_t offset = 0)
     {
-        return check(Lexer::TokenType::Keyword, offset) &&
-               std::get<Lexer::Keyword>(peek(offset).value) == kw;
+        return check(Lexer::TokenType::Keyword, offset) && std::get<Lexer::Keyword>(peek(offset).value) == kw;
     }
 
     static inline void error(const std::string &error_message)
@@ -119,10 +108,9 @@ namespace Parser
         if (token.source)
             error_pos = get_error_pos(token.start, token.source);
 
-        Error err = {error_message, module, error_pos.line, error_pos.column};
+        Error err = {error_message + token.macroBacktrace, module, error_pos.line, error_pos.column};
         panic(err);
     }
-
 
     static inline Lexer::Token consume(Lexer::TokenType type, const std::string &error_message)
     {
@@ -199,8 +187,7 @@ namespace Parser
         if (!check(Lexer::TokenType::Identifier))
             return false;
         uint64_t offset = 1;
-        while (check_op(Lexer::Operator::DOUBLE_COLON, offset) &&
-               check(Lexer::TokenType::Identifier, offset + 1))
+        while (check_op(Lexer::Operator::DOUBLE_COLON, offset) && check(Lexer::TokenType::Identifier, offset + 1))
             offset += 2;
 
         if (check_op(Lexer::Operator::LESS_THAN, offset))
@@ -244,19 +231,17 @@ namespace Parser
             }
         }
 
-        while (check_op(Lexer::Operator::LEFT_BRACKET, offset) &&
-               check_op(Lexer::Operator::RIGHT_BRACKET, offset + 1))
+        while (check_op(Lexer::Operator::LEFT_BRACKET, offset) && check_op(Lexer::Operator::RIGHT_BRACKET, offset + 1))
             offset += 2;
         return check(Lexer::TokenType::Identifier, offset);
     }
 
-    // Distinguish declarations from expressions.
     static bool at_type_start()
     {
         if (check(Lexer::TokenType::Keyword))
         {
             Lexer::Keyword kw = std::get<Lexer::Keyword>(peek().value);
-            return is_primitive_type_keyword(kw) || kw == Lexer::Keyword::MUT;
+            return is_primitive_type_keyword(kw) || kw == Lexer::Keyword::MUT || kw == Lexer::Keyword::TYPEOF;
         }
         if (check_op(Lexer::Operator::MULTIPLY) || check_op(Lexer::Operator::AMPERSAND) ||
             check_op(Lexer::Operator::QUESTION_MARK) || check_op(Lexer::Operator::LEFT_PAREN))
@@ -264,14 +249,34 @@ namespace Parser
         return at_custom_type_var_decl_start();
     }
 
-    // Scan a type without constructing an AST, so declarations beginning with
-    // a pointer/reference or parenthesized type remain distinguishable from expressions.
+    static void parse_top_level_into(std::vector<ASTNode> &out);
+    static const char *keyword_to_string(Lexer::Keyword k);
+
     static bool skip_type_node(uint64_t &offset)
     {
         if (check_kw(Lexer::Keyword::MUT, offset))
         {
             ++offset;
             return skip_type_node(offset);
+        }
+
+        if (check_kw(Lexer::Keyword::TYPEOF, offset))
+        {
+            ++offset;
+            if (!check_op(Lexer::Operator::LEFT_PAREN, offset))
+                return false;
+            size_t depth = 0;
+            do
+            {
+                if (check_op(Lexer::Operator::LEFT_PAREN, offset))
+                    ++depth;
+                else if (check_op(Lexer::Operator::RIGHT_PAREN, offset))
+                    --depth;
+                ++offset;
+            } while (depth > 0 && peek(offset).type != Lexer::TokenType::EndOfFile);
+            if (depth != 0)
+                return false;
+            return true;
         }
 
         if (check_op(Lexer::Operator::MULTIPLY, offset) || check_op(Lexer::Operator::AMPERSAND, offset) ||
@@ -298,8 +303,7 @@ namespace Parser
         else if (check(Lexer::TokenType::Identifier, offset))
         {
             ++offset;
-            while (check_op(Lexer::Operator::DOUBLE_COLON, offset) &&
-                   check(Lexer::TokenType::Identifier, offset + 1))
+            while (check_op(Lexer::Operator::DOUBLE_COLON, offset) && check(Lexer::TokenType::Identifier, offset + 1))
                 offset += 2;
 
             if (check_op(Lexer::Operator::LESS_THAN, offset))
@@ -327,8 +331,7 @@ namespace Parser
         while (check_op(Lexer::Operator::LEFT_BRACKET, offset))
         {
             ++offset;
-            if (check(Lexer::TokenType::IntegerLiteral, offset) ||
-                check(Lexer::TokenType::Identifier, offset))
+            if (check(Lexer::TokenType::IntegerLiteral, offset) || check(Lexer::TokenType::Identifier, offset))
                 ++offset;
             if (!check_op(Lexer::Operator::RIGHT_BRACKET, offset))
                 return false;
@@ -337,8 +340,7 @@ namespace Parser
         return true;
     }
 
-    // A leading '*' or '&' may begin either a type or a unary expression. Only
-    // treat it as a declaration when a complete type is followed by a name.
+    // A leading '*' or '&' may begin either a type or a unary expression
     static bool at_variable_declaration_start()
     {
         uint64_t offset = 0;
@@ -365,7 +367,6 @@ namespace Parser
         }
     }
 
-
     static ASTNode parse_primary()
     {
         if (check_op(Lexer::Operator::LEFT_PAREN))
@@ -379,17 +380,21 @@ namespace Parser
         if (check_op(Lexer::Operator::LEFT_BRACE))
             return parse_struct_init();
 
+        if (check_kw(Lexer::Keyword::DO))
+            return parse_do_expression();
+
         if (check_kw(Lexer::Keyword::SELF))
         {
             Lexer::Token token = advance();
-            return ASTNode{
-                NodeType::Identifier, token.start, token.mod_path, token.source, std::string_view("self"), {}};
+            return ASTNode{NodeType::Identifier,     token.start, token.mod_path, token.source,
+                           std::string_view("self"), {}};
         }
         if (check_kw(Lexer::Keyword::REF))
         {
             Lexer::Token token = advance();
             ASTNode source = parse_postfix();
-            return ASTNode{NodeType::RefExpr, token.start, token.mod_path, token.source, std::monostate{}, {std::move(source)}};
+            return ASTNode{NodeType::RefExpr, token.start,      token.mod_path,
+                           token.source,      std::monostate{}, {std::move(source)}};
         }
         if (check_kw(Lexer::Keyword::SIZEOF))
         {
@@ -397,7 +402,41 @@ namespace Parser
             consume_op(Lexer::Operator::LEFT_PAREN, "Expected '(' after sizeof");
             ASTNode type = parse_type_node();
             consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after sizeof type");
-            return ASTNode{NodeType::SizeofExpr, token.start, token.mod_path, token.source, std::monostate{}, {std::move(type)}};
+            return ASTNode{NodeType::SizeofExpr, token.start,      token.mod_path,
+                           token.source,         std::monostate{}, {std::move(type)}};
+        }
+        if (check_kw(Lexer::Keyword::META_COMPTIME))
+        {
+            Lexer::Token directive = advance();
+            if (check(Lexer::TokenType::Identifier) && std::get<std::string_view>(peek().value) == "iftype")
+            {
+                advance();
+                consume_op(Lexer::Operator::LEFT_PAREN, "Expected '(' after @comptime iftype");
+                ASTNode subject = parse_expression();
+                consume_op(Lexer::Operator::COMMA, "Expected ',' before @comptime iftype target type");
+                ASTNode target = parse_type_node();
+                consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after @comptime iftype target type");
+                consume_op(Lexer::Operator::LEFT_BRACE, "Expected '{' before @comptime iftype selected expression");
+                ASTNode selected = parse_expression();
+                consume_op(Lexer::Operator::RIGHT_BRACE, "Expected '}' after @comptime iftype selected expression");
+                consume_kw(Lexer::Keyword::ELSE, "Expected 'else' after @comptime iftype selected expression");
+                consume_op(Lexer::Operator::LEFT_BRACE, "Expected '{' before @comptime iftype fallback expression");
+                ASTNode fallback = parse_expression();
+                consume_op(Lexer::Operator::RIGHT_BRACE, "Expected '}' after @comptime iftype fallback expression");
+                consume_kw(Lexer::Keyword::META_END, "@comptime iftype requires a matching @end");
+                return ASTNode{NodeType::TypeIfExpr,
+                               directive.start,
+                               directive.mod_path,
+                               directive.source,
+                               false,
+                               {std::move(subject), std::move(target), std::move(selected), std::move(fallback)}};
+            }
+            ASTNode expression = parse_expression();
+            if (!check_kw(Lexer::Keyword::META_END))
+                error("@comptime expression requires a matching @end.");
+            advance();
+            return ASTNode{NodeType::CompileExpr, directive.start,  directive.mod_path,
+                           directive.source,      std::monostate{}, {std::move(expression)}};
         }
 
         Lexer::Token token = advance();
@@ -407,31 +446,33 @@ namespace Parser
         case Lexer::TokenType::Identifier:
             return ASTNode{NodeType::Identifier,
                            token.start,
-                           token.mod_path, token.source, std::get<std::string_view>(token.value),
+                           token.mod_path,
+                           token.source,
+                           std::get<std::string_view>(token.value),
                            {}};
         case Lexer::TokenType::IntegerLiteral:
-            return ASTNode{NodeType::IntegerLiteral,
-                           token.start,
-                           token.mod_path, token.source, std::get<uint64_t>(token.value),
-                           {}};
+            return ASTNode{NodeType::IntegerLiteral,        token.start, token.mod_path, token.source,
+                           std::get<uint64_t>(token.value), {}};
         case Lexer::TokenType::FloatLiteral:
-            return ASTNode{NodeType::FloatLiteral,
-                           token.start,
-                           token.mod_path, token.source, std::get<double>(token.value),
-                           {}};
+            return ASTNode{NodeType::FloatLiteral,        token.start, token.mod_path, token.source,
+                           std::get<double>(token.value), {}};
         case Lexer::TokenType::StringLiteral:
             return ASTNode{NodeType::StringLiteral,
                            token.start,
-                           token.mod_path, token.source, std::get<std::string_view>(token.value),
+                           token.mod_path,
+                           token.source,
+                           std::get<std::string_view>(token.value),
                            {}};
         case Lexer::TokenType::CharLiteral:
             return ASTNode{NodeType::CharLiteral,
                            token.start,
-                           token.mod_path, token.source, std::get<std::string_view>(token.value),
+                           token.mod_path,
+                           token.source,
+                           std::get<std::string_view>(token.value),
                            {}};
         case Lexer::TokenType::BoolLiteral:
-            return ASTNode{
-                NodeType::BoolLiteral, token.start, token.mod_path, token.source, std::get<bool>(token.value), {}};
+            return ASTNode{NodeType::BoolLiteral,       token.start, token.mod_path, token.source,
+                           std::get<bool>(token.value), {}};
         default:
             error("Expected an expression");
             return ASTNode{NodeType::Identifier, token.start, token.mod_path, token.source, std::monostate{}, {}};
@@ -456,6 +497,34 @@ namespace Parser
         return args;
     }
 
+    static ASTNode parse_do_expression()
+    {
+        Lexer::Token directive = consume_kw(Lexer::Keyword::DO, "Expected 'do'");
+        consume_op(Lexer::Operator::LEFT_BRACE, "Expected '{' after 'do'");
+        ASTNode node{NodeType::DoExpr, directive.start, directive.mod_path, directive.source, std::monostate{}, {}};
+        while (!check_kw(Lexer::Keyword::YIELD))
+        {
+            if (check_op(Lexer::Operator::RIGHT_BRACE) || peek().type == Lexer::TokenType::EndOfFile)
+                error("A do expression requires a final 'yield expression;'");
+            node.children.push_back(parse_statement());
+        }
+        advance(); // yield
+        if (check_kw(Lexer::Keyword::MOVE))
+        {
+            Lexer::Token move = advance();
+            ASTNode source = parse_postfix();
+            node.children.push_back(ASTNode{
+                NodeType::MoveExpr, move.start, move.mod_path, move.source, std::monostate{}, {std::move(source)}});
+        }
+        else
+        {
+            node.children.push_back(parse_expression());
+        }
+        consume_op(Lexer::Operator::SEMICOLON, "Expected ';' after do-expression yield value");
+        consume_op(Lexer::Operator::RIGHT_BRACE, "Expected '}' after do-expression yield value");
+        return node;
+    }
+
     static ASTNode parse_struct_init()
     {
         Lexer::Token brace = advance(); // consume '{'
@@ -472,13 +541,39 @@ namespace Parser
         return node;
     }
 
+    static std::string expression_scope_name(const ASTNode &node)
+    {
+        if (node.type == NodeType::Identifier)
+            return std::string(std::get<std::string_view>(node.value));
+        if (node.type == NodeType::ScopeAccessExpr && !node.children.empty())
+            return expression_scope_name(node.children.front()) +
+                   "::" + std::string(std::get<std::string_view>(node.value));
+        return {};
+    }
+
     static ASTNode parse_postfix()
     {
         ASTNode expr = parse_primary();
 
         while (true)
         {
-            if (check_op(Lexer::Operator::LEFT_PAREN))
+            if (check_op(Lexer::Operator::LEFT_BRACE) &&
+                (expr.type == NodeType::Identifier || expr.type == NodeType::ScopeAccessExpr))
+            {
+                const std::string typeName = expression_scope_name(expr);
+                if (!typeName.empty())
+                {
+                    ASTNode initializer = parse_struct_init();
+                    initializer.hasInferredType = true;
+                    initializer.inferredTypeName = typeName;
+                    expr = std::move(initializer);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else if (check_op(Lexer::Operator::LEFT_PAREN))
             {
                 Lexer::Token paren = advance();
                 std::vector<ASTNode> args = parse_arg_list();
@@ -495,7 +590,8 @@ namespace Parser
                 Lexer::Token bracket = advance();
                 ASTNode index = parse_expression();
                 consume_op(Lexer::Operator::RIGHT_BRACKET, "Expected ']' after array index");
-                ASTNode access{NodeType::IndexExpr, bracket.start, bracket.mod_path, bracket.source, std::monostate{}, {}};
+                ASTNode access{NodeType::IndexExpr, bracket.start,    bracket.mod_path,
+                               bracket.source,      std::monostate{}, {}};
                 access.children.push_back(std::move(expr));
                 access.children.push_back(std::move(index));
                 expr = std::move(access);
@@ -503,11 +599,12 @@ namespace Parser
             else if (check_op(Lexer::Operator::DOT))
             {
                 Lexer::Token dot = advance();
-                Lexer::Token member =
-                    consume(Lexer::TokenType::Identifier, "Expected member name after '.'");
+                Lexer::Token member = consume(Lexer::TokenType::Identifier, "Expected member name after '.'");
                 ASTNode access{NodeType::MemberAccessExpr,
                                dot.start,
-                               dot.mod_path, dot.source, std::get<std::string_view>(member.value),
+                               dot.mod_path,
+                               dot.source,
+                               std::get<std::string_view>(member.value),
                                {}};
                 access.children.push_back(expr);
                 expr = std::move(access);
@@ -524,8 +621,8 @@ namespace Parser
                     while (true)
                     {
                         ASTNode arg_type = parse_type_node();
-                        ASTNode arg_node{
-                            NodeType::GenericArg, colons.start, colons.mod_path, colons.source, std::monostate{}, {}};
+                        ASTNode arg_node{NodeType::GenericArg, colons.start,     colons.mod_path,
+                                         colons.source,        std::monostate{}, {}};
                         arg_node.children.push_back(arg_type);
                         generic_args.push_back(arg_node);
                         if (check_op(Lexer::Operator::COMMA))
@@ -537,13 +634,12 @@ namespace Parser
                     }
                     consume_generic_closer("Expected '>' after explicit generic arguments");
 
-                    Lexer::Token paren = consume_op(Lexer::Operator::LEFT_PAREN,
-                                                    "Expected '(' after generic call arguments");
+                    Lexer::Token paren =
+                        consume_op(Lexer::Operator::LEFT_PAREN, "Expected '(' after generic call arguments");
                     std::vector<ASTNode> args = parse_arg_list();
                     consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after call arguments");
 
-                    ASTNode call{
-                        NodeType::CallExpr, paren.start, paren.mod_path, paren.source, std::monostate{}, {}};
+                    ASTNode call{NodeType::CallExpr, paren.start, paren.mod_path, paren.source, std::monostate{}, {}};
                     call.children.push_back(expr);
                     for (auto &g : generic_args)
                         call.children.push_back(std::move(g));
@@ -554,14 +650,24 @@ namespace Parser
                 }
 
                 Lexer::Token colons = advance();
-                Lexer::Token member =
-                    consume(Lexer::TokenType::Identifier, "Expected name after '::'");
+                Lexer::Token member = consume(Lexer::TokenType::Identifier, "Expected name after '::'");
                 ASTNode access{NodeType::ScopeAccessExpr,
                                colons.start,
-                               colons.mod_path, colons.source, std::get<std::string_view>(member.value),
+                               colons.mod_path,
+                               colons.source,
+                               std::get<std::string_view>(member.value),
                                {}};
                 access.children.push_back(expr);
                 expr = std::move(access);
+            }
+            else if (check_kw(Lexer::Keyword::AS))
+            {
+                Lexer::Token keyword = advance();
+                ASTNode target = parse_type_node();
+                ASTNode cast{NodeType::CastExpr, keyword.start, keyword.mod_path, keyword.source, std::monostate{}, {}};
+                cast.children.push_back(std::move(expr));
+                cast.children.push_back(std::move(target));
+                expr = std::move(cast);
             }
             else
             {
@@ -598,7 +704,7 @@ namespace Parser
         return parse_postfix();
     }
 
-    // returns -1 if the token is not a known binary op
+    // -1 == unknown op
     static int binary_precedence(Lexer::Operator op)
     {
         switch (op)
@@ -694,19 +800,15 @@ namespace Parser
                 {
                     Lexer::Token move_token = advance();
                     ASTNode source = parse_postfix();
-                    rhs = ASTNode{NodeType::MoveExpr,
-                                  move_token.start,
-                                  move_token.mod_path, move_token.source, std::monostate{},
-                                  {std::move(source)}};
+                    rhs = ASTNode{NodeType::MoveExpr, move_token.start, move_token.mod_path,
+                                  move_token.source,  std::monostate{}, {std::move(source)}};
                 }
                 else if (check_kw(Lexer::Keyword::REF))
                 {
                     Lexer::Token ref_token = advance();
                     ASTNode source = parse_postfix();
-                    rhs = ASTNode{NodeType::RefExpr,
-                                  ref_token.start,
-                                  ref_token.mod_path, ref_token.source, std::monostate{},
-                                  {std::move(source)}};
+                    rhs = ASTNode{NodeType::RefExpr, ref_token.start,  ref_token.mod_path,
+                                  ref_token.source,  std::monostate{}, {std::move(source)}};
                 }
                 else
                 {
@@ -715,7 +817,9 @@ namespace Parser
 
                 ASTNode node{NodeType::AssignmentExpr,
                              op_token.start,
-                             op_token.mod_path, op_token.source, std::get<Lexer::Operator>(op_token.value),
+                             op_token.mod_path,
+                             op_token.source,
+                             std::get<Lexer::Operator>(op_token.value),
                              {}};
                 node.children.push_back(lhs);
                 node.children.push_back(rhs);
@@ -730,6 +834,16 @@ namespace Parser
 
     static ASTNode parse_type_node_base()
     {
+        if (check_kw(Lexer::Keyword::TYPEOF))
+        {
+            Lexer::Token keyword = advance();
+            consume_op(Lexer::Operator::LEFT_PAREN, "Expected '(' after typeof");
+            ASTNode expression = parse_expression();
+            consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after typeof expression");
+            return ASTNode{NodeType::TypeofType, keyword.start,    keyword.mod_path,
+                           keyword.source,       std::monostate{}, {std::move(expression)}};
+        }
+
         if (check_op(Lexer::Operator::LEFT_PAREN))
         {
             advance();
@@ -749,10 +863,8 @@ namespace Parser
             }
 
             ASTNode pointee_type = parse_type_node();
-            return ASTNode{NodeType::PointerType,
-                           star_token.start,
-                           star_token.mod_path, star_token.source, is_mutable,
-                           {pointee_type}};
+            return ASTNode{NodeType::PointerType, star_token.start, star_token.mod_path,
+                           star_token.source,     is_mutable,       {pointee_type}};
         }
 
         if (check_op(Lexer::Operator::AMPERSAND))
@@ -768,7 +880,9 @@ namespace Parser
             ASTNode referred_type = parse_type_node();
             return ASTNode{NodeType::ReferenceType,
                            ampersand_token.start,
-                           ampersand_token.mod_path, ampersand_token.source, is_mutable,
+                           ampersand_token.mod_path,
+                           ampersand_token.source,
+                           is_mutable,
                            {referred_type}};
         }
 
@@ -776,8 +890,7 @@ namespace Parser
         {
             Lexer::Token q_token = advance();
             ASTNode inner_type = parse_type_node();
-            ASTNode node{
-                NodeType::OptionalType, q_token.start, q_token.mod_path, q_token.source, std::monostate{}, {}};
+            ASTNode node{NodeType::OptionalType, q_token.start, q_token.mod_path, q_token.source, std::monostate{}, {}};
             node.isOptional = true;
             node.children.push_back(inner_type);
             return node;
@@ -816,10 +929,8 @@ namespace Parser
             default:
                 error("Expected a type keyword");
             }
-            return ASTNode{NodeType::PrimitiveType,
-                           type_token.start,
-                           type_token.mod_path, type_token.source, keyword,
-                           {}};
+            return ASTNode{NodeType::PrimitiveType, type_token.start, type_token.mod_path,
+                           type_token.source,       keyword,          {}};
         }
 
         if (check(Lexer::TokenType::Identifier))
@@ -827,8 +938,7 @@ namespace Parser
             Lexer::Token type_token = advance();
             std::string qualified_name = std::string(std::get<std::string_view>(type_token.value));
 
-            while (check_op(Lexer::Operator::DOUBLE_COLON) &&
-                   check(Lexer::TokenType::Identifier, 1))
+            while (check_op(Lexer::Operator::DOUBLE_COLON) && check(Lexer::TokenType::Identifier, 1))
             {
                 advance(); // '::'
                 type_token = advance();
@@ -838,7 +948,9 @@ namespace Parser
 
             ASTNode node{NodeType::CustomType,
                          type_token.start,
-                         type_token.mod_path, type_token.source, std::get<std::string_view>(type_token.value),
+                         type_token.mod_path,
+                         type_token.source,
+                         std::get<std::string_view>(type_token.value),
                          {}};
             node.inferredTypeName = std::move(qualified_name);
 
@@ -909,9 +1021,14 @@ namespace Parser
         {
             if (peek().type == Lexer::TokenType::EndOfFile)
                 error("Unterminated block");
+            if (check_op(Lexer::Operator::SEMICOLON))
+            {
+                advance();
+                continue;
+            }
             node.children.push_back(parse_statement());
         }
-        advance(); // consume '}'
+        advance(); // '}'
         return node;
     }
 
@@ -930,8 +1047,8 @@ namespace Parser
         const std::string_view raw = std::get<std::string_view>(token.value);
         const size_t lineEnd = raw.find('\n');
         const std::string_view header = raw.substr(0, lineEnd);
-        const std::string_view assembly = lineEnd == std::string_view::npos ? std::string_view{}
-                                                                              : raw.substr(lineEnd + 1);
+        const std::string_view assembly =
+            lineEnd == std::string_view::npos ? std::string_view{} : raw.substr(lineEnd + 1);
         ASTNode node{NodeType::InlineAsmStmt, token.start, token.mod_path, token.source, assembly, {}};
 
         size_t begin = 0;
@@ -962,13 +1079,19 @@ namespace Parser
                     ++cursor;
             }
             const size_t nameStart = cursor;
-            if (cursor == operandsEnd || !(std::isalpha(static_cast<unsigned char>(header[cursor])) || header[cursor] == '_'))
+            if (cursor == operandsEnd ||
+                !(std::isalpha(static_cast<unsigned char>(header[cursor])) || header[cursor] == '_'))
                 error("Expected an inline assembly operand name.");
             ++cursor;
-            while (cursor < operandsEnd && (std::isalnum(static_cast<unsigned char>(header[cursor])) || header[cursor] == '_'))
+            while (cursor < operandsEnd &&
+                   (std::isalnum(static_cast<unsigned char>(header[cursor])) || header[cursor] == '_'))
                 ++cursor;
-            ASTNode operand{NodeType::Identifier, token.start + 4 + nameStart, token.mod_path, token.source,
-                            header.substr(nameStart, cursor - nameStart), {}};
+            ASTNode operand{NodeType::Identifier,
+                            token.start + 4 + nameStart,
+                            token.mod_path,
+                            token.source,
+                            header.substr(nameStart, cursor - nameStart),
+                            {}};
             operand.isMutable = writable;
             node.children.push_back(std::move(operand));
             while (cursor < operandsEnd && std::isspace(static_cast<unsigned char>(header[cursor])))
@@ -1009,8 +1132,7 @@ namespace Parser
     static ASTNode parse_valid_statement()
     {
         Lexer::Token token = advance(); // 'valid'
-        Lexer::Token name =
-            consume(Lexer::TokenType::Identifier, "Expected identifier after 'valid'");
+        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected identifier after 'valid'");
 
         ASTNode node{
             NodeType::ValidStmt, token.start, token.mod_path, token.source, std::get<std::string_view>(name.value), {}};
@@ -1046,8 +1168,8 @@ namespace Parser
                 Lexer::Token case_tok = advance();
                 ASTNode value = parse_expression();
                 ASTNode body = parse_block();
-                ASTNode case_node{
-                    NodeType::MatchCase, case_tok.start, case_tok.mod_path, case_tok.source, std::monostate{}, {}};
+                ASTNode case_node{NodeType::MatchCase, case_tok.start,   case_tok.mod_path,
+                                  case_tok.source,     std::monostate{}, {}};
                 case_node.children.push_back(value);
                 case_node.children.push_back(body);
                 node.children.push_back(case_node);
@@ -1056,10 +1178,8 @@ namespace Parser
             {
                 Lexer::Token default_tok = advance();
                 ASTNode body = parse_block();
-                ASTNode default_node{NodeType::MatchDefault,
-                                     default_tok.start,
-                                     default_tok.mod_path, default_tok.source, std::monostate{},
-                                     {}};
+                ASTNode default_node{NodeType::MatchDefault, default_tok.start, default_tok.mod_path,
+                                     default_tok.source,     std::monostate{},  {}};
                 default_node.children.push_back(body);
                 node.children.push_back(default_node);
             }
@@ -1068,8 +1188,67 @@ namespace Parser
                 error("Expected 'case' or 'default' in match statement");
             }
         }
-        advance(); // consume '}'
+        advance(); // '}'
 
+        return node;
+    }
+
+    static ASTNode parse_union_match_statement()
+    {
+        Lexer::Token token = advance(); // 'union'
+        Lexer::Token subject = consume(Lexer::TokenType::Identifier, "Expected union value after 'union'");
+        consume_kw(Lexer::Keyword::AS, "Expected 'as' after union value");
+        ASTNode node{NodeType::UnionMatchStmt, token.start, token.mod_path, token.source, std::monostate{}, {}};
+        node.children.push_back(ASTNode{NodeType::Identifier,
+                                        subject.start,
+                                        subject.mod_path,
+                                        subject.source,
+                                        std::get<std::string_view>(subject.value),
+                                        {}});
+        const auto parse_pattern = [&]()
+        {
+            Lexer::Token union_name = consume(Lexer::TokenType::Identifier, "Expected union name after 'as'");
+            consume_op(Lexer::Operator::DOUBLE_COLON, "Expected '::' before union variant");
+            Lexer::Token variant = consume(Lexer::TokenType::Identifier, "Expected union variant after '::'");
+            ASTNode pattern{NodeType::UnionPattern,
+                            variant.start,
+                            variant.mod_path,
+                            variant.source,
+                            std::get<std::string_view>(variant.value),
+                            {}};
+            pattern.inferredTypeName = std::string(std::get<std::string_view>(union_name.value));
+            consume_op(Lexer::Operator::LEFT_PAREN, "Expected '(' after union variant");
+            while (!check_op(Lexer::Operator::RIGHT_PAREN))
+            {
+                Lexer::Token binding =
+                    consume(Lexer::TokenType::Identifier, "Expected payload binding in union pattern");
+                pattern.children.push_back(ASTNode{NodeType::Identifier,
+                                                   binding.start,
+                                                   binding.mod_path,
+                                                   binding.source,
+                                                   std::get<std::string_view>(binding.value),
+                                                   {}});
+                if (!check_op(Lexer::Operator::COMMA))
+                    break;
+                advance();
+            }
+            consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after union pattern bindings");
+            return pattern;
+        };
+        node.children.push_back(parse_pattern());
+        node.children.push_back(parse_block());
+        while (check_kw(Lexer::Keyword::AS))
+        {
+            advance();
+            node.children.push_back(parse_pattern());
+            node.children.push_back(parse_block());
+        }
+        if (check_kw(Lexer::Keyword::ELSE))
+        {
+            advance();
+            node.hasElse = true;
+            node.children.push_back(parse_block());
+        }
         return node;
     }
 
@@ -1108,7 +1287,7 @@ namespace Parser
         Lexer::Token token = advance(); // 'for'
         consume_op(Lexer::Operator::LEFT_PAREN, "Expected '(' after 'for'");
 
-        ASTNode init = parse_for_init(); // consumes its own trailing ';'
+        ASTNode init = parse_for_init(); // ';'
 
         ASTNode cond = check_op(Lexer::Operator::SEMICOLON)
                            ? ASTNode{NodeType::BoolLiteral, token.start, token.mod_path, token.source, true, {}}
@@ -1144,7 +1323,9 @@ namespace Parser
 
         ASTNode node{NodeType::ForeachLoop,
                      token.start,
-                     token.mod_path, token.source, std::get<std::string_view>(name.value),
+                     token.mod_path,
+                     token.source,
+                     std::get<std::string_view>(name.value),
                      {}};
         node.children.push_back(type_node);
         node.children.push_back(container);
@@ -1157,13 +1338,15 @@ namespace Parser
         Lexer::Token token = advance(); // 'tunnel'
         ASTNode value_expr = parse_expression();
         consume_op(Lexer::Operator::RIGHT_ARROW, "Expected '->' after tunnel expression");
-        ASTNode restated_slot_type = parse_type_node(); // validated against the declared slot by the checker
+        ASTNode restated_slot_type = parse_type_node();
         Lexer::Token slot_name = consume(Lexer::TokenType::Identifier, "Expected tunnel slot name");
         consume_op(Lexer::Operator::SEMICOLON, "Expected ';' after tunnel statement");
 
         ASTNode node{NodeType::TunnelStmt,
                      token.start,
-                     token.mod_path, token.source, std::get<std::string_view>(slot_name.value),
+                     token.mod_path,
+                     token.source,
+                     std::get<std::string_view>(slot_name.value),
                      {}};
         node.children.push_back(value_expr);
         node.children.push_back(std::move(restated_slot_type));
@@ -1174,29 +1357,38 @@ namespace Parser
     {
         Lexer::Token token = advance(); // 'reserve'
         ASTNode type_node = parse_type_node();
-        Lexer::Token name =
-            consume(Lexer::TokenType::Identifier, "Expected variable name after reserve type");
+        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected variable name after reserve type");
 
         ASTNode node{NodeType::ReserveStmt,
                      token.start,
-                     token.mod_path, token.source, std::get<std::string_view>(name.value),
+                     token.mod_path,
+                     token.source,
+                     std::get<std::string_view>(name.value),
                      {}};
         node.children.push_back(type_node);
 
         if (check_op(Lexer::Operator::COMMA))
         {
-            ASTNode multi{NodeType::MultiReserveStmt, token.start, {}, {}};
+            ASTNode multi{NodeType::MultiReserveStmt, token.start, token.mod_path, token.source, std::monostate{}, {}};
             multi.children.push_back(type_node);
-            multi.children.push_back(ASTNode{NodeType::Identifier, name.start,
-                                             token.mod_path, token.source, std::get<std::string_view>(name.value), {}});
+            multi.children.push_back(ASTNode{NodeType::Identifier,
+                                             name.start,
+                                             token.mod_path,
+                                             token.source,
+                                             std::get<std::string_view>(name.value),
+                                             {}});
             while (check_op(Lexer::Operator::COMMA))
             {
                 advance();
                 multi.children.push_back(parse_type_node());
-                Lexer::Token nextName = consume(Lexer::TokenType::Identifier,
-                                                 "Expected variable name after reserve type");
-                multi.children.push_back(ASTNode{NodeType::Identifier, nextName.start,
-                                                 token.mod_path, token.source, std::get<std::string_view>(nextName.value), {}});
+                Lexer::Token nextName =
+                    consume(Lexer::TokenType::Identifier, "Expected variable name after reserve type");
+                multi.children.push_back(ASTNode{NodeType::Identifier,
+                                                 nextName.start,
+                                                 token.mod_path,
+                                                 token.source,
+                                                 std::get<std::string_view>(nextName.value),
+                                                 {}});
             }
             consume_op(Lexer::Operator::ASSIGN, "Expected '=' after multi-result reserve bindings");
             multi.children.push_back(parse_expression());
@@ -1212,11 +1404,12 @@ namespace Parser
         else if (check_op(Lexer::Operator::LEFT_ARROW))
         {
             Lexer::Token arrow = advance();
-            Lexer::Token source =
-                consume(Lexer::TokenType::Identifier, "Expected tunnel name after '<-'");
+            Lexer::Token source = consume(Lexer::TokenType::Identifier, "Expected tunnel name after '<-'");
             ASTNode binding{NodeType::TunnelBindingExpr,
                             arrow.start,
-                            arrow.mod_path, arrow.source, std::get<std::string_view>(source.value),
+                            arrow.mod_path,
+                            arrow.source,
+                            std::get<std::string_view>(source.value),
                             {}};
             node.children.push_back(binding);
         }
@@ -1228,8 +1421,7 @@ namespace Parser
     static ASTNode parse_start_statement()
     {
         Lexer::Token token = advance(); // 'start'
-        Lexer::Token name =
-            consume(Lexer::TokenType::Identifier, "Expected state name after 'start'");
+        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected state name after 'start'");
         consume_op(Lexer::Operator::SEMICOLON, "Expected ';' after start statement");
         return ASTNode{
             NodeType::StartStmt, token.start, token.mod_path, token.source, std::get<std::string_view>(name.value), {}};
@@ -1237,12 +1429,14 @@ namespace Parser
 
     static ASTNode parse_thread_task_stmt()
     {
-        Lexer::Token name = advance(); // thread variable identifier
+        Lexer::Token name = advance();
         ASTNode body = parse_block();
 
         ASTNode node{NodeType::ThreadTaskStmt,
                      name.start,
-                     name.mod_path, name.source, std::get<std::string_view>(name.value),
+                     name.mod_path,
+                     name.source,
+                     std::get<std::string_view>(name.value),
                      {}};
         node.children.push_back(body);
         return node;
@@ -1250,30 +1444,31 @@ namespace Parser
 
     static ASTNode parse_state_binding_decl()
     {
-        Lexer::Token state_tok = advance(); // 'State' or 'Thread'
-        Lexer::Token callee =
-            consume(Lexer::TokenType::Identifier, "Expected function name after 'State'");
+        Lexer::Token state_tok = advance();
+        Lexer::Token callee = consume(Lexer::TokenType::Identifier, "Expected function name after 'State'");
         consume_op(Lexer::Operator::LEFT_PAREN, "Expected '(' after function name");
         std::vector<ASTNode> args = parse_arg_list();
         consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after arguments");
-        Lexer::Token name =
-            consume(Lexer::TokenType::Identifier, "Expected binding name for State declaration");
+        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected binding name for State declaration");
         consume_op(Lexer::Operator::SEMICOLON, "Expected ';' after State declaration");
 
         ASTNode callee_node{NodeType::Identifier,
                             callee.start,
-                            callee.mod_path, callee.source, std::get<std::string_view>(callee.value),
+                            callee.mod_path,
+                            callee.source,
+                            std::get<std::string_view>(callee.value),
                             {}};
         ASTNode call_expr{NodeType::CallExpr, callee.start, callee.mod_path, callee.source, std::monostate{}, {}};
         call_expr.children.push_back(callee_node);
         for (auto &arg : args)
             call_expr.children.push_back(std::move(arg));
 
-        ASTNode node{std::get<Lexer::Keyword>(state_tok.value) == Lexer::Keyword::THREAD
-                         ? NodeType::ThreadBindingDecl
-                         : NodeType::StateBindingDecl,
+        ASTNode node{std::get<Lexer::Keyword>(state_tok.value) == Lexer::Keyword::THREAD ? NodeType::ThreadBindingDecl
+                                                                                         : NodeType::StateBindingDecl,
                      state_tok.start,
-                     state_tok.mod_path, state_tok.source, std::get<std::string_view>(name.value),
+                     state_tok.mod_path,
+                     state_tok.source,
+                     std::get<std::string_view>(name.value),
                      {}};
         node.children.push_back(call_expr);
         return node;
@@ -1295,8 +1490,23 @@ namespace Parser
         return node;
     }
 
+    static ASTNode parse_terminate_statement()
+    {
+        Lexer::Token token = advance();
+        consume_op(Lexer::Operator::SEMICOLON, "Expected ';' after terminate statement");
+        return {NodeType::TerminateStmt, token.start, token.mod_path, token.source, std::monostate{}, {}};
+    }
+
+    static ASTNode parse_directive_block(NodeType type);
+
     static ASTNode parse_statement()
     {
+        if (check_kw(Lexer::Keyword::META_UNSAFE))
+            return parse_directive_block(NodeType::UnsafeBlock);
+        if (check_kw(Lexer::Keyword::META_NOCHECK))
+            return parse_directive_block(NodeType::NoCheckBlock);
+        if (check_kw(Lexer::Keyword::META_NOCLEANUP))
+            return parse_directive_block(NodeType::NoCleanupBlock);
         if (check(Lexer::TokenType::InlineAsm))
             return parse_inline_asm_statement();
 
@@ -1313,6 +1523,8 @@ namespace Parser
                 return parse_valid_statement();
             case Lexer::Keyword::MATCH:
                 return parse_match_statement();
+            case Lexer::Keyword::UNION:
+                return parse_union_match_statement();
             case Lexer::Keyword::WHILE:
                 return parse_while_loop();
             case Lexer::Keyword::FOR:
@@ -1335,14 +1547,17 @@ namespace Parser
                 return parse_tunnel_statement();
             case Lexer::Keyword::RETURN:
                 return parse_return_statement();
+            case Lexer::Keyword::TERMINATE:
+                return parse_terminate_statement();
             case Lexer::Keyword::RESERVE:
                 return parse_reserve_statement();
             case Lexer::Keyword::START:
                 return parse_start_statement();
             case Lexer::Keyword::STRUCT:
-            case Lexer::Keyword::CLASS:
             case Lexer::Keyword::ALIGN:
             case Lexer::Keyword::ENUM:
+            case Lexer::Keyword::TRAIT:
+            case Lexer::Keyword::IMPL:
             case Lexer::Keyword::NAMESPACE:
             case Lexer::Keyword::IMPORT:
             case Lexer::Keyword::EXPORT:
@@ -1380,6 +1595,26 @@ namespace Parser
         return parse_expression_statement();
     }
 
+    static ASTNode parse_directive_block(NodeType type)
+    {
+        Lexer::Token directive = advance();
+        ASTNode node{type, directive.start, directive.mod_path, directive.source, std::monostate{}, {}};
+        while (!check_kw(Lexer::Keyword::META_END))
+        {
+            if (peek().type == Lexer::TokenType::EndOfFile)
+                error(type == NodeType::UnsafeBlock ? "@unsafe requires a matching @end."
+                                                    : "@nocheck requires a matching @end.");
+            if (check_op(Lexer::Operator::SEMICOLON))
+            {
+                advance();
+                continue;
+            }
+            node.children.push_back(parse_statement());
+        }
+        advance();
+        return node;
+    }
+
     static std::vector<ASTNode> parse_param_list()
     {
         std::vector<ASTNode> params;
@@ -1406,8 +1641,8 @@ namespace Parser
             }
             consume_kw(Lexer::Keyword::SELF, "Expected 'self'");
 
-            ASTNode self_type{
-                NodeType::CustomType, start.start, start.mod_path, start.source, std::string_view("Self"), {}};
+            ASTNode self_type{NodeType::CustomType,     start.start, start.mod_path, start.source,
+                              std::string_view("Self"), {}};
             ASTNode param{NodeType::Param, start.start, start.mod_path, start.source, std::string_view("self"), {}};
             if (by_ref)
             {
@@ -1433,10 +1668,8 @@ namespace Parser
             ASTNode type_node = parse_type_node();
             Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected parameter name");
 
-            ASTNode param{NodeType::Param,
-                          start.start,
-                          start.mod_path, start.source, std::get<std::string_view>(name.value),
-                          {}};
+            ASTNode param{
+                NodeType::Param, start.start, start.mod_path, start.source, std::get<std::string_view>(name.value), {}};
             param.children.push_back(type_node);
             params.push_back(param);
 
@@ -1457,11 +1690,12 @@ namespace Parser
         consume_op(Lexer::Operator::LESS_THAN, "Expected '<' to start generic parameter list");
         while (true)
         {
-            Lexer::Token name =
-                consume(Lexer::TokenType::Identifier, "Expected generic parameter name");
+            Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected generic parameter name");
             generics.push_back(ASTNode{NodeType::GenericParam,
                                        name.start,
-                                       name.mod_path, name.source, std::get<std::string_view>(name.value),
+                                       name.mod_path,
+                                       name.source,
+                                       std::get<std::string_view>(name.value),
                                        {}});
             if (check_op(Lexer::Operator::COMMA))
             {
@@ -1474,8 +1708,8 @@ namespace Parser
         return generics;
     }
 
-    static ASTNode parse_function_common(NodeType nodeType, bool hasBody, bool allowGenerics,
-                                         bool allowAsync, bool isCFunction)
+    static ASTNode parse_function_common(NodeType nodeType, bool hasBody, bool allowGenerics, bool allowAsync,
+                                         bool isCFunction)
     {
         Lexer::Token keyword_tok = advance(); // dec/def/cdec/cdef
 
@@ -1494,16 +1728,26 @@ namespace Parser
             isAsync = true;
         }
 
-        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected function name");
+        Lexer::Token name = peek();
+        std::string_view functionName;
+        if (check(Lexer::TokenType::Identifier))
+        {
+            name = advance();
+            functionName = std::get<std::string_view>(name.value);
+        }
+        else if (check_kw(Lexer::Keyword::RESERVE))
+        {
+            advance();
+            functionName = "reserve";
+        }
+        else
+            error("Expected function name");
         ASTNode node{nodeType, keyword_tok.start, keyword_tok.mod_path, keyword_tok.source, std::monostate{}, {}};
         node.isAsync = isAsync;
         node.isNaked = isNaked;
 
-        // name stored as the first child, matching struct/enum decl conventions
-        node.children.push_back(ASTNode{NodeType::Identifier,
-                                        name.start,
-                                        name.mod_path, name.source, std::get<std::string_view>(name.value),
-                                        {}});
+        node.children.push_back(
+            ASTNode{NodeType::Identifier, name.start, name.mod_path, name.source, functionName, {}});
 
         consume_op(Lexer::Operator::LEFT_PAREN, "Expected '(' after function name");
         std::vector<ASTNode> params = parse_param_list();
@@ -1528,8 +1772,7 @@ namespace Parser
         else
         {
             while (check_op(Lexer::Operator::RIGHT_ARROW) ||
-                   (check_op(Lexer::Operator::QUESTION_MARK) &&
-                    check_op(Lexer::Operator::RIGHT_ARROW, 1)))
+                   (check_op(Lexer::Operator::QUESTION_MARK) && check_op(Lexer::Operator::RIGHT_ARROW, 1)))
             {
                 bool optional = false;
                 if (check_op(Lexer::Operator::QUESTION_MARK))
@@ -1539,12 +1782,13 @@ namespace Parser
                 }
                 Lexer::Token arrow = advance(); // '->'
                 ASTNode slot_type = parse_type_node();
-                Lexer::Token slot_name =
-                    consume(Lexer::TokenType::Identifier, "Expected tunnel slot name");
+                Lexer::Token slot_name = consume(Lexer::TokenType::Identifier, "Expected tunnel slot name");
 
                 ASTNode slot{NodeType::TunnelSlot,
                              arrow.start,
-                             arrow.mod_path, arrow.source, std::get<std::string_view>(slot_name.value),
+                             arrow.mod_path,
+                             arrow.source,
+                             std::get<std::string_view>(slot_name.value),
                              {}};
                 slot.isOptional = optional;
                 slot.children.push_back(slot_type);
@@ -1581,6 +1825,20 @@ namespace Parser
         return parse_function_common(NodeType::FunctionDef, true, true, true, false);
     }
 
+    static ASTNode parse_comptime_function_definition()
+    {
+        Lexer::Token directive = advance();
+        if (!check_kw(Lexer::Keyword::DEF))
+            error("@comptime requires a def function definition.");
+        ASTNode node = parse_function_definition();
+        node.isComptime = true;
+        node.start = directive.start;
+        if (!check_kw(Lexer::Keyword::META_END))
+            error("@comptime function definition requires a matching @end.");
+        advance();
+        return node;
+    }
+
     static ASTNode parse_c_function_declaration()
     {
         return parse_function_common(NodeType::CFunctionDecl, false, false, false, true);
@@ -1598,7 +1856,9 @@ namespace Parser
 
         ASTNode node{NodeType::NamespaceDecl,
                      ns_token.start,
-                     ns_token.mod_path, ns_token.source, std::get<std::string_view>(name_token.value),
+                     ns_token.mod_path,
+                     ns_token.source,
+                     std::get<std::string_view>(name_token.value),
                      {}};
 
         consume_op(Lexer::Operator::LEFT_BRACE, "Expected '{' after namespace name");
@@ -1606,7 +1866,7 @@ namespace Parser
         {
             if (peek().type == Lexer::TokenType::EndOfFile)
                 error("Unterminated namespace declaration");
-            node.children.push_back(parse_top_level_declaration());
+            parse_top_level_into(node.children);
         }
         advance();
 
@@ -1622,17 +1882,18 @@ namespace Parser
             {
                 if (peek().type == Lexer::TokenType::EndOfFile)
                     error("Unterminated struct declaration");
-                if (node.isClass && (check_kw(Lexer::Keyword::INDEX) || check_kw(Lexer::Keyword::INIT)))
+                if (check_kw(Lexer::Keyword::INDEX) || check_kw(Lexer::Keyword::INIT))
                 {
                     const bool isIndex = check_kw(Lexer::Keyword::INDEX);
                     Lexer::Token keyword = advance();
                     Lexer::Token field = consume(Lexer::TokenType::Identifier,
-                                                 "Expected backing field name after class array declaration");
-                    consume_op(Lexer::Operator::SEMICOLON,
-                               "Expected ';' after class array declaration");
+                                                 "Expected backing field name after struct array declaration");
+                    consume_op(Lexer::Operator::SEMICOLON, "Expected ';' after struct array declaration");
                     node.children.push_back(ASTNode{isIndex ? NodeType::IndexDecl : NodeType::InitDecl,
                                                     keyword.start,
-                                                    keyword.mod_path, keyword.source, std::get<std::string_view>(field.value),
+                                                    keyword.mod_path,
+                                                    keyword.source,
+                                                    std::get<std::string_view>(field.value),
                                                     {}});
                 }
                 else
@@ -1653,10 +1914,8 @@ namespace Parser
             generics = parse_generic_param_list();
 
         Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected struct name");
-        node.children.push_back(ASTNode{NodeType::Identifier,
-                                        name.start,
-                                        name.mod_path, name.source, std::get<std::string_view>(name.value),
-                                        {}});
+        node.children.push_back(ASTNode{
+            NodeType::Identifier, name.start, name.mod_path, name.source, std::get<std::string_view>(name.value), {}});
 
         for (auto &g : generics)
             node.children.push_back(std::move(g));
@@ -1667,11 +1926,10 @@ namespace Parser
     static ASTNode parse_aligned_struct_declaration()
     {
         Lexer::Token align_token = advance(); // 'align'
-        ASTNode node{
-            NodeType::StructDecl, align_token.start, align_token.mod_path, align_token.source, std::monostate{}, {}};
+        ASTNode node{NodeType::StructDecl, align_token.start, align_token.mod_path,
+                     align_token.source,   std::monostate{},  {}};
 
-        Lexer::Token size_token =
-            consume(Lexer::TokenType::IntegerLiteral, "Expected numeric alignment after 'align'");
+        Lexer::Token size_token = consume(Lexer::TokenType::IntegerLiteral, "Expected numeric alignment after 'align'");
         node.requestedAlignment = std::get<uint64_t>(size_token.value);
         if (node.requestedAlignment == 0 || (node.requestedAlignment & (node.requestedAlignment - 1)) != 0)
             error("Struct alignment must be a nonzero power of two");
@@ -1683,10 +1941,8 @@ namespace Parser
             generics = parse_generic_param_list();
 
         Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected struct name");
-        node.children.push_back(ASTNode{NodeType::Identifier,
-                                        name.start,
-                                        name.mod_path, name.source, std::get<std::string_view>(name.value),
-                                        {}});
+        node.children.push_back(ASTNode{
+            NodeType::Identifier, name.start, name.mod_path, name.source, std::get<std::string_view>(name.value), {}});
 
         for (auto &g : generics)
             node.children.push_back(std::move(g));
@@ -1694,30 +1950,60 @@ namespace Parser
         return parse_struct_body(node);
     }
 
-    static ASTNode parse_class_declaration()
+    static ASTNode parse_trait_declaration()
     {
-        Lexer::Token token = advance(); // 'class'
-        ASTNode node{NodeType::StructDecl, token.start, token.mod_path, token.source, std::monostate{}, {}};
-        node.isClass = true;
+        Lexer::Token token = advance();
+        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected trait name");
+        ASTNode node{
+            NodeType::TraitDecl, token.start, token.mod_path, token.source, std::get<std::string_view>(name.value), {}};
+        consume_op(Lexer::Operator::LEFT_BRACE, "Expected '{' to start trait body");
+        while (!check_op(Lexer::Operator::RIGHT_BRACE))
+        {
+            if (peek().type == Lexer::TokenType::EndOfFile)
+                error("Unterminated trait declaration");
+            if (!check_kw(Lexer::Keyword::DEC))
+                error("A trait body may contain only method declarations.");
+            node.children.push_back(parse_function_declaration());
+        }
+        advance();
+        return node;
+    }
 
+    static ASTNode parse_impl_declaration()
+    {
+        Lexer::Token token = advance();
         std::vector<ASTNode> generics;
         if (check_op(Lexer::Operator::LESS_THAN))
             generics = parse_generic_param_list();
-
-        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected class name");
-        node.children.push_back(ASTNode{NodeType::Identifier,
-                                        name.start,
-                                        name.mod_path, name.source, std::get<std::string_view>(name.value),
-                                        {}});
-        for (auto &generic : generics)
-            node.children.push_back(std::move(generic));
-        if (check_op(Lexer::Operator::COLON))
+        ASTNode first = parse_type_node();
+        ASTNode target = first;
+        ASTNode trait;
+        bool hasTrait = false;
+        if (check_kw(Lexer::Keyword::FOR))
         {
             advance();
-            Lexer::Token base = consume(Lexer::TokenType::Identifier, "Expected base class name after ':'");
-            node.baseClassName = std::string(std::get<std::string_view>(base.value));
+            trait = std::move(first);
+            target = parse_type_node();
+            hasTrait = true;
         }
-        return parse_struct_body(node);
+        ASTNode node{NodeType::ImplDecl, token.start, token.mod_path, token.source, std::monostate{}, {}};
+        node.children.push_back(std::move(target));
+        if (hasTrait)
+            node.children.push_back(std::move(trait));
+        for (ASTNode &generic : generics)
+            node.children.push_back(std::move(generic));
+        consume_op(Lexer::Operator::LEFT_BRACE, "Expected '{' to start impl body");
+        while (!check_op(Lexer::Operator::RIGHT_BRACE))
+        {
+            if (peek().type == Lexer::TokenType::EndOfFile)
+                error("Unterminated impl declaration");
+            if (!check_kw(Lexer::Keyword::DEF) && !check_kw(Lexer::Keyword::DEC))
+                error("An impl body may contain only methods.");
+            node.children.push_back(check_kw(Lexer::Keyword::DEF) ? parse_function_definition()
+                                                                  : parse_function_declaration());
+        }
+        advance();
+        return node;
     }
 
     static ASTNode parse_enum_declaration()
@@ -1726,10 +2012,8 @@ namespace Parser
         ASTNode node{NodeType::EnumDecl, token.start, token.mod_path, token.source, std::monostate{}, {}};
 
         Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected enum name");
-        node.children.push_back(ASTNode{NodeType::Identifier,
-                                        name.start,
-                                        name.mod_path, name.source, std::get<std::string_view>(name.value),
-                                        {}});
+        node.children.push_back(ASTNode{
+            NodeType::Identifier, name.start, name.mod_path, name.source, std::get<std::string_view>(name.value), {}});
 
         if (check_op(Lexer::Operator::COLON))
         {
@@ -1744,13 +2028,15 @@ namespace Parser
                 error("Unterminated enum declaration");
 
             Lexer::Token member_tok = peek();
-            ASTNode member_node{
-                NodeType::EnumMember, member_tok.start, member_tok.mod_path, member_tok.source, std::monostate{}, {}};
+            ASTNode member_node{NodeType::EnumMember, member_tok.start, member_tok.mod_path,
+                                member_tok.source,    std::monostate{}, {}};
 
             Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected enum member name");
             member_node.children.push_back(ASTNode{NodeType::Identifier,
                                                    name.start,
-                                                   name.mod_path, name.source, std::get<std::string_view>(name.value),
+                                                   name.mod_path,
+                                                   name.source,
+                                                   std::get<std::string_view>(name.value),
                                                    {}});
 
             if (check_op(Lexer::Operator::ASSIGN))
@@ -1766,6 +2052,60 @@ namespace Parser
         }
         advance();
 
+        return node;
+    }
+
+    static ASTNode parse_union_declaration()
+    {
+        Lexer::Token token = advance(); // 'union'
+        ASTNode node{NodeType::UnionDecl, token.start, token.mod_path, token.source, std::monostate{}, {}};
+        if (check_op(Lexer::Operator::LESS_THAN))
+            for (ASTNode &generic : parse_generic_param_list())
+                node.children.push_back(std::move(generic));
+        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected union name");
+        node.children.insert(node.children.begin(), ASTNode{NodeType::Identifier,
+                                                            name.start,
+                                                            name.mod_path,
+                                                            name.source,
+                                                            std::get<std::string_view>(name.value),
+                                                            {}});
+
+        consume_op(Lexer::Operator::LEFT_BRACE, "Expected '{' to start union body");
+        while (!check_op(Lexer::Operator::RIGHT_BRACE))
+        {
+            if (peek().type == Lexer::TokenType::EndOfFile)
+                error("Unterminated union declaration");
+            Lexer::Token variant_name = consume(Lexer::TokenType::Identifier, "Expected union variant name");
+            ASTNode variant{NodeType::UnionVariant, variant_name.start, variant_name.mod_path,
+                            variant_name.source,    std::monostate{},   {}};
+            variant.children.push_back(ASTNode{NodeType::Identifier,
+                                               variant_name.start,
+                                               variant_name.mod_path,
+                                               variant_name.source,
+                                               std::get<std::string_view>(variant_name.value),
+                                               {}});
+            if (check_op(Lexer::Operator::LEFT_PAREN))
+            {
+                advance();
+                if (!check_op(Lexer::Operator::RIGHT_PAREN))
+                {
+                    while (true)
+                    {
+                        variant.children.push_back(parse_type_node());
+                        if (!check_op(Lexer::Operator::COMMA))
+                            break;
+                        advance();
+                    }
+                }
+                consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after union payload type");
+            }
+            node.children.push_back(std::move(variant));
+            if (check_op(Lexer::Operator::COMMA))
+                advance();
+            else if (!check_op(Lexer::Operator::RIGHT_BRACE))
+                error("Expected ',' or '}' after union variant");
+        }
+        advance();
         return node;
     }
 
@@ -1793,8 +2133,8 @@ namespace Parser
     static ASTNode parse_using_macro_declaration()
     {
         Lexer::Token using_token = advance();
-        ASTNode node{
-            NodeType::UsingMacroDecl, using_token.start, using_token.mod_path, using_token.source, std::monostate{}, {}};
+        ASTNode node{NodeType::UsingMacroDecl, using_token.start, using_token.mod_path,
+                     using_token.source,       std::monostate{},  {}};
         if (check_kw(Lexer::Keyword::GLOBAL))
         {
             advance();
@@ -1813,8 +2153,8 @@ namespace Parser
 
         consume_op(Lexer::Operator::RIGHT_ARROW, "Expected '->' after macro alias");
 
-        ASTNode replacement_node{
-            NodeType::BlockStmt, using_token.start, using_token.mod_path, using_token.source, std::monostate{}, {}};
+        ASTNode replacement_node{NodeType::BlockStmt, using_token.start, using_token.mod_path,
+                                 using_token.source,  std::monostate{},  {}};
 
         while (!check_op(Lexer::Operator::SEMICOLON))
         {
@@ -1823,11 +2163,67 @@ namespace Parser
             replacement_node.children.push_back(parse_primary());
         }
 
-        consume_op(Lexer::Operator::SEMICOLON,
-                   "Expected ';' at the end of using macro declaration.");
+        consume_op(Lexer::Operator::SEMICOLON, "Expected ';' at the end of using macro declaration.");
 
         node.children.push_back(alias_node);
         node.children.push_back(replacement_node);
+        return node;
+    }
+
+    static bool using_namespace_declaration_ahead()
+    {
+        uint64_t cursor = 1;
+        if (peek(cursor).type == Lexer::TokenType::Keyword &&
+            std::get<Lexer::Keyword>(peek(cursor).value) == Lexer::Keyword::NAMESPACE)
+            ++cursor;
+        if (peek(cursor).type != Lexer::TokenType::Identifier)
+            return false;
+        ++cursor;
+        while (peek(cursor).type == Lexer::TokenType::Operator &&
+               std::get<Lexer::Operator>(peek(cursor).value) == Lexer::Operator::DOUBLE_COLON)
+        {
+            ++cursor;
+            if (peek(cursor).type != Lexer::TokenType::Identifier)
+                return false;
+            ++cursor;
+        }
+        return peek(cursor).type == Lexer::TokenType::Operator &&
+               std::get<Lexer::Operator>(peek(cursor).value) == Lexer::Operator::SEMICOLON;
+    }
+
+    std::vector<std::string> using_namespace_declarations;
+
+    static ASTNode parse_using_namespace_declaration()
+    {
+        std::string full_name = "";
+        Lexer::Token using_token = advance();
+        ASTNode node{NodeType::UsingNamespaceDecl, using_token.start, using_token.mod_path,
+                     using_token.source,           std::monostate{},  {}};
+        if (check_kw(Lexer::Keyword::NAMESPACE))
+        {
+            advance();
+            node.isGlobal = true;
+        }
+        Lexer::Token name = consume(Lexer::TokenType::Identifier, "Expected namespace name after 'using'");
+        full_name += std::string(std::get<std::string_view>(name.value));
+        ASTNode path{
+            NodeType::Identifier, name.start, name.mod_path, name.source, std::get<std::string_view>(name.value), {}};
+        while (check_op(Lexer::Operator::DOUBLE_COLON))
+        {
+            advance();
+            Lexer::Token member = consume(Lexer::TokenType::Identifier, "Expected namespace name after '::'");
+            full_name += "::";
+            full_name += std::get<std::string_view>(member.value);
+            path = ASTNode{NodeType::ScopeAccessExpr,
+                           member.start,
+                           member.mod_path,
+                           member.source,
+                           std::get<std::string_view>(member.value),
+                           {std::move(path)}};
+        }
+        node.children.push_back(std::move(path));
+        using_namespace_declarations.push_back(full_name);
+        consume_op(Lexer::Operator::SEMICOLON, "Expected ';' after using namespace declaration");
         return node;
     }
 
@@ -1836,40 +2232,37 @@ namespace Parser
         Lexer::Token type_token = peek();
         ASTNode type_node = parse_type_node();
 
-        Lexer::Token name_token =
-            consume(Lexer::TokenType::Identifier, "Expected variable name after type.");
+        Lexer::Token name_token = consume(Lexer::TokenType::Identifier, "Expected variable name after type.");
 
         ASTNode var_node{NodeType::VariableDecl,
                          type_token.start,
-                         type_token.mod_path, type_token.source, std::get<std::string_view>(name_token.value),
+                         type_token.mod_path,
+                         type_token.source,
+                         std::get<std::string_view>(name_token.value),
                          {}};
 
         var_node.children.push_back(type_node);
 
         if (check_op(Lexer::Operator::ASSIGN))
         {
-            advance(); // consume '='
+            advance(); // '='
 
             if (check_kw(Lexer::Keyword::MOVE))
             {
-                Lexer::Token move_token = advance(); // consume 'move'
+                Lexer::Token move_token = advance(); // 'move'
                 ASTNode source = parse_postfix();
 
-                ASTNode move_node{NodeType::MoveExpr,
-                                  move_token.start,
-                                  move_token.mod_path, move_token.source, std::monostate{},
-                                  {std::move(source)}};
+                ASTNode move_node{NodeType::MoveExpr, move_token.start, move_token.mod_path,
+                                  move_token.source,  std::monostate{}, {std::move(source)}};
                 var_node.children.push_back(move_node);
             }
             else if (check_kw(Lexer::Keyword::REF))
             {
-                Lexer::Token ref_token = advance(); // consume 'ref'
+                Lexer::Token ref_token = advance(); // 'ref'
                 ASTNode source = parse_postfix();
 
-                ASTNode ref_node{NodeType::RefExpr,
-                                 ref_token.start,
-                                 ref_token.mod_path, ref_token.source, std::monostate{},
-                                 {std::move(source)}};
+                ASTNode ref_node{NodeType::RefExpr, ref_token.start,  ref_token.mod_path,
+                                 ref_token.source,  std::monostate{}, {std::move(source)}};
                 var_node.children.push_back(ref_node);
             }
             else
@@ -1877,15 +2270,16 @@ namespace Parser
                 var_node.children.push_back(parse_expression());
             }
         }
+        else if (check_op(Lexer::Operator::LEFT_BRACE))
+        {
+            var_node.children.push_back(parse_struct_init());
+        }
 
         consume_op(Lexer::Operator::SEMICOLON, "Expected ';' at the end of variable declaration");
         return var_node;
     }
 
-    static ASTNode parse_variable_declaration_with_custom_type()
-    {
-        return parse_variable_declaration();
-    }
+    static ASTNode parse_variable_declaration_with_custom_type() { return parse_variable_declaration(); }
 
     static ASTNode parse_top_level_declaration()
     {
@@ -1904,6 +2298,12 @@ namespace Parser
             {
             case Lexer::Keyword::NAMESPACE:
                 return parse_namespace_declaration();
+            case Lexer::Keyword::META_COMPTIME:
+                return parse_comptime_function_definition();
+            case Lexer::Keyword::META_UNSAFE:
+                return parse_directive_block(NodeType::UnsafeBlock);
+            case Lexer::Keyword::META_NOCHECK:
+                return parse_directive_block(NodeType::NoCheckBlock);
             case Lexer::Keyword::DEF:
                 return parse_function_definition();
             case Lexer::Keyword::DEC:
@@ -1917,15 +2317,22 @@ namespace Parser
             case Lexer::Keyword::STRUCT:
                 return parse_struct_declaration();
             case Lexer::Keyword::CLASS:
-                return parse_class_declaration();
+                error("'class' was removed; declare a struct and attach methods with an impl block.");
+            case Lexer::Keyword::TRAIT:
+                return parse_trait_declaration();
+            case Lexer::Keyword::IMPL:
+                return parse_impl_declaration();
             case Lexer::Keyword::ENUM:
                 return parse_enum_declaration();
+            case Lexer::Keyword::UNION:
+                return parse_union_declaration();
             case Lexer::Keyword::IMPORT:
                 return parse_import_statement();
             case Lexer::Keyword::EXPORT:
                 return parse_export_declaration();
             case Lexer::Keyword::USING:
-                return parse_using_macro_declaration();
+                return using_namespace_declaration_ahead() ? parse_using_namespace_declaration()
+                                                           : parse_using_macro_declaration();
             default:
                 if (at_type_start())
                     return parse_variable_declaration();
@@ -1949,12 +2356,505 @@ namespace Parser
         return ASTNode{NodeType::Identifier, token.start, token.mod_path, token.source, std::monostate{}, {}};
     }
 
+    static void attribute_error(const Lexer::Token &at, const std::string &message)
+    {
+        std::string module = at.mod_path ? *at.mod_path : "<unknown>";
+        ErrorPos p{1, 1};
+        if (at.source)
+            p = get_error_pos(at.start, at.source);
+        Error err = {message, module, p.line, p.column};
+        panic(err);
+    }
+
+    static std::string sv_text(const ASTNode &n)
+    {
+        return std::holds_alternative<std::string_view>(n.value) ? std::string(std::get<std::string_view>(n.value))
+                                                                 : "";
+    }
+
+    static std::string trim_text(const std::string &s)
+    {
+        const size_t a = s.find_first_not_of(" \t\r\n");
+        if (a == std::string::npos)
+            return "";
+        return s.substr(a, s.find_last_not_of(" \t\r\n") - a + 1);
+    }
+
+    static bool starts_with(const std::string &s, const char *p) { return s.rfind(p, 0) == 0; }
+
+    static AttributeUse parse_attribute_use()
+    {
+        Lexer::Token token = advance();
+        AttributeUse use{Lexer::find_procedural_attribute(std::get<std::string_view>(token.value)), token, {}};
+        if (check_op(Lexer::Operator::LEFT_PAREN))
+        {
+            advance();
+            use.args = parse_arg_list();
+            consume_op(Lexer::Operator::RIGHT_PAREN, "Expected ')' after attribute arguments");
+        }
+        return use;
+    }
+
+    static std::string type_to_source(const ASTNode &t, const AttributeUse &use)
+    {
+        const std::string mut = (t.isMutable && t.type != NodeType::ArrayType) ? "mut " : "";
+        const bool flag = std::holds_alternative<bool>(t.value) && std::get<bool>(t.value);
+        switch (t.type)
+        {
+        case NodeType::PrimitiveType:
+            return mut + keyword_to_string(std::get<Lexer::Keyword>(t.value));
+        case NodeType::CustomType:
+        {
+            std::string s = t.inferredTypeName;
+            if (!t.children.empty())
+            {
+                s += "<";
+                for (size_t i = 0; i < t.children.size(); ++i)
+                    s += (i ? ", " : "") + type_to_source(t.children[i], use);
+                s += ">";
+            }
+            return mut + s;
+        }
+        case NodeType::PointerType:
+            return "*" + std::string(flag ? "mut " : "") + type_to_source(t.children[0], use);
+        case NodeType::ReferenceType:
+            return "&" + std::string(flag ? "mut " : "") + type_to_source(t.children[0], use);
+        case NodeType::OptionalType:
+            return "?" + type_to_source(t.children[0], use);
+        case NodeType::ArrayType:
+        {
+            std::string size;
+            if (std::holds_alternative<uint64_t>(t.value))
+                size = std::to_string(std::get<uint64_t>(t.value));
+            else if (std::holds_alternative<std::string_view>(t.value))
+                size = sv_text(t);
+            return type_to_source(t.children[0], use) + "[" + size + "]";
+        }
+        default:
+            attribute_error(use.token,
+                            "@" + use.attribute->name + ": cannot reflect this type (typeof is unsupported).");
+            return "";
+        }
+    }
+
+    static bool is_type_node(NodeType t)
+    {
+        return t == NodeType::PrimitiveType || t == NodeType::CustomType || t == NodeType::PointerType ||
+               t == NodeType::ReferenceType || t == NodeType::OptionalType || t == NodeType::ArrayType;
+    }
+
+    static const char *attribute_target_kind(const ASTNode &d)
+    {
+        switch (d.type)
+        {
+        case NodeType::FunctionDecl:
+        case NodeType::FunctionDef:
+        case NodeType::CFunctionDecl:
+        case NodeType::CFunctionDef:
+            return "function";
+        case NodeType::StructDecl:
+            return "struct";
+        case NodeType::UnionDecl:
+            return "union";
+        case NodeType::EnumDecl:
+            return "enum";
+        case NodeType::VariableDecl:
+            return "variable";
+        default:
+            return "";
+        }
+    }
+
+    static void finish_list(std::vector<ItemEnv> &items)
+    {
+        for (size_t i = 0; i < items.size(); ++i)
+        {
+            items[i]["index"] = std::to_string(i);
+            items[i]["comma"] = i + 1 < items.size() ? ", " : "";
+            items[i]["last"] = i + 1 < items.size() ? "" : "1";
+        }
+    }
+
+    static TemplateEnv build_attribute_env(const AttributeUse &use, const ASTNode &d, const ASTNode &outer)
+    {
+        const Lexer::ProceduralAttribute &attr = *use.attribute;
+        const std::string cap = attr.targetCapture;
+        TemplateEnv env;
+
+        if (use.args.size() != attr.params.size())
+            attribute_error(use.token, "@" + attr.name + " expects " + std::to_string(attr.params.size()) +
+                                           " argument(s), got " + std::to_string(use.args.size()) + ".");
+        for (size_t i = 0; i < attr.params.size(); ++i)
+        {
+            const auto &[kind, name] = attr.params[i];
+            const ASTNode &a = use.args[i];
+            if (kind == "string" && a.type == NodeType::StringLiteral)
+                env.values[name] = sv_text(a);
+            else if (kind == "ident" && a.type == NodeType::Identifier)
+                env.values[name] = sv_text(a);
+            else if (kind == "int" && a.type == NodeType::IntegerLiteral)
+                env.values[name] = std::to_string(std::get<uint64_t>(a.value));
+            else if (kind == "bool" && a.type == NodeType::BoolLiteral)
+                env.values[name] = std::get<bool>(a.value) ? "true" : "false";
+            else
+                attribute_error(use.token, "@" + attr.name + ": argument " + std::to_string(i + 1) + " must be a " +
+                                               kind + " literal.");
+        }
+
+        // target
+        std::string name =
+            d.type == NodeType::VariableDecl
+                ? sv_text(d)
+                : (!d.children.empty() && d.children[0].type == NodeType::Identifier ? sv_text(d.children[0]) : "");
+        env.values[cap] = name;
+        env.values[cap + ".name"] = name;
+        env.values[cap + ".kind"] = attr.targetKind;
+        env.values[cap + ".exported"] = outer.type == NodeType::ExportDecl ? "1" : "";
+
+        std::vector<ItemEnv> items;
+        auto publish = [&](const char *list, const char *count)
+        {
+            finish_list(items);
+            env.values[cap + "." + count] = std::to_string(items.size());
+            env.lists[cap + "." + list] = std::move(items);
+            items.clear();
+        };
+
+        if (attr.targetKind == "function")
+        {
+            std::vector<ItemEnv> slots;
+            std::string ret;
+            for (const ASTNode &c : d.children)
+            {
+                if (c.type == NodeType::Param)
+                    items.push_back({{"name", sv_text(c)}, {"type", type_to_source(c.children[0], use)}});
+                else if (c.type == NodeType::TunnelSlot)
+                    slots.push_back({{"name", sv_text(c)},
+                                     {"type", type_to_source(c.children[0], use)},
+                                     {"optional", c.isOptional ? "1" : ""}});
+                else if (is_type_node(c.type))
+                    ret = type_to_source(c, use);
+            }
+            publish("params", "param_count");
+            items = std::move(slots);
+            publish("slots", "slot_count");
+            env.values[cap + ".ret"] = ret;
+            env.values[cap + ".has_body"] =
+                (d.type == NodeType::FunctionDef || d.type == NodeType::CFunctionDef) ? "1" : "";
+            env.values[cap + ".is_async"] = d.isAsync ? "1" : "";
+        }
+        else if (attr.targetKind == "struct")
+        {
+            for (const ASTNode &c : d.children)
+                if (c.type == NodeType::VariableDecl)
+                    items.push_back({{"name", sv_text(c)},
+                                     {"type", type_to_source(c.children[0], use)},
+                                     {"has_default", c.children.size() > 1 ? "1" : ""}});
+            publish("fields", "field_count");
+        }
+        else if (attr.targetKind == "enum")
+        {
+            for (const ASTNode &c : d.children)
+            {
+                if (c.type == NodeType::EnumMember)
+                {
+                    const bool lit = c.children.size() > 1 && c.children[1].type == NodeType::IntegerLiteral;
+                    items.push_back({{"name", sv_text(c.children[0])},
+                                     {"has_value", c.children.size() > 1 ? "1" : ""},
+                                     {"value", lit ? std::to_string(std::get<uint64_t>(c.children[1].value)) : ""}});
+                }
+                else if (is_type_node(c.type))
+                    env.values[cap + ".backing"] = type_to_source(c, use);
+            }
+            publish("members", "member_count");
+        }
+        else if (attr.targetKind == "union")
+        {
+            for (const ASTNode &c : d.children)
+                if (c.type == NodeType::UnionVariant)
+                {
+                    std::string payload;
+                    for (size_t i = 1; i < c.children.size(); ++i)
+                        payload += (i > 1 ? ", " : "") + type_to_source(c.children[i], use);
+                    items.push_back({{"name", sv_text(c.children[0])},
+                                     {"payload", payload},
+                                     {"payload_count", std::to_string(c.children.size() - 1)}});
+                }
+            publish("variants", "variant_count");
+        }
+        else // variable
+        {
+            env.values[cap + ".type"] = type_to_source(d.children[0], use);
+            env.values[cap + ".has_init"] = d.children.size() > 1 ? "1" : "";
+        }
+        return env;
+    }
+
+    static bool ident_start(char c) { return std::isalpha(static_cast<unsigned char>(c)) || c == '_'; }
+    static bool ident_char(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+
+    static std::string substitute_placeholders(const std::string &line, const TemplateEnv &env, const AttributeUse &use)
+    {
+        std::string out;
+        for (size_t i = 0; i < line.size();)
+        {
+            if (line[i] != '$')
+            {
+                out += line[i++];
+                continue;
+            }
+            if (i + 1 < line.size() && line[i + 1] == '$')
+            {
+                out += '$';
+                i += 2;
+                continue;
+            }
+            std::string key;
+            size_t j = i + 1;
+            if (j < line.size() && line[j] == '(')
+            {
+                const size_t close = line.find(')', j);
+                if (close == std::string::npos)
+                    attribute_error(use.token, "unterminated $( in @" + use.attribute->name);
+                key = trim_text(line.substr(j + 1, close - j - 1));
+                j = close + 1;
+            }
+            else if (j < line.size() && ident_start(line[j]))
+            {
+                while (true)
+                {
+                    const size_t s = j;
+                    while (j < line.size() && ident_char(line[j]))
+                        ++j;
+                    key.append(line, s, j - s);
+                    if (j + 1 < line.size() && line[j] == '.' && ident_start(line[j + 1]))
+                    {
+                        key += '.';
+                        ++j;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            else
+            {
+                out += line[i++];
+                continue;
+            }
+            const auto it = env.values.find(key);
+            if (it == env.values.end())
+                attribute_error(use.token, "@" + use.attribute->name + ": unknown placeholder $" + key);
+            out += it->second;
+            i = j;
+        }
+        return out;
+    }
+
+    static size_t matching_template_end(const std::vector<std::string> &lines, size_t from, size_t limit,
+                                        const AttributeUse &use)
+    {
+        int depth = 0;
+        for (size_t i = from; i < limit; ++i)
+        {
+            const std::string t = trim_text(lines[i]);
+            if (starts_with(t, "@for ") || starts_with(t, "@if "))
+                ++depth;
+            else if (t == "@end")
+            {
+                if (depth == 0)
+                    return i;
+                --depth;
+            }
+        }
+        attribute_error(use.token, "unterminated @for/@if in the template of @" + use.attribute->name);
+        return limit;
+    }
+
+    static std::string render_lines(const std::vector<std::string> &lines, size_t begin, size_t end,
+                                    const TemplateEnv &env, const AttributeUse &use)
+    {
+        std::string out;
+        for (size_t i = begin; i < end; ++i)
+        {
+            const std::string t = trim_text(lines[i]);
+            if (starts_with(t, "@for "))
+            {
+                std::istringstream header(t.substr(5));
+                std::string var, in, coll;
+                header >> var >> in >> coll;
+                if (var.size() < 2 || var[0] != '$' || in != "in" || coll.size() < 2 || coll[0] != '$')
+                    attribute_error(use.token, "expected `@for $item in $target.list`");
+                const auto list = env.lists.find(coll.substr(1));
+                if (list == env.lists.end())
+                    attribute_error(use.token, "@" + use.attribute->name + ": unknown list " + coll);
+                const size_t close = matching_template_end(lines, i + 1, end, use);
+                for (const ItemEnv &item : list->second)
+                {
+                    TemplateEnv inner = env;
+                    for (const auto &[k, v] : item)
+                        inner.values[var.substr(1) + "." + k] = v;
+                    out += render_lines(lines, i + 1, close, inner, use);
+                }
+                i = close;
+                continue;
+            }
+            if (starts_with(t, "@if "))
+            {
+                std::string cond = trim_text(t.substr(4));
+                bool negate = !cond.empty() && cond[0] == '!';
+                if (negate)
+                    cond = trim_text(cond.substr(1));
+                const auto it = cond.size() > 1 && cond[0] == '$' ? env.values.find(cond.substr(1)) : env.values.end();
+                if (it == env.values.end())
+                    attribute_error(use.token, "@if needs a known $flag, got '" + cond + "'");
+                const bool truthy = !it->second.empty() && it->second != "0" && it->second != "false";
+                const size_t close = matching_template_end(lines, i + 1, end, use);
+                if (truthy != negate)
+                    out += render_lines(lines, i + 1, close, env, use);
+                i = close;
+                continue;
+            }
+            if (starts_with(t, "@reject "))
+                attribute_error(use.token,
+                                "@" + use.attribute->name + ": " + substitute_placeholders(t.substr(8), env, use));
+            out += substitute_placeholders(lines[i], env, use) + "\n";
+        }
+        return out;
+    }
+
+    static std::string render_template(const std::string &text, const TemplateEnv &env, const AttributeUse &use)
+    {
+        std::vector<std::string> lines;
+        std::istringstream stream(text);
+        for (std::string l; std::getline(stream, l);)
+            lines.push_back(l);
+        return render_lines(lines, 0, lines.size(), env, use);
+    }
+
+    static int attributeExpansionDepth = 0;
+
+    static std::vector<ASTNode> parse_generated(const AttributeUse &use, const std::string &text, bool statements)
+    {
+        std::vector<ASTNode> out;
+        if (text.find_first_not_of(" \t\r\n") == std::string::npos)
+            return out;
+        if (++attributeExpansionDepth > 32)
+            attribute_error(use.token, "attribute expansion is nested too deeply (recursive attribute?)");
+
+        Lexer::Module module;
+        module.path =
+            "<expansion of @" + use.attribute->name + " at " + (use.token.mod_path ? *use.token.mod_path : "?") + ">";
+        module.source = text;
+        Lexer::LexedModule lexed = Lexer::tokenize(module);
+
+        std::vector<Lexer::Token> savedTokens = std::move(tokens);
+        const uint64_t savedPos = pos, savedClosers = deferredGenericClosers;
+        tokens = std::move(lexed.tokens);
+        pos = 0;
+        deferredGenericClosers = 0;
+        while (peek().type != Lexer::TokenType::EndOfFile)
+        {
+            if (statements)
+                out.push_back(parse_statement());
+            else
+                parse_top_level_into(out);
+        }
+        tokens = std::move(savedTokens);
+        pos = savedPos;
+        deferredGenericClosers = savedClosers;
+        --attributeExpansionDepth;
+        return out;
+    }
+
+    static void apply_attribute(const AttributeUse &use, std::vector<ASTNode> &group, size_t &target)
+    {
+        const Lexer::ProceduralAttribute &attr = *use.attribute;
+        ASTNode *decl = &group[target];
+        if (decl->type == NodeType::ExportDecl && !decl->children.empty())
+            decl = &decl->children[0];
+        if (attr.targetKind != attribute_target_kind(*decl))
+            attribute_error(use.token,
+                            "@" + attr.name + " can only be attached to a " + attr.targetKind + " declaration.");
+
+        const TemplateEnv env = build_attribute_env(use, *decl, group[target]);
+
+        if (!attr.prepend.empty())
+        {
+            ASTNode *body = nullptr;
+            for (ASTNode &c : decl->children)
+                if (c.type == NodeType::BlockStmt)
+                    body = &c;
+            if (!body)
+                attribute_error(use.token, "@" + attr.name + " needs a function with a body.");
+            std::vector<ASTNode> stmts = parse_generated(use, render_template(attr.prepend, env, use), true);
+            body->children.insert(body->children.begin(), std::make_move_iterator(stmts.begin()),
+                                  std::make_move_iterator(stmts.end()));
+        }
+
+        if (!attr.quote.empty())
+        {
+            const std::string rendered = render_template(attr.quote, env, use);
+            std::string before, after;
+            bool seen = false;
+            std::istringstream stream(rendered);
+            for (std::string l; std::getline(stream, l);)
+            {
+                if (trim_text(l) == "@original")
+                {
+                    seen = true;
+                    continue;
+                }
+                (seen ? after : before) += l + "\n";
+            }
+            if (!seen)
+            {
+                after = std::move(before);
+                before.clear();
+            }
+
+            std::vector<ASTNode> pre = parse_generated(use, before, false);
+            std::vector<ASTNode> post = parse_generated(use, after, false);
+            std::vector<ASTNode> rebuilt;
+            for (size_t i = 0; i < target; ++i)
+                rebuilt.push_back(std::move(group[i]));
+            for (ASTNode &n : pre)
+                rebuilt.push_back(std::move(n));
+            rebuilt.push_back(std::move(group[target]));
+            const size_t newTarget = rebuilt.size() - 1;
+            for (ASTNode &n : post)
+                rebuilt.push_back(std::move(n));
+            for (size_t i = target + 1; i < group.size(); ++i)
+                rebuilt.push_back(std::move(group[i]));
+            group = std::move(rebuilt);
+            target = newTarget;
+        }
+    }
+
+    static void parse_top_level_into(std::vector<ASTNode> &out)
+    {
+        if (!check(Lexer::TokenType::Attribute))
+        {
+            out.push_back(parse_top_level_declaration());
+            return;
+        }
+        std::vector<AttributeUse> uses;
+        while (check(Lexer::TokenType::Attribute))
+            uses.push_back(parse_attribute_use());
+        std::vector<ASTNode> group;
+        group.push_back(parse_top_level_declaration());
+        size_t target = 0;
+        for (size_t i = uses.size(); i-- > 0;)
+            apply_attribute(uses[i], group, target);
+        for (ASTNode &n : group)
+            out.push_back(std::move(n));
+    }
+
     static void parse_module()
     {
         ast.push_back(ASTNode{NodeType::Module, 0, peek().mod_path, peek().source, std::monostate{}, {}});
         while (peek().type != Lexer::TokenType::EndOfFile)
         {
-            ast.back().children.push_back(parse_top_level_declaration());
+            parse_top_level_into(ast.back().children);
         }
     }
 
@@ -1972,198 +2872,373 @@ namespace Parser
         }
     }
 
-    static const char* node_type_to_string(NodeType t)
+    static const char *node_type_to_string(NodeType t)
     {
         switch (t)
         {
-        case NodeType::Module: return "Module";
-        case NodeType::NamespaceDecl: return "NamespaceDecl";
-        case NodeType::BlockStmt: return "BlockStmt";
-        case NodeType::VariableDecl: return "VariableDecl";
-        case NodeType::StructDecl: return "StructDecl";
-        case NodeType::IndexDecl: return "IndexDecl";
-        case NodeType::InitDecl: return "InitDecl";
-        case NodeType::EnumDecl: return "EnumDecl";
-        case NodeType::EnumMember: return "EnumMember";
-        case NodeType::ImportStmt: return "ImportStmt";
-        case NodeType::ExportDecl: return "ExportDecl";
-        case NodeType::UsingMacroDecl: return "UsingMacroDecl";
-        case NodeType::FunctionDecl: return "FunctionDecl";
-        case NodeType::FunctionDef: return "FunctionDef";
-        case NodeType::CFunctionDecl: return "CFunctionDecl";
-        case NodeType::CFunctionDef: return "CFunctionDef";
-        case NodeType::ParamList: return "ParamList";
-        case NodeType::Param: return "Param";
-        case NodeType::TunnelSlotList: return "TunnelSlotList";
-        case NodeType::TunnelSlot: return "TunnelSlot";
-        case NodeType::TunnelStmt: return "TunnelStmt";
-        case NodeType::ReserveStmt: return "ReserveStmt";
-        case NodeType::MultiReserveStmt: return "MultiReserveStmt";
-        case NodeType::GenericParamList: return "GenericParamList";
-        case NodeType::GenericParam: return "GenericParam";
-        case NodeType::GenericArg: return "GenericArg";
-        case NodeType::IfStmt: return "IfStmt";
-        case NodeType::ValidStmt: return "ValidStmt";
-        case NodeType::MatchStmt: return "MatchStmt";
-        case NodeType::MatchCase: return "MatchCase";
-        case NodeType::MatchDefault: return "MatchDefault";
-        case NodeType::WhileLoop: return "WhileLoop";
-        case NodeType::ForLoop: return "ForLoop";
-        case NodeType::ForeachLoop: return "ForeachLoop";
-        case NodeType::BreakStmt: return "BreakStmt";
-        case NodeType::ContinueStmt: return "ContinueStmt";
-        case NodeType::ExprStmt: return "ExprStmt";
-        case NodeType::InlineAsmStmt: return "InlineAsmStmt";
-        case NodeType::ReturnStmt: return "ReturnStmt";
-        case NodeType::PrimitiveType: return "PrimitiveType";
-        case NodeType::PointerType: return "PointerType";
-        case NodeType::ReferenceType: return "ReferenceType";
-        case NodeType::OptionalType: return "OptionalType";
-        case NodeType::ArrayType: return "ArrayType";
-        case NodeType::CustomType: return "CustomType";
-        case NodeType::BinaryExpr: return "BinaryExpr";
-        case NodeType::UnaryExpr: return "UnaryExpr";
-        case NodeType::AssignmentExpr: return "AssignmentExpr";
-        case NodeType::CallExpr: return "CallExpr";
-        case NodeType::MemberAccessExpr: return "MemberAccessExpr";
-        case NodeType::ScopeAccessExpr: return "ScopeAccessExpr";
-        case NodeType::IndexExpr: return "IndexExpr";
-        case NodeType::StructInitExpr: return "StructInitExpr";
-        case NodeType::TunnelBindingExpr: return "TunnelBindingExpr";
-        case NodeType::MoveExpr: return "MoveExpr";
-        case NodeType::RefExpr: return "RefExpr";
-        case NodeType::SizeofExpr: return "SizeofExpr";
-        case NodeType::StateBindingDecl: return "StateBindingDecl";
-        case NodeType::ThreadBindingDecl: return "ThreadBindingDecl";
-        case NodeType::StartStmt: return "StartStmt";
-        case NodeType::AwaitExpr: return "AwaitExpr";
-        case NodeType::ThreadTaskStmt: return "ThreadTaskStmt";
-        case NodeType::Identifier: return "Identifier";
-        case NodeType::IntegerLiteral: return "IntegerLiteral";
-        case NodeType::FloatLiteral: return "FloatLiteral";
-        case NodeType::StringLiteral: return "StringLiteral";
-        case NodeType::BoolLiteral: return "BoolLiteral";
-        case NodeType::CharLiteral: return "CharLiteral";
+        case NodeType::Module:
+            return "Module";
+        case NodeType::NamespaceDecl:
+            return "NamespaceDecl";
+        case NodeType::BlockStmt:
+            return "BlockStmt";
+        case NodeType::VariableDecl:
+            return "VariableDecl";
+        case NodeType::StructDecl:
+            return "StructDecl";
+        case NodeType::TraitDecl:
+            return "TraitDecl";
+        case NodeType::ImplDecl:
+            return "ImplDecl";
+        case NodeType::IndexDecl:
+            return "IndexDecl";
+        case NodeType::InitDecl:
+            return "InitDecl";
+        case NodeType::EnumDecl:
+            return "EnumDecl";
+        case NodeType::EnumMember:
+            return "EnumMember";
+        case NodeType::ImportStmt:
+            return "ImportStmt";
+        case NodeType::ExportDecl:
+            return "ExportDecl";
+        case NodeType::UsingNamespaceDecl:
+            return "UsingNamespaceDecl";
+        case NodeType::UsingMacroDecl:
+            return "UsingMacroDecl";
+        case NodeType::FunctionDecl:
+            return "FunctionDecl";
+        case NodeType::FunctionDef:
+            return "FunctionDef";
+        case NodeType::CFunctionDecl:
+            return "CFunctionDecl";
+        case NodeType::CFunctionDef:
+            return "CFunctionDef";
+        case NodeType::ParamList:
+            return "ParamList";
+        case NodeType::Param:
+            return "Param";
+        case NodeType::TunnelSlotList:
+            return "TunnelSlotList";
+        case NodeType::TunnelSlot:
+            return "TunnelSlot";
+        case NodeType::TunnelStmt:
+            return "TunnelStmt";
+        case NodeType::ReserveStmt:
+            return "ReserveStmt";
+        case NodeType::MultiReserveStmt:
+            return "MultiReserveStmt";
+        case NodeType::GenericParamList:
+            return "GenericParamList";
+        case NodeType::GenericParam:
+            return "GenericParam";
+        case NodeType::GenericArg:
+            return "GenericArg";
+        case NodeType::IfStmt:
+            return "IfStmt";
+        case NodeType::ValidStmt:
+            return "ValidStmt";
+        case NodeType::MatchStmt:
+            return "MatchStmt";
+        case NodeType::MatchCase:
+            return "MatchCase";
+        case NodeType::MatchDefault:
+            return "MatchDefault";
+        case NodeType::WhileLoop:
+            return "WhileLoop";
+        case NodeType::ForLoop:
+            return "ForLoop";
+        case NodeType::ForeachLoop:
+            return "ForeachLoop";
+        case NodeType::BreakStmt:
+            return "BreakStmt";
+        case NodeType::ContinueStmt:
+            return "ContinueStmt";
+        case NodeType::ExprStmt:
+            return "ExprStmt";
+        case NodeType::InlineAsmStmt:
+            return "InlineAsmStmt";
+        case NodeType::ReturnStmt:
+            return "ReturnStmt";
+        case NodeType::PrimitiveType:
+            return "PrimitiveType";
+        case NodeType::PointerType:
+            return "PointerType";
+        case NodeType::ReferenceType:
+            return "ReferenceType";
+        case NodeType::OptionalType:
+            return "OptionalType";
+        case NodeType::ArrayType:
+            return "ArrayType";
+        case NodeType::CustomType:
+            return "CustomType";
+        case NodeType::BinaryExpr:
+            return "BinaryExpr";
+        case NodeType::UnaryExpr:
+            return "UnaryExpr";
+        case NodeType::AssignmentExpr:
+            return "AssignmentExpr";
+        case NodeType::CallExpr:
+            return "CallExpr";
+        case NodeType::MemberAccessExpr:
+            return "MemberAccessExpr";
+        case NodeType::ScopeAccessExpr:
+            return "ScopeAccessExpr";
+        case NodeType::IndexExpr:
+            return "IndexExpr";
+        case NodeType::StructInitExpr:
+            return "StructInitExpr";
+        case NodeType::TunnelBindingExpr:
+            return "TunnelBindingExpr";
+        case NodeType::MoveExpr:
+            return "MoveExpr";
+        case NodeType::RefExpr:
+            return "RefExpr";
+        case NodeType::SizeofExpr:
+            return "SizeofExpr";
+        case NodeType::StateBindingDecl:
+            return "StateBindingDecl";
+        case NodeType::ThreadBindingDecl:
+            return "ThreadBindingDecl";
+        case NodeType::StartStmt:
+            return "StartStmt";
+        case NodeType::AwaitExpr:
+            return "AwaitExpr";
+        case NodeType::ThreadTaskStmt:
+            return "ThreadTaskStmt";
+        case NodeType::Identifier:
+            return "Identifier";
+        case NodeType::IntegerLiteral:
+            return "IntegerLiteral";
+        case NodeType::FloatLiteral:
+            return "FloatLiteral";
+        case NodeType::StringLiteral:
+            return "StringLiteral";
+        case NodeType::BoolLiteral:
+            return "BoolLiteral";
+        case NodeType::CharLiteral:
+            return "CharLiteral";
         }
         return "Unknown";
     }
 
-
-    static const char* keyword_to_string(Lexer::Keyword k)
+    static const char *keyword_to_string(Lexer::Keyword k)
     {
         switch (k)
         {
-        case Lexer::Keyword::IF: return "if";
-        case Lexer::Keyword::ELSE: return "else";
-        case Lexer::Keyword::MATCH: return "match";
-        case Lexer::Keyword::CASE: return "case";
-        case Lexer::Keyword::DEFAULT: return "default";
-        case Lexer::Keyword::WHILE: return "while";
-        case Lexer::Keyword::FOR: return "for";
-        case Lexer::Keyword::FOREACH: return "foreach";
-        case Lexer::Keyword::BREAK: return "break";
-        case Lexer::Keyword::CONTINUE: return "continue";
-        case Lexer::Keyword::DEF: return "def";
-        case Lexer::Keyword::DEC: return "dec";
-        case Lexer::Keyword::CDEF: return "cdef";
-        case Lexer::Keyword::CDEC: return "cdec";
-        case Lexer::Keyword::ALIGN: return "align";
-        case Lexer::Keyword::STRUCT: return "struct";
-        case Lexer::Keyword::CLASS: return "class";
-        case Lexer::Keyword::INDEX: return "index";
-        case Lexer::Keyword::INIT: return "init";
-        case Lexer::Keyword::NAMESPACE: return "namespace";
-        case Lexer::Keyword::USING: return "using";
-        case Lexer::Keyword::GLOBAL: return "global";
-        case Lexer::Keyword::IMPORT: return "import";
-        case Lexer::Keyword::EXPORT: return "export";
-        case Lexer::Keyword::ENUM: return "enum";
-        case Lexer::Keyword::TUNNEL: return "tunnel";
-        case Lexer::Keyword::INLINE: return "inline";
-        case Lexer::Keyword::RESERVE: return "reserve";
-        case Lexer::Keyword::RETURN: return "return";
-        case Lexer::Keyword::MUT: return "mut";
-        case Lexer::Keyword::MOVE: return "move";
-        case Lexer::Keyword::REF: return "ref";
-        case Lexer::Keyword::SELF: return "self";
-        case Lexer::Keyword::VALID: return "valid";
-        case Lexer::Keyword::RAW: return "raw";
-        case Lexer::Keyword::SIZEOF: return "sizeof";
-        case Lexer::Keyword::ASYNC: return "async";
-        case Lexer::Keyword::AWAIT: return "await";
-        case Lexer::Keyword::START: return "start";
-        case Lexer::Keyword::STATE: return "State";
-        case Lexer::Keyword::THREAD: return "Thread";
-        case Lexer::Keyword::BOOL: return "bool";
-        case Lexer::Keyword::CHAR: return "char";
-        case Lexer::Keyword::U8: return "u8";
-        case Lexer::Keyword::U16: return "u16";
-        case Lexer::Keyword::U32: return "u32";
-        case Lexer::Keyword::U64: return "u64";
-        case Lexer::Keyword::USIZE: return "usize";
-        case Lexer::Keyword::I8: return "i8";
-        case Lexer::Keyword::I16: return "i16";
-        case Lexer::Keyword::I32: return "i32";
-        case Lexer::Keyword::I64: return "i64";
-        case Lexer::Keyword::F32: return "f32";
-        case Lexer::Keyword::F64: return "f64";
+        case Lexer::Keyword::IF:
+            return "if";
+        case Lexer::Keyword::ELSE:
+            return "else";
+        case Lexer::Keyword::MATCH:
+            return "match";
+        case Lexer::Keyword::CASE:
+            return "case";
+        case Lexer::Keyword::DEFAULT:
+            return "default";
+        case Lexer::Keyword::WHILE:
+            return "while";
+        case Lexer::Keyword::FOR:
+            return "for";
+        case Lexer::Keyword::FOREACH:
+            return "foreach";
+        case Lexer::Keyword::BREAK:
+            return "break";
+        case Lexer::Keyword::CONTINUE:
+            return "continue";
+        case Lexer::Keyword::DEF:
+            return "def";
+        case Lexer::Keyword::DEC:
+            return "dec";
+        case Lexer::Keyword::CDEF:
+            return "cdef";
+        case Lexer::Keyword::CDEC:
+            return "cdec";
+        case Lexer::Keyword::META_UNSAFE:
+            return "@unsafe";
+        case Lexer::Keyword::META_NOCHECK:
+            return "@nocheck";
+        case Lexer::Keyword::ALIGN:
+            return "align";
+        case Lexer::Keyword::STRUCT:
+            return "struct";
+        case Lexer::Keyword::CLASS:
+            return "class";
+        case Lexer::Keyword::INDEX:
+            return "index";
+        case Lexer::Keyword::INIT:
+            return "init";
+        case Lexer::Keyword::NAMESPACE:
+            return "namespace";
+        case Lexer::Keyword::USING:
+            return "using";
+        case Lexer::Keyword::GLOBAL:
+            return "global";
+        case Lexer::Keyword::IMPORT:
+            return "import";
+        case Lexer::Keyword::EXPORT:
+            return "export";
+        case Lexer::Keyword::ENUM:
+            return "enum";
+        case Lexer::Keyword::TUNNEL:
+            return "tunnel";
+        case Lexer::Keyword::INLINE:
+            return "inline";
+        case Lexer::Keyword::RESERVE:
+            return "reserve";
+        case Lexer::Keyword::RETURN:
+            return "return";
+        case Lexer::Keyword::MUT:
+            return "mut";
+        case Lexer::Keyword::MOVE:
+            return "move";
+        case Lexer::Keyword::REF:
+            return "ref";
+        case Lexer::Keyword::SELF:
+            return "self";
+        case Lexer::Keyword::VALID:
+            return "valid";
+        case Lexer::Keyword::RAW:
+            return "raw";
+        case Lexer::Keyword::SIZEOF:
+            return "sizeof";
+        case Lexer::Keyword::ASYNC:
+            return "async";
+        case Lexer::Keyword::AWAIT:
+            return "await";
+        case Lexer::Keyword::START:
+            return "start";
+        case Lexer::Keyword::STATE:
+            return "State";
+        case Lexer::Keyword::THREAD:
+            return "Thread";
+        case Lexer::Keyword::BOOL:
+            return "bool";
+        case Lexer::Keyword::CHAR:
+            return "char";
+        case Lexer::Keyword::U8:
+            return "u8";
+        case Lexer::Keyword::U16:
+            return "u16";
+        case Lexer::Keyword::U32:
+            return "u32";
+        case Lexer::Keyword::U64:
+            return "u64";
+        case Lexer::Keyword::USIZE:
+            return "usize";
+        case Lexer::Keyword::I8:
+            return "i8";
+        case Lexer::Keyword::I16:
+            return "i16";
+        case Lexer::Keyword::I32:
+            return "i32";
+        case Lexer::Keyword::I64:
+            return "i64";
+        case Lexer::Keyword::F32:
+            return "f32";
+        case Lexer::Keyword::F64:
+            return "f64";
         }
         return "<unknown-keyword>";
     }
 
-    static const char* operator_to_string(Lexer::Operator op)
+    static const char *operator_to_string(Lexer::Operator op)
     {
         switch (op)
         {
-        case Lexer::Operator::ASSIGN: return "=";
-        case Lexer::Operator::ADD_ASSIGN: return "+=";
-        case Lexer::Operator::SUBTRACT_ASSIGN: return "-=";
-        case Lexer::Operator::MULTIPLY_ASSIGN: return "*=";
-        case Lexer::Operator::DIVIDE_ASSIGN: return "/=";
-        case Lexer::Operator::MODULO_ASSIGN: return "%=";
-        case Lexer::Operator::AMPERSAND: return "&";
-        case Lexer::Operator::PIPE: return "|";
-        case Lexer::Operator::CARET: return "^";
-        case Lexer::Operator::LEFT_SHIFT: return "<<";
-        case Lexer::Operator::RIGHT_SHIFT: return ">>";
-        case Lexer::Operator::LEFT_SHIFT_ASSIGN: return "<<=";
-        case Lexer::Operator::RIGHT_SHIFT_ASSIGN: return ">>=";
-        case Lexer::Operator::LESS_THAN: return "<";
-        case Lexer::Operator::GREATER_THAN: return ">";
-        case Lexer::Operator::LESS_EQUAL: return "<=";
-        case Lexer::Operator::GREATER_EQUAL: return ">=";
-        case Lexer::Operator::EQUAL: return "==";
-        case Lexer::Operator::NOT_EQUAL: return "!=";
-        case Lexer::Operator::OR: return "||";
-        case Lexer::Operator::AND: return "&&";
-        case Lexer::Operator::DOUBLE_COLON: return "::";
-        case Lexer::Operator::DOT: return ".";
-        case Lexer::Operator::RIGHT_ARROW: return "->";
-        case Lexer::Operator::LEFT_ARROW: return "<-";
-        case Lexer::Operator::LEFT_PAREN: return "(";
-        case Lexer::Operator::RIGHT_PAREN: return ")";
-        case Lexer::Operator::LEFT_BRACKET: return "[";
-        case Lexer::Operator::RIGHT_BRACKET: return "]";
-        case Lexer::Operator::LEFT_BRACE: return "{";
-        case Lexer::Operator::RIGHT_BRACE: return "}";
-        case Lexer::Operator::COLON: return ":";
-        case Lexer::Operator::SEMICOLON: return ";";
-        case Lexer::Operator::COMMA: return ",";
-        case Lexer::Operator::TRIPPLE_DOT: return "...";
-        case Lexer::Operator::QUESTION_MARK: return "?";
-        case Lexer::Operator::DOUBLE_QUOTE: return "\"";
-        case Lexer::Operator::SINGLE_QUOTE: return "'";
-        case Lexer::Operator::PLUS: return "+";
-        case Lexer::Operator::MINUS: return "-";
-        case Lexer::Operator::MULTIPLY: return "*";
-        case Lexer::Operator::DIVIDE: return "/";
-        case Lexer::Operator::MODULO: return "%";
-        case Lexer::Operator::EXLAMATION_MARK: return "!";
+        case Lexer::Operator::ASSIGN:
+            return "=";
+        case Lexer::Operator::ADD_ASSIGN:
+            return "+=";
+        case Lexer::Operator::SUBTRACT_ASSIGN:
+            return "-=";
+        case Lexer::Operator::MULTIPLY_ASSIGN:
+            return "*=";
+        case Lexer::Operator::DIVIDE_ASSIGN:
+            return "/=";
+        case Lexer::Operator::MODULO_ASSIGN:
+            return "%=";
+        case Lexer::Operator::AMPERSAND:
+            return "&";
+        case Lexer::Operator::PIPE:
+            return "|";
+        case Lexer::Operator::CARET:
+            return "^";
+        case Lexer::Operator::LEFT_SHIFT:
+            return "<<";
+        case Lexer::Operator::RIGHT_SHIFT:
+            return ">>";
+        case Lexer::Operator::LEFT_SHIFT_ASSIGN:
+            return "<<=";
+        case Lexer::Operator::RIGHT_SHIFT_ASSIGN:
+            return ">>=";
+        case Lexer::Operator::LESS_THAN:
+            return "<";
+        case Lexer::Operator::GREATER_THAN:
+            return ">";
+        case Lexer::Operator::LESS_EQUAL:
+            return "<=";
+        case Lexer::Operator::GREATER_EQUAL:
+            return ">=";
+        case Lexer::Operator::EQUAL:
+            return "==";
+        case Lexer::Operator::NOT_EQUAL:
+            return "!=";
+        case Lexer::Operator::OR:
+            return "||";
+        case Lexer::Operator::AND:
+            return "&&";
+        case Lexer::Operator::DOUBLE_COLON:
+            return "::";
+        case Lexer::Operator::DOT:
+            return ".";
+        case Lexer::Operator::RIGHT_ARROW:
+            return "->";
+        case Lexer::Operator::LEFT_ARROW:
+            return "<-";
+        case Lexer::Operator::LEFT_PAREN:
+            return "(";
+        case Lexer::Operator::RIGHT_PAREN:
+            return ")";
+        case Lexer::Operator::LEFT_BRACKET:
+            return "[";
+        case Lexer::Operator::RIGHT_BRACKET:
+            return "]";
+        case Lexer::Operator::LEFT_BRACE:
+            return "{";
+        case Lexer::Operator::RIGHT_BRACE:
+            return "}";
+        case Lexer::Operator::COLON:
+            return ":";
+        case Lexer::Operator::SEMICOLON:
+            return ";";
+        case Lexer::Operator::COMMA:
+            return ",";
+        case Lexer::Operator::TRIPPLE_DOT:
+            return "...";
+        case Lexer::Operator::QUESTION_MARK:
+            return "?";
+        case Lexer::Operator::DOUBLE_QUOTE:
+            return "\"";
+        case Lexer::Operator::SINGLE_QUOTE:
+            return "'";
+        case Lexer::Operator::PLUS:
+            return "+";
+        case Lexer::Operator::MINUS:
+            return "-";
+        case Lexer::Operator::MULTIPLY:
+            return "*";
+        case Lexer::Operator::DIVIDE:
+            return "/";
+        case Lexer::Operator::MODULO:
+            return "%";
+        case Lexer::Operator::EXLAMATION_MARK:
+            return "!";
         }
         return "<unknown-op>";
     }
 
-    static std::string value_to_string(const ASTNode& node)
+    static std::string value_to_string(const ASTNode &node)
     {
         if (std::holds_alternative<std::string_view>(node.value))
             return std::string(std::get<std::string_view>(node.value));
@@ -2186,7 +3261,7 @@ namespace Parser
         return "";
     }
 
-        static void dump_node(const ASTNode& node, int indent)
+    static void dump_node(const ASTNode &node, int indent)
     {
         auto pos = get_error_pos(node.start, node.source);
         std::string pad(indent, ' ');
@@ -2209,7 +3284,7 @@ namespace Parser
         std::cout << pad << "}";
     }
 
-    void dump_ast(const std::vector<ASTNode>& ast)
+    void dump_ast(const std::vector<ASTNode> &ast)
     {
         std::cout << "[\n";
         for (size_t i = 0; i < ast.size(); i++)

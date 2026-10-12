@@ -6,8 +6,8 @@
 #include <utility>
 #include <vector>
 
-#include "parser.hpp"
 #include "error.hpp"
+#include "parser.hpp"
 
 namespace Checker
 {
@@ -29,18 +29,15 @@ namespace Checker
         Char,
         String,
 
-        // Special Shaft Types
-        State, // Async state
+        State, // Async single-thread state
         Thread,
 
         // User defined
         Struct,
         Class,
         Enum,
+        Union,
 
-        // Unresolved generic type parameter (e.g. `T` inside a generic
-        // function/struct body) — treated as compatible with anything, since
-        // this bootstrap compiler does not do real constraint solving.
         Generic,
 
         Pointer,
@@ -84,6 +81,7 @@ namespace Checker
         bool isOptional = false; // Is it ?T
         bool isFunction = false;
         bool isCFunction = false;
+        std::vector<std::string> genericParameters;
         std::vector<Type> paramTypes;
         Type resultType{TypeKind::Error};
         bool hasResultType = false;
@@ -99,16 +97,22 @@ namespace Checker
         std::string name;
         bool isClass = false;
         bool isEnum = false;
+        bool isUnion = false;
         std::string baseClassName;
         std::vector<std::string> genericParameters;
         std::string indexedField;
         std::string initializedField;
         std::unordered_map<std::string, Symbol> members;
         std::unordered_map<std::string, Symbol> methods;
+        struct UnionVariant
+        {
+            size_t tag = 0;
+            std::vector<Parser::ASTNode> payloadTypes;
+        };
+        std::unordered_map<std::string, UnionVariant> unionVariants;
     };
 
     // type/borrow-checks the full parsed program (Parser::ast)
-    // Prints an error and calls exit(1) on the first violation it finds
     void set_stdlib_enabled(bool enabled);
     void run_checker();
 
@@ -123,8 +127,7 @@ namespace Checker
         bool hasExpectedType = false;
 
         TunnelSlotState() = default;
-        TunnelSlotState(std::string n, bool opt, bool fill, Type expected = {},
-                        bool hasExpected = false)
+        TunnelSlotState(std::string n, bool opt, bool fill, Type expected = {}, bool hasExpected = false)
             : name(std::move(n)), isOptional(opt), filled(fill), expectedType(std::move(expected)),
               hasExpectedType(hasExpected)
         {

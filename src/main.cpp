@@ -1,5 +1,6 @@
 #include "checker.hpp"
 #include "codegen.hpp"
+#include "error.hpp"
 #include "lexer.hpp"
 #include "parser.hpp"
 #include "toolchain.hpp"
@@ -63,6 +64,23 @@ namespace
         return "O0";
     }
 
+    struct FormatOptions
+    {
+        std::string braceStyle = "allman";
+        bool namespaceIndent = true;
+        bool matchCaseIndent = true;
+        size_t indentWidth = 4;
+        bool useTabs = false;
+        bool finalNewline = true;
+    };
+
+    struct MetaOptions
+    {
+        // `ast` marks the ast and keeps checking
+        // `lexer` just cuts the tokens
+        std::string configMacros = "lexer";
+    };
+
     struct Options
     {
         EmitKind emit = EmitKind::Binary;
@@ -75,9 +93,12 @@ namespace
         std::string sysroot;
         std::string packageName;
         std::string packageVersion;
+        FormatOptions format;
+        MetaOptions meta;
         OptimizationLevel optimization = OptimizationLevel::O2;
         std::vector<std::string> linkDirectories;
         std::vector<std::string> linkArguments;
+        std::vector<std::string> comptimeCommands;
         bool nativeCpu = false;
         bool hosted = false;
         bool noStd = false;
@@ -136,7 +157,7 @@ namespace
     std::string parse_toml_string(const std::string &value, const std::string &location)
     {
         if (value.size() < 2 || value.front() != '"' || value.back() != '"')
-            throw std::runtime_error(location + " must be a quoted string");
+            compiler_error(location + " must be a quoted string");
         std::string result;
         for (size_t index = 1; index + 1 < value.size(); ++index)
         {
@@ -146,7 +167,7 @@ namespace
                 continue;
             }
             if (++index + 1 >= value.size())
-                throw std::runtime_error(location + " has an incomplete string escape");
+                compiler_error(location + " has an incomplete string escape");
             switch (value[index])
             {
             case '\\':
@@ -162,7 +183,7 @@ namespace
                 result += '\t';
                 break;
             default:
-                throw std::runtime_error(location + " has an unsupported string escape");
+                compiler_error(location + " has an unsupported string escape");
             }
         }
         return result;
@@ -178,24 +199,24 @@ namespace
         };
         skip_space();
         if (index == value.size() || value[index++] != '[')
-            throw std::runtime_error(location + " must be an array of quoted strings");
+            compiler_error(location + " must be an array of quoted strings");
 
         std::vector<std::string> values;
         for (;;)
         {
             skip_space();
             if (index == value.size())
-                throw std::runtime_error(location + " has an unterminated array");
+                compiler_error(location + " has an unterminated array");
             if (value[index] == ']')
             {
                 ++index;
                 skip_space();
                 if (index != value.size())
-                    throw std::runtime_error(location + " has unexpected content after its array");
+                    compiler_error(location + " has unexpected content after its array");
                 return values;
             }
             if (value[index] != '"')
-                throw std::runtime_error(location + " must contain only quoted strings");
+                compiler_error(location + " must contain only quoted strings");
 
             const size_t start = index++;
             bool escaped = false;
@@ -216,17 +237,17 @@ namespace
                     break;
             }
             if (index == value.size() && value[index - 1] != '"')
-                throw std::runtime_error(location + " has an unterminated quoted string");
+                compiler_error(location + " has an unterminated quoted string");
             values.emplace_back(parse_toml_string(value.substr(start, index - start), location));
 
             skip_space();
             if (index == value.size() || value[index] == ']')
                 continue;
             if (value[index++] != ',')
-                throw std::runtime_error(location + " must separate array values with commas");
+                compiler_error(location + " must separate array values with commas");
             skip_space();
             if (index < value.size() && value[index] == ']')
-                throw std::runtime_error(location + " must not have a trailing comma");
+                compiler_error(location + " must not have a trailing comma");
         }
     }
 
@@ -236,7 +257,7 @@ namespace
             return true;
         if (value == "false")
             return false;
-        throw std::runtime_error(location + " must be true or false");
+        compiler_error(location + " must be true or false");
     }
 
     std::string resolve_build_path(const std::filesystem::path &base, const std::string &value)
@@ -250,7 +271,7 @@ namespace
         const std::filesystem::path buildPath = std::filesystem::absolute(path).lexically_normal();
         std::ifstream input(buildPath);
         if (!input)
-            throw std::runtime_error("failed to read build file '" + buildPath.string() + "'");
+            compiler_error("failed to read build file '" + buildPath.string() + "'");
 
         std::unordered_map<std::string, std::pair<std::string, size_t>> fields;
         std::string section;
@@ -265,24 +286,25 @@ namespace
             if (line.front() == '[' && line.back() == ']')
             {
                 section = trim(line.substr(1, line.size() - 2));
-                if (section != "package" && section != "build")
-                    throw std::runtime_error(buildPath.string() + ":" + std::to_string(lineNumber) +
-                                             ": unknown table '" + section + "'");
+                if (section != "package" && section != "build" && section != "format" && section != "meta" &&
+                    section != "comptime")
+                    compiler_error(buildPath.string() + ":" + std::to_string(lineNumber) + ": unknown table '" +
+                                   section + "'");
                 continue;
             }
             const size_t equals = line.find('=');
             if (section.empty() || equals == std::string::npos)
-                throw std::runtime_error(buildPath.string() + ":" + std::to_string(lineNumber) +
-                                         ": expected a table key assignment");
+                compiler_error(buildPath.string() + ":" + std::to_string(lineNumber) +
+                               ": expected a table key assignment");
             const std::string key = trim(line.substr(0, equals));
             const std::string value = trim(line.substr(equals + 1));
             if (key.empty() || value.empty())
-                throw std::runtime_error(buildPath.string() + ":" + std::to_string(lineNumber) +
-                                         ": expected a non-empty key and value");
+                compiler_error(buildPath.string() + ":" + std::to_string(lineNumber) +
+                               ": expected a non-empty key and value");
             const std::string field = section + "." + key;
             if (!fields.emplace(field, std::make_pair(value, lineNumber)).second)
-                throw std::runtime_error(buildPath.string() + ":" + std::to_string(lineNumber) + ": duplicate key '" +
-                                         field + "'");
+                compiler_error(buildPath.string() + ":" + std::to_string(lineNumber) + ": duplicate key '" + field +
+                               "'");
         }
 
         const auto location = [&buildPath, &fields](const std::string &field)
@@ -293,22 +315,41 @@ namespace
         { return parse_toml_bool(fields.at(field).first, location(field)); };
         const auto stringArrayField = [&fields, &location](const std::string &field)
         { return parse_toml_string_array(fields.at(field).first, location(field)); };
+        const auto positiveIntegerField = [&fields, &location](const std::string &field)
+        {
+            const std::string value = fields.at(field).first;
+            size_t result = 0;
+            if (value.empty())
+                compiler_error(location(field) + " must be a positive integer");
+            for (const char character : value)
+            {
+                if (character < '0' || character > '9')
+                    compiler_error(location(field) + " must be a positive integer");
+                result = result * 10 + static_cast<size_t>(character - '0');
+            }
+            if (result == 0)
+                compiler_error(location(field) + " must be a positive integer");
+            return result;
+        };
         const auto require_known = [&fields, &location](const std::string &field)
         {
-            const bool known = field == "package.name" || field == "package.version" || field == "build.entry" ||
-                               field == "build.output" || field == "build.emit" || field == "build.optimization" ||
-                               field == "build.target" || field == "build.stdlib" || field == "build.runtime" ||
-                               field == "build.resources" || field == "build.native" || field == "build.no_std" ||
-                               field == "build.check_only" || field == "build.verbose" || field == "build.hosted" ||
-                               field == "build.link_dirs" || field == "build.link_directories" ||
-                               field == "build.links";
+            const bool known =
+                field == "package.name" || field == "package.version" || field == "build.entry" ||
+                field == "build.output" || field == "build.emit" || field == "build.optimization" ||
+                field == "build.target" || field == "build.stdlib" || field == "build.runtime" ||
+                field == "build.resources" || field == "build.native" || field == "build.no_std" ||
+                field == "build.check_only" || field == "build.verbose" || field == "build.hosted" ||
+                field == "build.link_dirs" || field == "build.link_directories" || field == "build.links" ||
+                field == "format.brace_style" || field == "format.namespace_indent" ||
+                field == "format.match_case_indent" || field == "format.indent_width" || field == "format.use_tabs" ||
+                field == "format.final_newline" || field == "meta.config_macros" || field == "comptime.commands";
             if (!known)
-                throw std::runtime_error(location(field) + ": unknown configuration key");
+                compiler_error(location(field) + ": unknown configuration key");
         };
         for (const auto &entry : fields)
             require_known(entry.first);
         if (fields.find("build.entry") == fields.end())
-            throw std::runtime_error(buildPath.string() + ": build.entry is required");
+            compiler_error(buildPath.string() + ": build.entry is required");
 
         const std::filesystem::path base = buildPath.parent_path();
         Options options;
@@ -341,6 +382,30 @@ namespace
             options.packageName = stringField("package.name");
         if (fields.find("package.version") != fields.end())
             options.packageVersion = stringField("package.version");
+        if (fields.find("format.brace_style") != fields.end())
+        {
+            options.format.braceStyle = stringField("format.brace_style");
+            if (options.format.braceStyle == "almann")
+                options.format.braceStyle = "allman";
+            if (options.format.braceStyle != "allman" && options.format.braceStyle != "kr")
+                compiler_error(location("format.brace_style") + " must be 'allman' or 'kr'");
+        }
+        if (fields.find("format.namespace_indent") != fields.end())
+            options.format.namespaceIndent = boolField("format.namespace_indent");
+        if (fields.find("format.match_case_indent") != fields.end())
+            options.format.matchCaseIndent = boolField("format.match_case_indent");
+        if (fields.find("format.indent_width") != fields.end())
+            options.format.indentWidth = positiveIntegerField("format.indent_width");
+        if (fields.find("format.use_tabs") != fields.end())
+            options.format.useTabs = boolField("format.use_tabs");
+        if (fields.find("format.final_newline") != fields.end())
+            options.format.finalNewline = boolField("format.final_newline");
+        if (fields.find("meta.config_macros") != fields.end())
+        {
+            options.meta.configMacros = stringField("meta.config_macros");
+            if (options.meta.configMacros != "lexer" && options.meta.configMacros != "ast")
+                compiler_error(location("meta.config_macros") + " must be 'lexer' or 'ast'");
+        }
         if (fields.find("build.native") != fields.end())
             options.nativeCpu = boolField("build.native");
         if (fields.find("build.no_std") != fields.end())
@@ -352,8 +417,7 @@ namespace
         if (fields.find("build.hosted") != fields.end())
             options.hosted = boolField("build.hosted");
         if (fields.find("build.link_dirs") != fields.end() && fields.find("build.link_directories") != fields.end())
-            throw std::runtime_error(buildPath.string() +
-                                     ": specify only one of build.link_dirs or build.link_directories");
+            compiler_error(buildPath.string() + ": specify only one of build.link_dirs or build.link_directories");
         const std::string linkDirectoriesField =
             fields.find("build.link_directories") != fields.end() ? "build.link_directories" : "build.link_dirs";
         if (fields.find(linkDirectoriesField) != fields.end())
@@ -363,8 +427,18 @@ namespace
             for (const std::string &library : stringArrayField("build.links"))
             {
                 if (library.empty())
-                    throw std::runtime_error(location("build.links") + " must not contain an empty library name");
+                    compiler_error(location("build.links") + " must not contain an empty library name");
                 options.linkArguments.emplace_back("-l" + library);
+            }
+        if (fields.find("comptime.commands") != fields.end())
+            for (const std::string &command : stringArrayField("comptime.commands"))
+            {
+                std::error_code error;
+                const std::filesystem::path executable = std::filesystem::canonical(command, error);
+                if (command.empty() || error || !executable.is_absolute() ||
+                    !std::filesystem::is_regular_file(executable))
+                    compiler_error(location("comptime.commands") + " must contain absolute executable files");
+                options.comptimeCommands.emplace_back(executable.string());
             }
         return options;
     }
@@ -378,9 +452,9 @@ namespace
             if (argument == "--build")
             {
                 if (invocation.requested)
-                    throw std::runtime_error("--build may be specified only once");
+                    compiler_error("--build may be specified only once");
                 invocation.requested = true;
-                invocation.path = "Shaft.build";
+                invocation.path = "Shaft.toml";
                 if (index + 1 < argc && argv[index + 1][0] != '-')
                     invocation.path = argv[++index];
                 continue;
@@ -388,7 +462,7 @@ namespace
             if (argument.rfind("--build=", 0) == 0)
             {
                 if (invocation.requested || argument.size() == 8)
-                    throw std::runtime_error("--build requires a non-empty configuration path");
+                    compiler_error("--build requires a non-empty configuration path");
                 invocation.requested = true;
                 invocation.path = argument.substr(8);
             }
@@ -406,7 +480,7 @@ namespace
     {
         std::ifstream input(path, std::ios::binary);
         if (!input)
-            throw std::runtime_error("failed to read source file '" + path + "'");
+            compiler_error("failed to read source file '" + path + "'");
         return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     }
 
@@ -445,7 +519,7 @@ namespace
             {
                 const size_t end = result.source.find("*/", index + 2);
                 if (end == std::string::npos)
-                    throw std::runtime_error("unterminated block comment in '" + path.string() + "'");
+                    compiler_error("unterminated block comment in '" + path.string() + "'");
                 index = end + 2;
                 continue;
             }
@@ -505,18 +579,18 @@ namespace
                         break;
                     const char escaped = result.source[cursor++];
                     if (escaped != '\\' && escaped != '"')
-                        throw std::runtime_error("unsupported import-path escape in '" + path.string() + "'");
+                        compiler_error("unsupported import-path escape in '" + path.string() + "'");
                     importedPath += escaped;
                     continue;
                 }
                 importedPath += character;
             }
             if (!closed)
-                throw std::runtime_error("unterminated import path in '" + path.string() + "'");
+                compiler_error("unterminated import path in '" + path.string() + "'");
             while (cursor < result.source.size() && std::isspace(static_cast<unsigned char>(result.source[cursor])))
                 ++cursor;
             if (cursor == result.source.size() || result.source[cursor] != ';')
-                throw std::runtime_error("expected ';' after import in '" + path.string() + "'");
+                compiler_error("expected ';' after import in '" + path.string() + "'");
             result.imports.push_back(std::move(importedPath));
             blank_source_range(result.source, identifierStart, cursor + 1);
             index = cursor + 1;
@@ -546,13 +620,12 @@ namespace
             std::error_code error;
             const std::filesystem::path path = std::filesystem::canonical(requestedPath, error);
             if (error)
-                throw std::runtime_error("failed to resolve source module '" + requestedPath.string() +
-                                         "': " + error.message());
+                compiler_error("failed to resolve source module '" + requestedPath.string() + "': " + error.message());
             const std::string key = path.string();
             if (visited.find(key) != visited.end())
                 return;
             if (!active.emplace(key).second)
-                throw std::runtime_error("cyclic import involving '" + key + "'");
+                compiler_error("cyclic import involving '" + key + "'");
 
             const Lexer::Module source{path.string(), read_source(key)};
             ImportedSource module = extract_imports(path, Lexer::preprocess_config_blocks(source, configuration));
@@ -605,7 +678,7 @@ namespace
             return EmitKind::DynamicLibrary;
         if (value == "binary")
             return EmitKind::Binary;
-        throw std::runtime_error("unknown emit kind '" + value + "'");
+        compiler_error("unknown emit kind '" + value + "'");
     }
 
     std::string default_output_path(const std::string &input, EmitKind emit)
@@ -650,7 +723,7 @@ namespace
             return OptimizationLevel::O2;
         if (argument == "-O3")
             return OptimizationLevel::O3;
-        throw std::runtime_error("unsupported optimization level '" + argument + "'; use -O0, -O1, -O2, or -O3");
+        compiler_error("unsupported optimization level '" + argument + "'; use -O0, -O1, -O2, or -O3");
     }
 
     bool is_raw_link_input(const std::string &path)
@@ -683,8 +756,8 @@ namespace
             if (argument == "--help" || argument == "-h")
             {
                 std::cout << "Usage: shaftc [OPTIONS] INPUT\n"
-                             "       shaftc --build [Shaft.build] [OPTIONS]\n"
-                             "--build reads a TOML-like Shaft.build file (or an explicit path)\n"
+                             "       shaftc --build [Shaft.toml] [OPTIONS]\n"
+                             "--build reads a TOML-like Shaft.toml file (or an explicit path)\n"
                              "--emit KIND: llvm, object, asm, staticlib, dynamiclib, binary\n"
                              "-O0, -O1, -O2, or -O3 select LLVM optimization level (default: -O2)\n"
                              "--native tunes native object, assembly, and binary output for this CPU\n"
@@ -706,7 +779,7 @@ namespace
             if (argument == "--emit" || argument == "-emit")
             {
                 if (++i == argc)
-                    throw std::runtime_error("shaftc: --emit requires a value");
+                    compiler_error("shaftc: --emit requires a value");
                 options.emit = parse_emit_kind(argv[i]);
                 continue;
             }
@@ -718,7 +791,7 @@ namespace
             if (argument == "-o" || argument == "--output")
             {
                 if (++i == argc)
-                    throw std::runtime_error("shaftc: -o requires a path");
+                    compiler_error("shaftc: -o requires a path");
                 options.outputPath = argv[i];
                 continue;
             }
@@ -759,7 +832,7 @@ namespace
             if (argument == "--link" || argument == "--link-dir" || argument == "-l")
             {
                 if (++i == argc)
-                    throw std::runtime_error(argument + " requires a value");
+                    compiler_error(argument + " requires a value");
                 if (argument == "--link" || argument == "-l")
                     options.linkArguments.emplace_back("-l" + std::string(argv[i]));
                 else
@@ -779,7 +852,7 @@ namespace
             if (argument == "--target")
             {
                 if (++i == argc)
-                    throw std::runtime_error("shaftc: --target requires an LLVM target triple");
+                    compiler_error("shaftc: --target requires an LLVM target triple");
                 options.targetTriple = argv[i];
                 continue;
             }
@@ -787,13 +860,13 @@ namespace
             {
                 options.targetTriple = argument.substr(9);
                 if (options.targetTriple.empty())
-                    throw std::runtime_error("shaftc: --target requires an LLVM target triple");
+                    compiler_error("shaftc: --target requires an LLVM target triple");
                 continue;
             }
             if (argument == "--sysroot")
             {
                 if (++i == argc)
-                    throw std::runtime_error("shaftc: --sysroot requires a path");
+                    compiler_error("shaftc: --sysroot requires a path");
                 options.sysroot = argv[i];
                 continue;
             }
@@ -805,7 +878,7 @@ namespace
             if (argument == "--std" || argument == "--runtime" || argument == "--resources")
             {
                 if (++i == argc)
-                    throw std::runtime_error(argument + " requires a path");
+                    compiler_error(argument + " requires a path");
                 if (argument == "--std")
                     options.stdlibPath = argv[i];
                 else if (argument == "--runtime")
@@ -815,14 +888,14 @@ namespace
                 continue;
             }
             if (!argument.empty() && argument.front() == '-')
-                throw std::runtime_error("unknown option '" + argument + "'");
+                compiler_error("unknown option '" + argument + "'");
             if (is_raw_link_input(argument))
             {
                 options.linkArguments.emplace_back(argument);
                 continue;
             }
             if (!options.inputPath.empty())
-                throw std::runtime_error(
+                compiler_error(
                     "shaftc: only one .shaft input file is supported; use imports for additional Shaft modules");
             options.inputPath = argument;
         }
@@ -834,7 +907,7 @@ namespace
             const std::string host = hostTriple ? hostTriple : "";
             LLVMDisposeMessage(hostTriple);
             if (options.targetTriple != host)
-                throw std::runtime_error("shaftc --native cannot be combined with an explicit cross target");
+                compiler_error("shaftc --native cannot be combined with an explicit cross target");
         }
         const bool hasCLinkLibrary =
             std::any_of(options.linkArguments.begin(), options.linkArguments.end(),
@@ -843,20 +916,19 @@ namespace
             std::any_of(options.linkArguments.begin(), options.linkArguments.end(),
                         [](const std::string &argument) { return is_raw_link_input(argument); });
         if ((hasCLinkLibrary || !options.linkDirectories.empty()) && !options.hosted)
-            throw std::runtime_error(
-                "--link, -l, and --link-dir require --hosted so linked C libraries receive a C runtime");
+            compiler_error("--link, -l, and --link-dir require --hosted so linked C libraries receive a C runtime");
         if (hasRawLinkInput && options.emit != EmitKind::Binary && options.emit != EmitKind::DynamicLibrary)
-            throw std::runtime_error("raw linker inputs require --emit binary or --emit dynamiclib");
+            compiler_error("raw linker inputs require --emit binary or --emit dynamiclib");
         if (options.hosted && !options.targetTriple.empty())
         {
             char *hostTriple = LLVMGetDefaultTargetTriple();
             const std::string host = hostTriple ? hostTriple : "";
             LLVMDisposeMessage(hostTriple);
             if (options.targetTriple != host)
-                throw std::runtime_error("--hosted does not support cross-target linking");
+                compiler_error("--hosted does not support cross-target linking");
         }
         if (options.inputPath.empty())
-            throw std::runtime_error("missing input file");
+            compiler_error("missing input file");
         if (options.outputPath.empty())
             options.outputPath = default_output_path(options.inputPath, options.emit);
         return options;
@@ -903,8 +975,8 @@ namespace
             if (std::filesystem::is_regular_file(candidate))
                 return candidate;
         }
-        throw std::runtime_error("unable to find bundled resource '" + relative.string() +
-                                 "'; use --resources to set its directory");
+        compiler_error("unable to find bundled resource '" + relative.string() +
+                       "'; use --resources to set its directory");
     }
 
     std::filesystem::path bundled_runtime(const Options &options, const char *argv0, const std::string &targetTriple);
@@ -918,7 +990,7 @@ namespace
         const std::filesystem::path stdlib = options.stdlibPath.empty() ? find_resource(options, argv0, "std/std.shaft")
                                                                         : std::filesystem::path(options.stdlibPath);
         if (!std::filesystem::is_regular_file(stdlib))
-            throw std::runtime_error("failed to read standard library '" + stdlib.string() + "'");
+            compiler_error("failed to read standard library '" + stdlib.string() + "'");
         if (std::filesystem::equivalent(stdlib, options.inputPath))
             return projectModules;
         std::vector<ImportedSource> modules;
@@ -928,7 +1000,7 @@ namespace
         {
             const std::filesystem::path runtime = bundled_runtime(options, argv0, selected_target_triple(options));
             if (!std::filesystem::is_regular_file(runtime))
-                throw std::runtime_error("failed to read Shaft runtime '" + runtime.string() + "'");
+                compiler_error("failed to read Shaft runtime '" + runtime.string() + "'");
             modules.push_back({runtime.generic_string(), read_source(runtime.string()), {}});
         }
         modules.insert(modules.end(), std::make_move_iterator(projectModules.begin()),
@@ -943,9 +1015,8 @@ namespace
         if (Toolchain::is_wasm(targetTriple))
         {
             if (Toolchain::architecture(targetTriple) != "wasm32")
-                throw std::runtime_error(
-                    "the bundled WebAssembly runtime targets WASI preview 1, which is wasm32 only; "
-                    "use --no-std or --runtime for wasm64");
+                compiler_error("the bundled WebAssembly runtime targets WASI preview 1, which is wasm32 only; "
+                               "use --no-std or --runtime for wasm64");
             return find_resource(options, argv0, "std/runtime/wasm.shaft");
         }
         if (Toolchain::is_linux(targetTriple))
@@ -954,7 +1025,7 @@ namespace
             return find_resource(options, argv0, "std/runtime/darwin.shaft");
         if (Toolchain::is_windows(targetTriple))
             return find_resource(options, argv0, "std/runtime/windows.shaft");
-        throw std::runtime_error("no bundled runtime matches target '" + targetTriple + "'; use --runtime");
+        compiler_error("no bundled runtime matches target '" + targetTriple + "'; use --runtime");
     }
 
     std::string selected_target_triple(const Options &options)
@@ -987,7 +1058,15 @@ namespace
             {"build.hosted", options.hosted ? "true" : "false"},
             {"build.check_only", options.checkOnly ? "true" : "false"},
             {"build.verbose", options.verbose ? "true" : "false"},
+            {"format.brace_style", options.format.braceStyle},
+            {"format.namespace_indent", options.format.namespaceIndent ? "true" : "false"},
+            {"format.match_case_indent", options.format.matchCaseIndent ? "true" : "false"},
+            {"format.indent_width", std::to_string(options.format.indentWidth)},
+            {"format.use_tabs", options.format.useTabs ? "true" : "false"},
+            {"format.final_newline", options.format.finalNewline ? "true" : "false"},
+            {"meta.config_macros", options.meta.configMacros},
         };
+        configuration.comptimeCommands = options.comptimeCommands;
         if (!options.stdlibPath.empty())
             configuration.values.emplace("build.stdlib", options.stdlibPath);
         if (!options.runtimePath.empty())
@@ -1019,7 +1098,7 @@ namespace
         {
             const std::string message = error ? error : "unable to select target '" + triple + "'";
             LLVMDisposeMessage(error);
-            throw std::runtime_error(message);
+            compiler_error(message);
         }
     }
 
@@ -1064,7 +1143,7 @@ namespace
                                        LLVMCodeGenLevelDefault, LLVMRelocPIC, LLVMCodeModelDefault);
     }
 
-    unsigned target_pointer_width_bits(LLVMContextRef llvmContext, const std::string &triple, const Options &options)
+    LLVMTargetDataRef create_target_data(const std::string &triple, const Options &options)
     {
         initialize_targets();
         LLVMTargetRef target = nullptr;
@@ -1073,16 +1152,22 @@ namespace
         {
             const std::string message = error ? error : "unable to select a target";
             LLVMDisposeMessage(error);
-            throw std::runtime_error(message);
+            compiler_error(message);
         }
         LLVMTargetMachineRef machine = create_target_machine(target, triple, options);
         if (!machine)
-            throw std::runtime_error("unable to create a target machine");
+            compiler_error("unable to create a target machine");
         LLVMTargetDataRef dataLayout = LLVMCreateTargetDataLayout(machine);
+        LLVMDisposeTargetMachine(machine);
+        return dataLayout;
+    }
+
+    unsigned target_pointer_width_bits(LLVMContextRef llvmContext, const std::string &triple, const Options &options)
+    {
+        LLVMTargetDataRef dataLayout = create_target_data(triple, options);
         const unsigned bits = static_cast<unsigned>(
             LLVMABISizeOfType(dataLayout, LLVMPointerType(LLVMInt8TypeInContext(llvmContext), 0)) * 8);
         LLVMDisposeTargetData(dataLayout);
-        LLVMDisposeTargetMachine(machine);
         return bits;
     }
 
@@ -1116,11 +1201,11 @@ namespace
         {
             const std::string message = targetError ? targetError : "unable to select a target";
             LLVMDisposeMessage(targetError);
-            throw std::runtime_error(message);
+            compiler_error(message);
         }
         LLVMTargetMachineRef machine = create_target_machine(target, triple, options);
         if (!machine)
-            throw std::runtime_error("unable to create a target machine");
+            compiler_error("unable to create a target machine");
 
         LLVMSetTarget(module, triple.c_str());
         LLVMTargetDataRef dataLayout = LLVMCreateTargetDataLayout(machine);
@@ -1138,7 +1223,7 @@ namespace
             char *message = LLVMGetErrorMessage(passError);
             const std::string text = message ? message : "LLVM optimization failed";
             LLVMDisposeErrorMessage(message);
-            throw std::runtime_error("optimization failed: " + text);
+            compiler_error("optimization failed: " + text);
         }
     }
 
@@ -1153,12 +1238,12 @@ namespace
         {
             const std::string message = error ? error : "unable to select a target";
             LLVMDisposeMessage(error);
-            throw std::runtime_error(message);
+            compiler_error(message);
         }
 
         LLVMTargetMachineRef machine = create_target_machine(target, triple, options);
         if (!machine)
-            throw std::runtime_error("unable to create a target machine");
+            compiler_error("unable to create a target machine");
         LLVMSetTarget(module, triple.c_str());
 
         LLVMTargetDataRef dataLayout = LLVMCreateTargetDataLayout(machine);
@@ -1172,7 +1257,7 @@ namespace
             const std::string message = error ? error : "unable to emit native code";
             LLVMDisposeMessage(error);
             LLVMDisposeTargetMachine(machine);
-            throw std::runtime_error(message);
+            compiler_error(message);
         }
         LLVMDisposeTargetMachine(machine);
     }
@@ -1254,7 +1339,7 @@ namespace
             {
                 const std::string message = error ? error : "unable to write LLVM IR";
                 LLVMDisposeMessage(error);
-                throw std::runtime_error(message);
+                compiler_error(message);
             }
             return;
         }
@@ -1285,7 +1370,7 @@ namespace
             if (hostedBinary)
             {
                 if (Toolchain::is_wasm(targetTriple))
-                    throw std::runtime_error("--hosted is not supported for WebAssembly targets");
+                    compiler_error("--hosted is not supported for WebAssembly targets");
                 if (options.noStd)
                 {
                     LLVMValueRef entry = LLVMGetNamedFunction(module, "__main");
@@ -1293,7 +1378,7 @@ namespace
                         LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(entry))) != LLVMIntegerTypeKind ||
                         LLVMGetIntTypeWidth(LLVMGetReturnType(LLVMGlobalGetValueType(entry))) != 32)
                     {
-                        throw std::runtime_error("--no-std --hosted requires cdef main() -> i32");
+                        compiler_error("--no-std --hosted requires cdef main() -> i32");
                     }
                 }
                 Toolchain::add_hosted_main(module, options.noStd);
@@ -1359,6 +1444,11 @@ int main(int argc, char **argv)
             LLVMDisposeBuilder(ctx.builder);
             ctx.builder = nullptr;
         }
+        if (ctx.targetData)
+        {
+            LLVMDisposeTargetData(ctx.targetData);
+            ctx.targetData = nullptr;
+        }
         if (ctx.module)
         {
             LLVMDisposeModule(ctx.module);
@@ -1389,7 +1479,7 @@ int main(int argc, char **argv)
 
         const std::string inputSource = read_source(options.inputPath);
         if (inputSource.empty())
-            throw std::runtime_error("source file is empty");
+            compiler_error("source file is empty");
 
         const Lexer::Configuration configuration = lexer_configuration(options);
         const std::vector<ImportedSource> projectModules = load_project_modules(options.inputPath, configuration);
@@ -1422,8 +1512,7 @@ int main(int argc, char **argv)
             std::error_code error;
             std::filesystem::create_directories(outputParent, error);
             if (error)
-                throw std::runtime_error("failed to create output directory '" + outputParent.string() +
-                                         "': " + error.message());
+                compiler_error("failed to create output directory '" + outputParent.string() + "': " + error.message());
         }
 
         verbose(options, "generating LLVM IR...");
@@ -1432,8 +1521,14 @@ int main(int argc, char **argv)
 
         LLVMContextSetDiagnosticHandler(context.llvmCtx, inline_assembly_diagnostic_handler, &context);
         context.stdlibEnabled = !options.noStd;
-        context.targetPointerWidthBits =
-            target_pointer_width_bits(context.llvmCtx, selected_target_triple(options), options);
+        const std::string targetTriple = selected_target_triple(options);
+        context.targetData = create_target_data(targetTriple, options);
+        context.targetPointerWidthBits = static_cast<unsigned>(
+            LLVMABISizeOfType(context.targetData, LLVMPointerType(LLVMInt8TypeInContext(context.llvmCtx), 0)) * 8);
+        LLVMSetTarget(context.module, targetTriple.c_str());
+        char *targetLayout = LLVMCopyStringRepOfTargetData(context.targetData);
+        LLVMSetDataLayout(context.module, targetLayout);
+        LLVMDisposeMessage(targetLayout);
 
         LLVMModuleRef module = Codegen::generate_module(context, Parser::ast);
 
@@ -1442,7 +1537,7 @@ int main(int argc, char **argv)
         {
             const std::string message = diagnostic ? diagnostic : "invalid LLVM IR";
             LLVMDisposeMessage(diagnostic);
-            throw std::runtime_error("code generation failed: " + message);
+            compiler_error("code generation failed: " + message);
         }
         if (diagnostic)
             LLVMDisposeMessage(diagnostic);
@@ -1458,7 +1553,7 @@ int main(int argc, char **argv)
             {
                 const std::string message = diagnostic ? diagnostic : "invalid optimized LLVM IR";
                 LLVMDisposeMessage(diagnostic);
-                throw std::runtime_error("optimization produced invalid LLVM IR: " + message);
+                compiler_error("optimization produced invalid LLVM IR: " + message);
             }
             if (diagnostic)
                 LLVMDisposeMessage(diagnostic);
@@ -1473,6 +1568,13 @@ int main(int argc, char **argv)
 
         dispose_context();
         return 0;
+    }
+    catch (const CompilationError &error)
+    {
+        if (!error.was_reported())
+            report_compilation_error(error);
+        dispose_context();
+        return 1;
     }
     catch (const std::exception &ex)
     {

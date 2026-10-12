@@ -1,4 +1,5 @@
 #include "toolchain.hpp"
+#include "error.hpp"
 #include "thirdparty/shaft_llvm.h"
 
 #include <llvm/BinaryFormat/COFF.h>
@@ -7,7 +8,6 @@
 #include <llvm/Object/COFFImportFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/Error.h>
-
 
 #include <algorithm>
 #include <cctype>
@@ -26,8 +26,6 @@ namespace Toolchain
 {
     namespace
     {
-        // ---------------------------------------------------------------- helpers
-
         std::string lower(std::string value)
         {
             std::transform(value.begin(), value.end(), value.begin(),
@@ -58,7 +56,6 @@ namespace Toolchain
             return value ? value : "";
         }
 
-        // Directory entries sorted so that the highest version string comes last.
         std::vector<fs::path> sorted_children(const fs::path &directory)
         {
             std::vector<fs::path> children;
@@ -81,7 +78,6 @@ namespace Toolchain
             return command;
         }
 
-        // Runs the LLD driver that matches `format`. args[0] is the program name LLD prints in diagnostics.
         void run_lld(Format format, const std::vector<std::string> &arguments, bool verbose)
         {
             if (verbose)
@@ -109,18 +105,12 @@ namespace Toolchain
                 break;
             }
             if (!ok)
-                throw std::runtime_error(std::string("baked-in LLD (") + format_name(format) +
-                                         ") failed while producing the requested artifact");
+                compiler_error(std::string("baked-in LLD (") + format_name(format) +
+                               ") failed while producing the requested artifact");
         }
 
-        std::string llvm_error_text(llvm::Error error)
-        {
-            return llvm::toString(std::move(error));
-        }
+        std::string llvm_error_text(llvm::Error error) { return llvm::toString(std::move(error)); }
 
-        // -------------------------------------------------------------------- ELF
-
-        // GNU ld emulation name for `-m`; empty lets LLD infer the machine from its inputs.
         std::string elf_emulation(const std::string &arch)
         {
             if (arch == "x86_64")
@@ -160,7 +150,7 @@ namespace Toolchain
                 return "/lib/ld-linux-riscv32-ilp32d.so.1";
             if (arch == "i386")
                 return "/lib/ld-linux.so.2";
-            throw std::runtime_error("hosted linking has no dynamic loader for architecture '" + arch + "'");
+            compiler_error("hosted linking has no dynamic loader for architecture '" + arch + "'");
         }
 
         struct LinuxCRuntime
@@ -202,7 +192,6 @@ namespace Toolchain
                     }
                 }
 
-                // libgcc.a provides compiler helpers (128-bit division, soft atomics, ...) that clang used to add implicitly.
                 const fs::path gccRoot = root / "usr" / "lib" / "gcc";
                 if (directory_exists(gccRoot))
                 {
@@ -217,7 +206,7 @@ namespace Toolchain
                 }
             }
             if (runtime.crt1.empty())
-                throw std::runtime_error(
+                compiler_error(
                     "hosted linking could not find the C runtime start files (crt1.o, crti.o, crtn.o); install "
                     "the C library development package or pass --sysroot");
             return runtime;
@@ -277,8 +266,6 @@ namespace Toolchain
             run_lld(Format::ELF, args, job.verbose);
         }
 
-        // ------------------------------------------------------------------ Mach-O
-
         std::string macho_arch(const std::string &arch)
         {
             if (arch == "aarch64")
@@ -286,7 +273,6 @@ namespace Toolchain
             return arch;
         }
 
-        // Returns the macOS SDK root, or an empty string when none can be found.
         std::string find_macos_sdk(const LinkJob &job)
         {
             if (!job.sysroot.empty())
@@ -308,8 +294,8 @@ namespace Toolchain
         {
             const std::string arch = architecture(job.triple);
             const std::string minimum = arch == "aarch64" ? "11.0" : "10.13";
-            std::vector<std::string> args{"shaftc",   "-arch",   macho_arch(arch), "-platform_version",
-                                          "macos",    minimum,   minimum};
+            std::vector<std::string> args{"shaftc", "-arch", macho_arch(arch), "-platform_version",
+                                          "macos",  minimum, minimum};
             if (job.shared)
             {
                 args.emplace_back("-dylib");
@@ -318,19 +304,14 @@ namespace Toolchain
             }
             else if (!job.hosted)
             {
-                // LLD's Mach-O port does not implement -static, so freestanding executables are plain
-                // executables with a custom entry point.
                 args.emplace_back("-e");
                 args.emplace_back("_start");
             }
             args.insert(args.end(), job.inputs.begin(), job.inputs.end());
 
-            // Modern macOS refuses to start a binary that does not load libSystem, so link it whenever an SDK is
-            // available. Hosted builds cannot work without it.
             const std::string sdk = find_macos_sdk(job);
             if (job.hosted && sdk.empty())
-                throw std::runtime_error(
-                    "hosted macOS linking needs a macOS SDK for libSystem; set SDKROOT or pass --sysroot");
+                compiler_error("hosted macOS linking needs a macOS SDK for libSystem; set SDKROOT or pass --sysroot");
             if (!sdk.empty())
             {
                 args.emplace_back("-syslibroot");
@@ -351,14 +332,13 @@ namespace Toolchain
             run_lld(Format::MachO, args, job.verbose);
         }
 
-        // -------------------------------------------------------------------- COFF
-
         const std::set<std::string> &ws2_32_exports()
         {
             static const std::set<std::string> names = {
-                "WSAStartup", "WSACleanup", "WSAGetLastError", "accept",   "bind",   "closesocket", "connect",
-                "ioctlsocket", "listen",    "recv",            "recvfrom", "send",   "sendto",      "shutdown",
-                "socket",      "select",    "getsockname",     "getpeername", "setsockopt", "getsockopt",
+                "WSAStartup",  "WSACleanup",  "WSAGetLastError", "accept",     "bind",
+                "closesocket", "connect",     "ioctlsocket",     "listen",     "recv",
+                "recvfrom",    "send",        "sendto",          "shutdown",   "socket",
+                "select",      "getsockname", "getpeername",     "setsockopt", "getsockopt",
             };
             return names;
         }
@@ -366,16 +346,54 @@ namespace Toolchain
         const std::set<std::string> &kernel32_exports()
         {
             static const std::set<std::string> names = {
-                "ExitProcess", "GetStdHandle", "CreateFileA", "ReadFile", "WriteFile", "CloseHandle",
-                "GetFileSizeEx", "SetFilePointerEx", "GetSystemTimeAsFileTime", "Sleep", "CreatePipe",
-                "CreateProcessA", "SetHandleInformation", "WaitForSingleObject", "GetExitCodeProcess",
-                "PeekNamedPipe", "GetConsoleMode", "SetConsoleMode", "PeekConsoleInputA", "ReadConsoleInputA",
-                "GetCommandLineA", "GetLastError", "SetLastError", "GetModuleHandleA", "GetProcessHeap",
-                "HeapAlloc", "HeapFree", "HeapReAlloc", "VirtualAlloc", "VirtualFree", "GetCurrentProcess",
-                "GetCurrentThreadId", "CreateThread", "ExitThread", "QueryPerformanceCounter",
-                "QueryPerformanceFrequency", "GetTickCount64", "GetEnvironmentVariableA",
-                "SetEnvironmentVariableA", "GetCurrentDirectoryA", "DeleteFileA", "GetFileAttributesA",
-                "CreateDirectoryA", "FlushFileBuffers", "GetSystemInfo", "WriteConsoleA", "ReadConsoleA",
+                "ExitProcess",
+                "InterlockedExchange",
+                "GetStdHandle",
+                "CreateFileA",
+                "ReadFile",
+                "WriteFile",
+                "CloseHandle",
+                "GetFileSizeEx",
+                "SetFilePointerEx",
+                "GetSystemTimeAsFileTime",
+                "Sleep",
+                "CreatePipe",
+                "CreateProcessA",
+                "SetHandleInformation",
+                "WaitForSingleObject",
+                "GetExitCodeProcess",
+                "PeekNamedPipe",
+                "GetConsoleMode",
+                "SetConsoleMode",
+                "PeekConsoleInputA",
+                "ReadConsoleInputA",
+                "GetCommandLineA",
+                "GetLastError",
+                "SetLastError",
+                "GetModuleHandleA",
+                "GetProcessHeap",
+                "HeapAlloc",
+                "HeapFree",
+                "HeapReAlloc",
+                "VirtualAlloc",
+                "VirtualFree",
+                "GetCurrentProcess",
+                "GetCurrentThreadId",
+                "CreateThread",
+                "ExitThread",
+                "QueryPerformanceCounter",
+                "QueryPerformanceFrequency",
+                "GetTickCount64",
+                "GetEnvironmentVariableA",
+                "SetEnvironmentVariableA",
+                "GetCurrentDirectoryA",
+                "DeleteFileA",
+                "GetFileAttributesA",
+                "CreateDirectoryA",
+                "FlushFileBuffers",
+                "GetSystemInfo",
+                "WriteConsoleA",
+                "ReadConsoleA",
             };
             return names;
         }
@@ -386,11 +404,9 @@ namespace Toolchain
                 return llvm::COFF::IMAGE_FILE_MACHINE_ARM64;
             if (arch == "x86_64")
                 return llvm::COFF::IMAGE_FILE_MACHINE_AMD64;
-            throw std::runtime_error("Windows linking supports x86_64 and aarch64, not '" + arch + "'");
+            compiler_error("Windows linking supports x86_64 and aarch64, not '" + arch + "'");
         }
 
-        // The Windows runtime calls kernel32 / ws2_32 directly. Instead of requiring an SDK or MinGW
-        // sysroot, build the tiny import libraries those calls need straight from the object files.
         std::vector<std::string> generate_import_libraries(const LinkJob &job, const fs::path &scratch)
         {
             std::set<std::string> undefined;
@@ -398,15 +414,16 @@ namespace Toolchain
             {
                 if (input.size() < 2 || input.compare(input.size() - 2, 2, ".o") != 0)
                     continue;
-                auto binary = llvm::object::ObjectFile::createObjectFile(input);
+                llvm::Expected<llvm::object::OwningBinary<llvm::object::ObjectFile>> binary =
+                    llvm::object::ObjectFile::createObjectFile(input);
                 if (!binary)
-                    throw std::runtime_error("cannot read object '" + input + "': " + llvm_error_text(binary.takeError()));
+                    compiler_error("cannot read object '" + input + "': " + llvm_error_text(binary.takeError()));
                 for (const llvm::object::SymbolRef &symbol : binary->getBinary()->symbols())
                 {
-                    auto flags = symbol.getFlags();
+                    llvm::Expected<unsigned int> flags = symbol.getFlags();
                     if (!flags || !(*flags & llvm::object::SymbolRef::SF_Undefined))
                         continue;
-                    auto name = symbol.getName();
+                    llvm::Expected<llvm::StringRef> name = symbol.getName();
                     if (!name)
                     {
                         llvm::consumeError(name.takeError());
@@ -432,14 +449,16 @@ namespace Toolchain
             }
 
             std::vector<std::string> libraries;
+            // wtf is this type
+            //   v
             for (auto &entry : byLibrary)
             {
                 const fs::path path = scratch / ("lib" + entry.first.substr(0, entry.first.size() - 4) + ".a");
                 if (llvm::Error error = llvm::object::writeImportLibrary(entry.first, path.string(), entry.second,
                                                                          coff_machine(architecture(job.triple)),
                                                                          /*MinGW=*/true))
-                    throw std::runtime_error("failed to create import library for " + entry.first + ": " +
-                                             llvm_error_text(std::move(error)));
+                    compiler_error("failed to create import library for " + entry.first + ": " +
+                                   llvm_error_text(std::move(error)));
                 libraries.push_back(path.string());
             }
             return libraries;
@@ -487,8 +506,8 @@ namespace Toolchain
                     break;
             }
             if (runtime.crt2.empty())
-                throw std::runtime_error("hosted Windows linking could not find a MinGW-w64 sysroot (crt2.o); "
-                                         "pass --sysroot or set MINGW_SYSROOT");
+                compiler_error("hosted Windows linking could not find a MinGW-w64 sysroot (crt2.o); "
+                               "pass --sysroot or set MINGW_SYSROOT");
             return runtime;
         }
 
@@ -558,13 +577,11 @@ namespace Toolchain
             }
         }
 
-        // ------------------------------------------------------------- WebAssembly
-
         void link_wasm(const LinkJob &job)
         {
             if (job.hosted)
-                throw std::runtime_error("--hosted is not supported for WebAssembly targets; the bundled runtime "
-                                         "talks to the host through WASI imports");
+                compiler_error("--hosted is not supported for WebAssembly targets; the bundled runtime "
+                               "talks to the host through WASI imports");
             std::vector<std::string> args{"shaftc"};
             if (architecture(job.triple) == "wasm64")
                 args.emplace_back("-mwasm64");
@@ -574,7 +591,6 @@ namespace Toolchain
             args.emplace_back("stack-size=1048576");
             if (job.shared)
             {
-                // A library module: no start function, every defined symbol is exported.
                 args.emplace_back("--no-entry");
                 args.emplace_back("--export-all");
             }
@@ -588,8 +604,6 @@ namespace Toolchain
             run_lld(Format::Wasm, args, job.verbose);
         }
     } // namespace
-
-    // ---------------------------------------------------------------- public API
 
     const char *format_name(Format format)
     {
@@ -686,16 +700,15 @@ namespace Toolchain
             const std::string text = message ? message : "unable to read file";
             LLVMDisposeMessage(message);
             LLVMContextDispose(context);
-            throw std::runtime_error("failed to read linker input '" + path + "': " + text);
+            compiler_error("failed to read linker input '" + path + "': " + text);
         }
         LLVMModuleRef ir = nullptr;
-        // The parser takes ownership of the buffer and accepts both textual IR and bitcode.
         if (LLVMParseIRInContext(context, buffer, &ir, &message))
         {
             const std::string text = message ? message : "invalid LLVM IR";
             LLVMDisposeMessage(message);
             LLVMContextDispose(context);
-            throw std::runtime_error("failed to parse linker input '" + path + "': " + text);
+            compiler_error("failed to parse linker input '" + path + "': " + text);
         }
         try
         {
@@ -715,12 +728,12 @@ namespace Toolchain
     {
         if (LLVMValueRef existing = LLVMGetNamedFunction(module, "main"))
             if (LLVMGetFirstBasicBlock(existing))
-                throw std::runtime_error("--hosted supplies the C main; remove the C 'main' definition");
+                compiler_error("--hosted supplies the C main; remove the C 'main' definition");
 
         LLVMValueRef target = LLVMGetNamedFunction(module, noStd ? "__main" : "__shaft_entry");
         if (!target)
-            throw std::runtime_error(noStd ? "--no-std --hosted requires cdef main() -> i32"
-                                           : "hosted linking requires the Shaft entry point __shaft_entry");
+            compiler_error(noStd ? "--no-std --hosted requires cdef main() -> i32"
+                                 : "hosted linking requires the Shaft entry point __shaft_entry");
         LLVMTypeRef targetType = LLVMGlobalGetValueType(target);
         const unsigned parameterCount = std::min(LLVMCountParamTypes(targetType), noStd ? 0u : 2u);
 
@@ -736,8 +749,7 @@ namespace Toolchain
         std::vector<LLVMValueRef> arguments;
         for (unsigned index = 0; index < parameterCount; ++index)
             arguments.push_back(LLVMGetParam(entry, index));
-        LLVMValueRef status =
-            LLVMBuildCall2(builder, targetType, target, arguments.data(), parameterCount, "status");
+        LLVMValueRef status = LLVMBuildCall2(builder, targetType, target, arguments.data(), parameterCount, "status");
         LLVMBuildRet(builder, status);
         LLVMDisposeBuilder(builder);
     }
@@ -764,11 +776,11 @@ namespace Toolchain
         std::vector<llvm::NewArchiveMember> members;
         for (size_t index = 0; index < objects.size(); ++index)
         {
-            auto member = llvm::NewArchiveMember::getFile(objects[index], /*Deterministic=*/true);
+            llvm::Expected<llvm::NewArchiveMember> member =
+                llvm::NewArchiveMember::getFile(objects[index], /*Deterministic=*/true);
             if (!member)
-                throw std::runtime_error("cannot add '" + objects[index] + "' to the archive: " +
-                                         llvm_error_text(member.takeError()));
-            // Name members after the library rather than the temporary object path.
+                compiler_error("cannot add '" + objects[index] +
+                               "' to the archive: " + llvm_error_text(member.takeError()));
             memberNames.push_back(memberStem + (objects.size() > 1 ? "-" + std::to_string(index) : "") + ".o");
             member->MemberName = memberNames.back();
             members.push_back(std::move(*member));
@@ -776,7 +788,6 @@ namespace Toolchain
 
         if (llvm::Error error = llvm::writeArchive(output, members, llvm::SymtabWritingMode::NormalSymtab, kind,
                                                    /*Deterministic=*/true, /*Thin=*/false))
-            throw std::runtime_error("failed to write static library '" + output +
-                                     "': " + llvm_error_text(std::move(error)));
+            compiler_error("failed to write static library '" + output + "': " + llvm_error_text(std::move(error)));
     }
 } // namespace Toolchain

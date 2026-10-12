@@ -7,6 +7,29 @@
 static std::string *error_source = nullptr;
 static std::vector<std::unique_ptr<std::string>> error_source_buffer;
 bool global_stop_on_error = false;
+
+CompilationError::CompilationError(std::string message, bool reported) : message(std::move(message)), reported(reported) {}
+
+const char *CompilationError::what() const noexcept
+{
+    return message.c_str();
+}
+
+bool CompilationError::was_reported() const noexcept
+{
+    return reported;
+}
+
+[[noreturn]] void compiler_error(std::string message)
+{
+    throw CompilationError(std::move(message));
+}
+
+void report_compilation_error(const CompilationError &error)
+{
+    std::cerr << "\033[1;31merror: \033[0m" << error.what() << '\n';
+}
+
 ErrorPos get_error_pos(uint64_t byte_pos, std::string *source)
 {
     uint64_t line = 1;
@@ -30,12 +53,10 @@ ErrorPos get_error_pos(uint64_t byte_pos, std::string *source)
             column++;
     }
     error_source = source;
-    error_source_buffer.push_back(std::make_unique<std::string>(*source));
     return {line, column};
 }
 
 static std::vector<Error> error_buffer;
-static bool declared_error_buffer_flush = false;
 
 const char *RED = "\033[1;31m";
 const char *BLUE = "\033[1;34m";
@@ -95,8 +116,38 @@ void flush_error_buffer()
                 std::cerr << ' ';
             }
         }
-        std::cerr << '^' << RESET << "\n\n";
+        std::cerr << '^' << RESET << '\n';
+        if (!error_buffer[i].help.empty())
+            std::cerr << "help: " << error_buffer[i].help << '\n';
+        std::cerr << '\n';
     }
+    error_buffer.clear();
+    error_source_buffer.clear();
+}
+
+void record_diagnostic(Error error, const std::string *source)
+{
+    error_buffer.push_back(std::move(error));
+    if (source)
+        error_source_buffer.push_back(std::make_unique<std::string>(*source));
+    else
+        error_source_buffer.push_back(nullptr);
+}
+
+void flush_diagnostics()
+{
+    flush_error_buffer();
+}
+
+void clear_diagnostics()
+{
+    error_buffer.clear();
+    error_source_buffer.clear();
+}
+
+bool has_diagnostics()
+{
+    return !error_buffer.empty();
 }
 
 void panic(Error error)
@@ -113,14 +164,14 @@ void panic(Error error)
     }
     else
     {
-        error_buffer.push_back(error);
+        record_diagnostic(error, error_source);
     }
 
     if (global_stop_on_error)
     {
         if (!error_source)
         {
-            exit(1);
+            throw CompilationError(error.message, true);
         }
 
         std::string_view source(*error_source);
@@ -164,16 +215,18 @@ void panic(Error error)
                 std::cerr << ' ';
             }
         }
-        std::cerr << '^' << RESET << "\n\n";
+        std::cerr << '^' << RESET << '\n';
+        if (!error.help.empty())
+            std::cerr << "help: " << error.help << '\n';
+        std::cerr << '\n';
 
-        exit(1);
+        throw CompilationError(error.message, true);
     }
-    else if (!declared_error_buffer_flush)
+    if (!error.is_macro_error)
     {
-        declared_error_buffer_flush = true;
-        std::atexit(flush_error_buffer);
+        flush_error_buffer();
     }
-    exit(1);
+    throw CompilationError(error.message, true);
 }
 
 void panic_at_source(std::string message, const std::string &modulePath, uint64_t byte_pos, std::string *source)

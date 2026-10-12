@@ -22,6 +22,8 @@ namespace Lexer
         FOREACH,
         BREAK,
         CONTINUE,
+        DO,
+        YIELD,
         // declarations
         DEF,
         DEC,
@@ -30,10 +32,18 @@ namespace Lexer
         ALIGN,
         STRUCT,
         CLASS,
+        TRAIT,
+        IMPL,
         INDEX,
         INIT,
         NAMESPACE,
         USING,
+        META_USING,
+        META_COMPTIME,
+        META_UNSAFE,
+        META_NOCHECK,
+        META_NOCLEANUP,
+        META_END,
         GLOBAL,
         IMPORT,
         EXPORT,
@@ -44,6 +54,7 @@ namespace Lexer
         NAKED,
         RESERVE,
         RETURN,
+        TERMINATE,
         // memory and types
         MUT,
         MOVE,
@@ -57,6 +68,7 @@ namespace Lexer
         START,
         UNION,
         AS,
+        TYPEOF,
         // primitive types
         STATE,
         THREAD,
@@ -112,6 +124,7 @@ namespace Lexer
         LEFT_BRACE,
         RIGHT_BRACE,
         COLON,
+        DOLLAR,
         SEMICOLON,
         COMMA,
         // other
@@ -139,6 +152,7 @@ namespace Lexer
         CharLiteral,
         BoolLiteral,
         InlineAsm,
+        Attribute,
         ModuleBoundary,
         EndOfFile
     };
@@ -152,65 +166,79 @@ namespace Lexer
         std::variant<std::string_view, Keyword, Operator, uint64_t, double, bool, std::monostate> value;
         std::string *source;
         std::string *mod_path;
+        std::string macroBacktrace;
     };
 
-    inline const std::unordered_map<std::string_view, Keyword> keyword_lookup = {{"namespace", Keyword::NAMESPACE},
-                                                                                 {"default", Keyword::DEFAULT},
-                                                                                 {"foreach", Keyword::FOREACH},
-                                                                                 {"align", Keyword::ALIGN},
-                                                                                 {"struct", Keyword::STRUCT},
-                                                                                 {"class", Keyword::CLASS},
-                                                                                 {"index", Keyword::INDEX},
-                                                                                 {"init", Keyword::INIT},
-                                                                                 {"import", Keyword::IMPORT},
-                                                                                 {"export", Keyword::EXPORT},
-                                                                                 {"inline", Keyword::INLINE},
-                                                                                 {"naked", Keyword::NAKED},
-                                                                                 {"reserve", Keyword::RESERVE},
-                                                                                 {"valid", Keyword::VALID},
-                                                                                 {"match", Keyword::MATCH},
-                                                                                 {"while", Keyword::WHILE},
-                                                                                 {"break", Keyword::BREAK},
-                                                                                 {"continue", Keyword::CONTINUE},
-                                                                                 {"else", Keyword::ELSE},
-                                                                                 {"using", Keyword::USING},
-                                                                                 {"global", Keyword::GLOBAL},
-                                                                                 {"case", Keyword::CASE},
-                                                                                 {"tunnel", Keyword::TUNNEL},
-                                                                                 {"move", Keyword::MOVE},
-                                                                                 {"mut", Keyword::MUT},
-                                                                                 {"ref", Keyword::REF},
-                                                                                 {"self", Keyword::SELF},
-                                                                                 {"raw", Keyword::RAW},
-                                                                                 {"sizeof", Keyword::SIZEOF},
-                                                                                 {"async", Keyword::ASYNC},
-                                                                                 {"await", Keyword::AWAIT},
-                                                                                 {"start", Keyword::START},
-                                                                                 {"def", Keyword::DEF},
-                                                                                 {"dec", Keyword::DEC},
-                                                                                 {"cdef", Keyword::CDEF},
-                                                                                 {"cdec", Keyword::CDEC},
-                                                                                 {"bool", Keyword::BOOL},
-                                                                                 {"char", Keyword::CHAR},
-                                                                                 {"State", Keyword::STATE},
-                                                                                 {"Thread", Keyword::THREAD},
-                                                                                 {"u8", Keyword::U8},
-                                                                                 {"u16", Keyword::U16},
-                                                                                 {"u32", Keyword::U32},
-                                                                                 {"u64", Keyword::U64},
-                                                                                 {"usize", Keyword::USIZE},
-                                                                                 {"i8", Keyword::I8},
-                                                                                 {"i16", Keyword::I16},
-                                                                                 {"i32", Keyword::I32},
-                                                                                 {"i64", Keyword::I64},
-                                                                                 {"f32", Keyword::F32},
-                                                                                 {"f64", Keyword::F64},
-                                                                                 {"if", Keyword::IF},
-                                                                                 {"for", Keyword::FOR},
-                                                                                 {"enum", Keyword::ENUM},
-                                                                                 {"return", Keyword::RETURN},
-                                                                                 {"union", Keyword::UNION},
-                                                                                 {"as", Keyword::AS}};
+    inline const std::unordered_map<std::string_view, Keyword> keyword_lookup = {
+        {"namespace", Keyword::NAMESPACE},
+        {"default", Keyword::DEFAULT},
+        {"foreach", Keyword::FOREACH},
+        {"align", Keyword::ALIGN},
+        {"struct", Keyword::STRUCT},
+        {"class", Keyword::CLASS},
+        {"trait", Keyword::TRAIT},
+        {"impl", Keyword::IMPL},
+        {"@index", Keyword::INDEX},
+        {"@init", Keyword::INIT},
+        {"import", Keyword::IMPORT},
+        {"export", Keyword::EXPORT},
+        {"inline", Keyword::INLINE},
+        {"naked", Keyword::NAKED},
+        {"reserve", Keyword::RESERVE},
+        {"valid", Keyword::VALID},
+        {"match", Keyword::MATCH},
+        {"while", Keyword::WHILE},
+        {"break", Keyword::BREAK},
+        {"continue", Keyword::CONTINUE},
+        {"else", Keyword::ELSE},
+        {"using", Keyword::USING},
+        {"@using", Keyword::META_USING},
+        {"@comptime", Keyword::META_COMPTIME},
+        {"@unsafe", Keyword::META_UNSAFE},
+        {"@nocheck", Keyword::META_NOCHECK},
+        {"@nocleanup", Keyword::META_NOCLEANUP},
+        {"@end", Keyword::META_END},
+        {"global", Keyword::GLOBAL},
+        {"case", Keyword::CASE},
+        {"tunnel", Keyword::TUNNEL},
+        {"move", Keyword::MOVE},
+        {"mut", Keyword::MUT},
+        {"ref", Keyword::REF},
+        {"self", Keyword::SELF},
+        {"raw", Keyword::RAW},
+        {"sizeof", Keyword::SIZEOF},
+        {"async", Keyword::ASYNC},
+        {"await", Keyword::AWAIT},
+        {"start", Keyword::START},
+        {"def", Keyword::DEF},
+        {"dec", Keyword::DEC},
+        {"cdef", Keyword::CDEF},
+        {"cdec", Keyword::CDEC},
+        {"bool", Keyword::BOOL},
+        {"char", Keyword::CHAR},
+        {"State", Keyword::STATE},
+        {"Thread", Keyword::THREAD},
+        {"u8", Keyword::U8},
+        {"u16", Keyword::U16},
+        {"u32", Keyword::U32},
+        {"u64", Keyword::U64},
+        {"usize", Keyword::USIZE},
+        {"i8", Keyword::I8},
+        {"i16", Keyword::I16},
+        {"i32", Keyword::I32},
+        {"i64", Keyword::I64},
+        {"f32", Keyword::F32},
+        {"f64", Keyword::F64},
+        {"if", Keyword::IF},
+        {"for", Keyword::FOR},
+        {"do", Keyword::DO},
+        {"yield", Keyword::YIELD},
+        {"enum", Keyword::ENUM},
+        {"return", Keyword::RETURN},
+        {"terminate", Keyword::TERMINATE},
+        {"union", Keyword::UNION},
+        {"as", Keyword::AS},
+        {"typeof", Keyword::TYPEOF}};
 
     // longest match
     inline const std::vector<std::pair<std::string_view, Operator>> operator_lookup = {
@@ -245,6 +273,7 @@ namespace Lexer
         {">", Operator::GREATER_THAN},
         {"!", Operator::EXLAMATION_MARK},
         {".", Operator::DOT},
+        {"$", Operator::DOLLAR},
         {":", Operator::COLON},
         {";", Operator::SEMICOLON},
         {",", Operator::COMMA},
@@ -270,6 +299,15 @@ namespace Lexer
         std::vector<std::string> values;
     };
 
+    struct ProceduralAttribute
+    {
+        std::string name;
+        std::vector<std::pair<std::string, std::string>> params; // {kind, capture}
+        std::string targetKind, targetCapture;
+        std::string quote, prepend;
+    };
+    const ProceduralAttribute *find_procedural_attribute(std::string_view name);
+
     struct Module
     {
         std::string path;
@@ -279,6 +317,7 @@ namespace Lexer
     struct Configuration
     {
         std::unordered_map<std::string, std::string> values;
+        std::vector<std::string> comptimeCommands;
     };
 
     struct LexedModule

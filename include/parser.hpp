@@ -1,12 +1,14 @@
 #pragma once
 #include <cstdint>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
-#include "lexer.hpp"
 #include "error.hpp"
+#include "lexer.hpp"
 
 namespace Parser
 {
@@ -16,16 +18,24 @@ namespace Parser
         Module,
         NamespaceDecl,
         BlockStmt,
+        UnsafeBlock,
+        NoCheckBlock,
+        NoCleanupBlock,
 
         // statements and declarations
         VariableDecl,
         StructDecl,
-        IndexDecl, // `index field;` selects a class's direct [] backing field
-        InitDecl,  // `init field;` routes class brace initialization to that field
+        TraitDecl,
+        ImplDecl,
+        IndexDecl,
+        InitDecl,
         EnumDecl,
         EnumMember,
+        UnionDecl,
+        UnionVariant,
         ImportStmt,
         ExportDecl,
+        UsingNamespaceDecl,
         UsingMacroDecl,
 
         // functions and tunnels
@@ -39,10 +49,10 @@ namespace Parser
         TunnelSlot,
         TunnelStmt,
         ReserveStmt,
-        MultiReserveStmt, // `reserve T first, U second = call();`
+        MultiReserveStmt,
         GenericParamList,
         GenericParam,
-        GenericArg, // explicit call-site generic instantiation: foo::<i32>(x)
+        GenericArg,
 
         // control flow
         IfStmt,
@@ -50,6 +60,8 @@ namespace Parser
         MatchStmt,
         MatchCase,
         MatchDefault,
+        UnionMatchStmt,
+        UnionPattern,
         WhileLoop,
         ForLoop,
         ForeachLoop,
@@ -57,40 +69,46 @@ namespace Parser
         ContinueStmt,
         ExprStmt,
         InlineAsmStmt,
-        ReturnStmt, // used by cdef/cdec (C-ABI functions); `def`/`dec` use tunnel/TunnelStmt
+        ReturnStmt,
+        TerminateStmt,
 
         // types and memory annotations
         PrimitiveType,
-        PointerType,   // unsafe C-Pointer
-        ReferenceType, // for writer and reader (&mut and &)
+        PointerType,
+        ReferenceType,
         OptionalType,
         ArrayType,
-        CustomType, // enums, structs, and user-defined types
+        CustomType,
+        TypeofType,
 
         // expressions
         BinaryExpr,
         UnaryExpr,
         AssignmentExpr,
         CallExpr,
-        MemberAccessExpr,  // object.member
-        ScopeAccessExpr,   // Namespace::member or Enum::member
-        IndexExpr,         // array[index]
-        StructInitExpr,    // e. g. Vector2 pos = {1.0, 2.0};
-        TunnelBindingExpr, // for inline reserve
+        MemberAccessExpr,
+        ScopeAccessExpr,
+        IndexExpr,
+        StructInitExpr,
+        TunnelBindingExpr,
         MoveExpr,
         RefExpr,
         SizeofExpr,
+        CastExpr,
+        CompileExpr,
+        TypeIfExpr,
+        DoExpr,
 
         // async / concurrency
-        StateBindingDecl, // State foo() s;
-        ThreadBindingDecl, // Native-thread deferred-call handle
-        StartStmt,        // start s;
-        AwaitExpr,        // await s; / await foo();
-        ThreadTaskStmt,   // t { ... } (cooperative named task block)
+        StateBindingDecl,
+        ThreadBindingDecl,
+        StartStmt,
+        AwaitExpr,
+        ThreadTaskStmt,
 
         // literals and identifiers
         Identifier,
-        IntegerLiteral, // signed and unsigned integers
+        IntegerLiteral,
         FloatLiteral,
         StringLiteral,
         BoolLiteral,
@@ -103,31 +121,44 @@ namespace Parser
 
         // relevant for errors
         uint64_t start;
-        std::string* mod_path;
-        std::string* source;
+        std::string *mod_path;
+        std::string *source;
 
-        std::variant<std::monostate, std::string_view, uint64_t, double, bool, Lexer::Operator,
-                     Lexer::Keyword>
-            value;
+        std::variant<std::monostate, std::string_view, uint64_t, double, bool, Lexer::Operator, Lexer::Keyword> value;
         std::vector<ASTNode> children;
         std::string inferredTypeName;
         bool hasInferredType = false;
 
         // extra flags
         bool isOptional = false;
+        bool hasElse = false;
         bool isAsync = false;
+        bool isComptime = false;
         bool isNaked = false;
         bool isExported = false;
         bool isGlobal = false;
         bool isMutable = false;
-        bool isClass = false;
-        std::string baseClassName;
         uint64_t requestedAlignment = 0;
+    };
+
+    struct AttributeUse
+    {
+        const Lexer::ProceduralAttribute *attribute;
+        Lexer::Token token;
+        std::vector<ASTNode> args;
+    };
+
+    using ItemEnv = std::unordered_map<std::string, std::string>;
+    struct TemplateEnv
+    {
+        ItemEnv values;
+        std::unordered_map<std::string, std::vector<ItemEnv>> lists;
     };
 
     extern std::vector<Lexer::Token> tokens;
     extern uint64_t pos;
     extern std::vector<ASTNode> ast;
+    extern std::vector<std::string> using_namespace_declarations;
 
     struct ParsedModule
     {
@@ -135,5 +166,5 @@ namespace Parser
     };
 
     void parse(std::vector<Lexer::LexedModule> input_tokens);
-    void dump_ast(const std::vector<ASTNode>& ast);
+    void dump_ast(const std::vector<ASTNode> &ast);
 } // namespace Parser

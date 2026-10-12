@@ -1,21 +1,199 @@
 #include "checker.hpp"
 #include "parser.hpp"
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <unordered_set>
 
 namespace Checker
 {
-    void error(std::string message, Parser::ASTNode node)
+    class CheckerRecovery final
+    {
+    };
+
+    class SymbolTable;
+    void check_node(SymbolTable &table, Parser::ASTNode &node);
+    static unsigned unsafeDepth = 0;
+
+    static bool is_trusted_stdlib_implementation(const Parser::ASTNode &node)
+    {
+        if (!node.mod_path)
+            return false;
+        const std::string_view path = *node.mod_path;
+        return path.rfind("std/", 0) == 0 || path.find("/std/") != std::string_view::npos;
+    }
+
+    void error(std::string message, Parser::ASTNode node, std::string help = {})
     {
         ErrorPos error_pos = get_error_pos(node.start, node.source);
-        Error err = {message, *(node.mod_path), error_pos.line, error_pos.column};
-        panic(err);
+        Error err = {message,        node.mod_path ? *node.mod_path : std::string{},
+                     error_pos.line, error_pos.column,
+                     false,          std::move(help)};
+        if (global_stop_on_error)
+            panic(std::move(err));
+        record_diagnostic(std::move(err), node.source);
+        throw CheckerRecovery{};
+    }
+
+    static bool type_contains_raw_pointer(const Type &type)
+    {
+        if (type.kind == TypeKind::Pointer)
+            return true;
+        if (type.innerType && type_contains_raw_pointer(*type.innerType))
+            return true;
+        return std::any_of(type.genericArgs.begin(), type.genericArgs.end(), type_contains_raw_pointer);
+    }
+
+    static void validate_unsafe_constructs(Parser::ASTNode &node, bool inUnsafe = false)
+    {
+        if (node.type == Parser::NodeType::UnsafeBlock)
+        {
+            for (auto &child : node.children)
+                validate_unsafe_constructs(child, true);
+            return;
+        }
+        if (node.type == Parser::NodeType::NoCheckBlock || node.type == Parser::NodeType::NoCleanupBlock)
+        {
+            for (auto &child : node.children)
+                validate_unsafe_constructs(child, inUnsafe);
+            return;
+        }
+        const bool cAbi = node.type == Parser::NodeType::CFunctionDecl || node.type == Parser::NodeType::CFunctionDef;
+        const bool rawPointer = node.type == Parser::NodeType::PointerType;
+        const bool rawUnary = node.type == Parser::NodeType::UnaryExpr &&
+                              std::holds_alternative<Lexer::Operator>(node.value) &&
+                              (std::get<Lexer::Operator>(node.value) == Lexer::Operator::MULTIPLY ||
+                               std::get<Lexer::Operator>(node.value) == Lexer::Operator::AMPERSAND);
+        if (!inUnsafe && !is_trusted_stdlib_implementation(node) &&
+            (cAbi || rawPointer || rawUnary || node.type == Parser::NodeType::InlineAsmStmt))
+        {
+            error("raw pointers, dereferencing, C-ABI declarations, and inline assembly require an enclosing "
+                  "@unsafe ... @end block.",
+                  node);
+        }
+        for (auto &child : node.children)
+            validate_unsafe_constructs(child, inUnsafe);
+    }
+
+    static bool is_hexadecimal_digit(char character)
+    {
+        return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') ||
+               (character >= 'A' && character <= 'F');
+    }
+
+    static void validate_brace_format_call(const Parser::ASTNode &callee, const Parser::ASTNode &templateNode,
+                                           const std::vector<Type> &arguments)
+    {
+        const std::string_view text = std::get<std::string_view>(templateNode.value);
+        size_t placeholders = 0;
+        for (size_t index = 0; index < text.size(); ++index)
+        {
+            if (text[index] == '{')
+            {
+                if (index + 1 < text.size() && text[index + 1] == '{')
+                {
+                    ++index;
+                    continue;
+                }
+                if (index + 1 < text.size() && text[index + 1] == '}')
+                {
+                    ++placeholders;
+                    ++index;
+                    continue;
+                }
+                error("format! placeholders must be '{}' and literal '{' must be written '{{'.", templateNode);
+            }
+            if (text[index] == '}')
+            {
+                if (index + 1 < text.size() && text[index + 1] == '}')
+                {
+                    ++index;
+                    continue;
+                }
+                error("format! literal '}' must be written '}}'.", templateNode);
+            }
+        }
+        if (placeholders != arguments.size())
+            error("format! placeholder count does not match its argument count.", callee);
+        for (const Type &argument : arguments)
+        {
+            switch (argument.kind)
+            {
+            case TypeKind::U8:
+            case TypeKind::U16:
+            case TypeKind::U32:
+            case TypeKind::U64:
+            case TypeKind::USIZE:
+            case TypeKind::I8:
+            case TypeKind::I16:
+            case TypeKind::I32:
+            case TypeKind::I64:
+            case TypeKind::F32:
+            case TypeKind::F64:
+            case TypeKind::Bool:
+            case TypeKind::Char:
+            case TypeKind::String:
+                break;
+            case TypeKind::Struct:
+                if (argument.name == "std::string::view::View" || argument.name == "std::string::String")
+                    break;
+                [[fallthrough]];
+            case TypeKind::Pointer:
+                if (argument.innerType && argument.innerType->kind == TypeKind::U8)
+                    break;
+                [[fallthrough]];
+            default:
+                error(
+                    "format! supports only primitive values, std::string::view::View, std::string::String, and cstr!.",
+                    callee);
+            }
+        }
+    }
+
+    static void validate_string_literal_escapes(const Parser::ASTNode &node)
+    {
+        const std::string_view literal = std::get<std::string_view>(node.value);
+        for (size_t index = 0; index < literal.size(); ++index)
+        {
+            if (literal[index] != '\\' || ++index == literal.size())
+                continue;
+
+            const size_t digits = literal[index] == 'x' ? 2 : literal[index] == 'u' ? 4 : 0;
+            if (digits == 0)
+                continue;
+            if (index + digits >= literal.size())
+                error(literal[index] == 'x' ? "Incomplete hexadecimal string escape."
+                                            : "Incomplete Unicode string escape.",
+                      node);
+
+            unsigned codepoint = 0;
+            for (size_t digit = 1; digit <= digits; ++digit)
+            {
+                if (!is_hexadecimal_digit(literal[index + digit]))
+                    error("Invalid hexadecimal string escape.", node);
+                codepoint =
+                    (codepoint << 4) | static_cast<unsigned>(std::isdigit(literal[index + digit])
+                                                                 ? literal[index + digit] - '0'
+                                                                 : std::tolower(literal[index + digit]) - 'a' + 10);
+            }
+            if (literal[index] == 'u' && codepoint >= 0xd800 && codepoint <= 0xdfff)
+                error("Unicode string escape cannot encode a surrogate.", node);
+            index += digits;
+        }
+    }
+
+    static void validate_string_literal_escapes_in_tree(const Parser::ASTNode &node)
+    {
+        if (node.type == Parser::NodeType::StringLiteral)
+            validate_string_literal_escapes(node);
+        for (const Parser::ASTNode &child : node.children)
+            validate_string_literal_escapes_in_tree(child);
     }
     class SymbolTable
     {
       private:
         std::vector<std::unordered_map<std::string, Symbol>> scopes;
+        std::vector<std::string> importedNamespaces;
         struct BorrowRecord
         {
             size_t scopeIndex;
@@ -65,7 +243,26 @@ namespace Checker
                 if (found != it->end())
                     return &found->second;
             }
+            if (name.find("::") == std::string::npos)
+            {
+                for (auto imported = importedNamespaces.rbegin(); imported != importedNamespaces.rend(); ++imported)
+                {
+                    const std::string qualified = *imported + "::" + name;
+                    for (auto it = scopes.rbegin(); it != scopes.rend(); ++it)
+                    {
+                        auto found = it->find(qualified);
+                        if (found != it->end())
+                            return &found->second;
+                    }
+                }
+            }
             return nullptr;
+        }
+
+        void import_namespace(std::string name)
+        {
+            if (std::find(importedNamespaces.begin(), importedNamespaces.end(), name) == importedNamespaces.end())
+                importedNamespaces.push_back(std::move(name));
         }
 
         bool record_borrow(const std::string &name, bool isMutable)
@@ -101,6 +298,7 @@ namespace Checker
     {
         std::unordered_map<std::string, TypeDefinition> registeredTypes;
         std::vector<std::string> activeNamespaces;
+        bool predeclaringTypeShells = false;
 
         std::string current_namespace_name()
         {
@@ -209,6 +407,7 @@ namespace Checker
             case TypeKind::Struct:
             case TypeKind::Class:
             case TypeKind::Enum:
+            case TypeKind::Union:
                 return type.name.empty() ? "user-defined" : type.name;
             case TypeKind::Generic:
                 return type.name.empty() ? "<generic>" : type.name;
@@ -225,6 +424,11 @@ namespace Checker
             default:
                 return "error";
             }
+        }
+
+        std::string explicit_cast_help(const Type &destination)
+        {
+            return "Consider an explicit `as " + type_to_string(destination) + "` conversion.";
         }
 
         TypeKind keyword_to_type_kind(Lexer::Keyword keyword)
@@ -282,10 +486,71 @@ namespace Checker
             case TypeKind::F32:
             case TypeKind::F64:
             case TypeKind::Char:
+            case TypeKind::Pointer:
                 return true;
             default:
                 return false;
             }
+        }
+
+        bool is_integer(TypeKind kind)
+        {
+            switch (kind)
+            {
+            case TypeKind::U8:
+            case TypeKind::U16:
+            case TypeKind::U32:
+            case TypeKind::U64:
+            case TypeKind::USIZE:
+            case TypeKind::I8:
+            case TypeKind::I16:
+            case TypeKind::I32:
+            case TypeKind::I64:
+            case TypeKind::Char:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        bool is_signed_integer(TypeKind kind)
+        {
+            return kind == TypeKind::I8 || kind == TypeKind::I16 || kind == TypeKind::I32 || kind == TypeKind::I64;
+        }
+
+        unsigned integer_width(TypeKind kind)
+        {
+            switch (kind)
+            {
+            case TypeKind::U8:
+            case TypeKind::I8:
+                return 8;
+            case TypeKind::U16:
+            case TypeKind::I16:
+                return 16;
+            case TypeKind::U32:
+            case TypeKind::I32:
+            case TypeKind::Char:
+                return 32;
+            case TypeKind::U64:
+            case TypeKind::I64:
+            case TypeKind::USIZE:
+                return 64;
+            default:
+                return 0;
+            }
+        }
+
+        bool can_widen_integer(TypeKind destination, TypeKind source)
+        {
+            if (!is_integer(destination) || !is_integer(source))
+                return false;
+            const unsigned destinationWidth = integer_width(destination);
+            const unsigned sourceWidth = integer_width(source);
+            if (is_signed_integer(source) && !is_signed_integer(destination))
+                return false;
+            return is_signed_integer(source) == is_signed_integer(destination) ? destinationWidth >= sourceWidth
+                                                                               : destinationWidth > sourceWidth;
         }
 
         std::string custom_type_name(const Parser::ASTNode &node)
@@ -331,7 +596,33 @@ namespace Checker
             }
             case Parser::NodeType::CustomType:
             {
-                const std::string typeName = custom_type_name(node);
+                std::string typeName = custom_type_name(node);
+
+                if (registeredTypes.find(typeName) == registeredTypes.end())
+                {
+                    for (const std::string &usingName : Parser::using_namespace_declarations)
+                    {
+                        const size_t separator = usingName.rfind("::");
+                        if (separator == std::string::npos)
+                        {
+                            const std::string qualified = usingName + "::" + typeName;
+                            if (registeredTypes.find(qualified) != registeredTypes.end())
+                            {
+                                typeName = qualified;
+                                break;
+                            }
+                            continue;
+                        }
+
+                        const std::string importedName = usingName.substr(separator + 2);
+
+                        if (importedName == typeName && registeredTypes.find(usingName) != registeredTypes.end())
+                        {
+                            typeName = usingName;
+                            break;
+                        }
+                    }
+                }
                 auto mutable_type = [&node](Type type)
                 {
                     type.isMutable = node.isMutable;
@@ -342,6 +633,8 @@ namespace Checker
 
                 const std::string unqualifiedTypeName =
                     typeName.compare(0, 5, "std::") == 0 ? typeName.substr(5) : typeName;
+                if (typeName == "int")
+                    return mutable_type(Type(TypeKind::I32));
                 if ((unqualifiedTypeName == "String" || unqualifiedTypeName == "str") &&
                     registeredTypes.find(typeName) != registeredTypes.end())
                     return mutable_type(Type(TypeKind::String, typeName));
@@ -350,8 +643,10 @@ namespace Checker
                 {
                     const std::string &structName = structNameStack.back();
                     auto structIt = registeredTypes.find(structName);
-                    if (structIt != registeredTypes.end() && structIt->second.isClass)
-                        return mutable_type(Type(TypeKind::Class, structName));
+                    if (structIt != registeredTypes.end() && structIt->second.isEnum)
+                        return mutable_type(Type(TypeKind::Enum, structName));
+                    if (structIt != registeredTypes.end() && structIt->second.isUnion)
+                        return mutable_type(Type(TypeKind::Union, structName));
                     return mutable_type(Type(TypeKind::Struct, structName));
                 }
 
@@ -361,6 +656,8 @@ namespace Checker
                 auto it = registeredTypes.find(typeName);
                 if (it != registeredTypes.end() && it->second.isEnum)
                     return mutable_type(Type(TypeKind::Enum, typeName));
+                if (it != registeredTypes.end() && it->second.isUnion)
+                    return mutable_type(Type(TypeKind::Union, typeName));
                 if (it != registeredTypes.end() && it->second.isClass)
                     return mutable_type(Type(TypeKind::Class, typeName));
                 if (it != registeredTypes.end())
@@ -532,6 +829,152 @@ namespace Checker
             return node.type == Parser::NodeType::MemberAccessExpr || node.type == Parser::NodeType::IndexExpr;
         }
 
+        static bool normalize_typeof_type(SymbolTable &table, Parser::ASTNode &typeNode);
+        Type infer_expression_type(SymbolTable &table, Parser::ASTNode &expr);
+        bool is_assignable(const Type &declaredType, const Type &valueType);
+
+        Type union_payload_type(const TypeDefinition &definition, const Type &unionType,
+                                const Parser::ASTNode &payloadNode)
+        {
+            Type payload = infer_type_from_node(payloadNode);
+            if (payload.kind != TypeKind::Generic)
+                return payload;
+            const auto parameter =
+                std::find(definition.genericParameters.begin(), definition.genericParameters.end(), payload.name);
+            if (parameter == definition.genericParameters.end())
+                return payload;
+            const size_t index = static_cast<size_t>(parameter - definition.genericParameters.begin());
+            return index < unionType.genericArgs.size() ? unionType.genericArgs[index] : payload;
+        }
+
+        Type substitute_aggregate_generics(const Type &type, const TypeDefinition &definition,
+                                           const Type &aggregateType)
+        {
+            if (type.kind == TypeKind::Generic)
+            {
+                const auto parameter =
+                    std::find(definition.genericParameters.begin(), definition.genericParameters.end(), type.name);
+                if (parameter != definition.genericParameters.end())
+                {
+                    const size_t index = static_cast<size_t>(parameter - definition.genericParameters.begin());
+                    if (index < aggregateType.genericArgs.size())
+                        return aggregateType.genericArgs[index];
+                }
+                return type;
+            }
+
+            Type result = type;
+            if (type.innerType)
+                result.innerType =
+                    std::make_shared<Type>(substitute_aggregate_generics(*type.innerType, definition, aggregateType));
+            for (Type &argument : result.genericArgs)
+                argument = substitute_aggregate_generics(argument, definition, aggregateType);
+            return result;
+        }
+
+        Parser::ASTNode substitute_union_payload_node(const TypeDefinition &definition,
+                                                      const Parser::ASTNode &subjectTypeNode,
+                                                      const Parser::ASTNode &payloadNode)
+        {
+            if (payloadNode.type == Parser::NodeType::CustomType)
+            {
+                const std::string name = custom_type_name(payloadNode);
+                const auto parameter =
+                    std::find(definition.genericParameters.begin(), definition.genericParameters.end(), name);
+                if (parameter != definition.genericParameters.end())
+                {
+                    const size_t index = static_cast<size_t>(parameter - definition.genericParameters.begin());
+                    if (index < subjectTypeNode.children.size())
+                        return subjectTypeNode.children[index];
+                }
+            }
+            Parser::ASTNode result = payloadNode;
+            for (Parser::ASTNode &child : result.children)
+                child = substitute_union_payload_node(definition, subjectTypeNode, child);
+            return result;
+        }
+
+        bool infer_union_constructor_type(SymbolTable &table, Parser::ASTNode &expr, Type &result)
+        {
+            if (expr.children.empty() || expr.children.front().type != Parser::NodeType::ScopeAccessExpr)
+                return false;
+            const Parser::ASTNode &callee = expr.children.front();
+            const std::string unionName = scope_access_name(callee.children.front());
+            const std::string variantName = std::string(std::get<std::string_view>(callee.value));
+            const auto definition = registeredTypes.find(unionName);
+            if (definition == registeredTypes.end() || !definition->second.isUnion)
+                return false;
+            const auto variant = definition->second.unionVariants.find(variantName);
+            if (variant == definition->second.unionVariants.end())
+                error("Unknown union variant '" + unionName + "::" + variantName + "'.", callee);
+            if (expr.children.size() - 1 != variant->second.payloadTypes.size())
+                error("Union constructor argument count mismatch.", callee);
+
+            result = Type(TypeKind::Union, unionName);
+            for (const std::string &parameter : definition->second.genericParameters)
+            {
+                bool inferred = false;
+                for (size_t index = 0; index < variant->second.payloadTypes.size(); ++index)
+                {
+                    const Type payload = infer_type_from_node(variant->second.payloadTypes[index]);
+                    if (payload.kind != TypeKind::Generic || payload.name != parameter)
+                        continue;
+                    const Parser::ASTNode &argument = expr.children[index + 1];
+                    result.genericArgs.push_back(
+                        argument.type == Parser::NodeType::IntegerLiteral
+                            ? Type(TypeKind::I32)
+                            : infer_expression_type(table, const_cast<Parser::ASTNode &>(argument)));
+                    inferred = true;
+                    break;
+                }
+                if (!inferred)
+                    error("Cannot infer generic union argument '" + parameter + "' from this constructor.", callee);
+            }
+
+            for (size_t index = 0; index < variant->second.payloadTypes.size(); ++index)
+            {
+                const Type expected =
+                    union_payload_type(definition->second, result, variant->second.payloadTypes[index]);
+                const Parser::ASTNode &argument = expr.children[index + 1];
+                const Type actual = infer_expression_type(table, const_cast<Parser::ASTNode &>(argument));
+                if (!is_assignable(expected, actual) &&
+                    !(argument.type == Parser::NodeType::IntegerLiteral && is_numeric(expected.kind)))
+                    error("Union constructor argument type mismatch.", argument);
+            }
+            return true;
+        }
+
+        bool check_union_constructor_for_target(SymbolTable &table, Parser::ASTNode &expr, const Type &target)
+        {
+            if (expr.children.empty() || expr.children.front().type != Parser::NodeType::ScopeAccessExpr)
+                return false;
+            const Parser::ASTNode &callee = expr.children.front();
+            const std::string unionName = scope_access_name(callee.children.front());
+            const auto definition = registeredTypes.find(unionName);
+            if (definition == registeredTypes.end() || !definition->second.isUnion)
+                return false;
+            if (target.kind != TypeKind::Union || target.name != unionName ||
+                target.genericArgs.size() != definition->second.genericParameters.size())
+                error("Union constructor does not match its declared target type.", callee);
+            const std::string variantName = std::string(std::get<std::string_view>(callee.value));
+            const auto variant = definition->second.unionVariants.find(variantName);
+            if (variant == definition->second.unionVariants.end())
+                error("Unknown union variant '" + unionName + "::" + variantName + "'.", callee);
+            if (expr.children.size() - 1 != variant->second.payloadTypes.size())
+                error("Union constructor argument count mismatch.", callee);
+            for (size_t index = 0; index < variant->second.payloadTypes.size(); ++index)
+            {
+                const Type expected =
+                    union_payload_type(definition->second, target, variant->second.payloadTypes[index]);
+                const Parser::ASTNode &argument = expr.children[index + 1];
+                const Type actual = infer_expression_type(table, const_cast<Parser::ASTNode &>(argument));
+                if (!is_assignable(expected, actual) &&
+                    !(argument.type == Parser::NodeType::IntegerLiteral && is_numeric(expected.kind)))
+                    error("Union constructor argument type mismatch.", argument);
+            }
+            return true;
+        }
+
         Type infer_expression_type(SymbolTable &table, Parser::ASTNode &expr)
         {
             switch (expr.type)
@@ -564,7 +1007,32 @@ namespace Checker
             case Parser::NodeType::CharLiteral:
                 return Type(TypeKind::Char);
             case Parser::NodeType::StringLiteral:
+                validate_string_literal_escapes(expr);
                 return Type(TypeKind::String);
+            case Parser::NodeType::StructInitExpr:
+            {
+                if (!expr.hasInferredType || expr.inferredTypeName.empty())
+                {
+                    error("Brace initializer requires an assignment or declaration target, or an explicit type name.",
+                          expr);
+                    return Type(TypeKind::Error);
+                }
+                Parser::ASTNode typeNode{Parser::NodeType::CustomType, expr.start, expr.mod_path, expr.source,
+                                         std::string_view{},           {}};
+                typeNode.inferredTypeName = expr.inferredTypeName;
+                Type type = infer_type_from_node(typeNode);
+                if (type.kind != TypeKind::Struct && type.kind != TypeKind::Class)
+                    error("Brace initializer requires a struct type.", expr);
+                const auto definition = registeredTypes.find(type.name);
+                if (definition == registeredTypes.end())
+                    error("Brace initializer names an unknown struct type.", expr);
+                if (expr.children.size() != definition->second.members.size())
+                    error("Brace initializer field count does not match its type.", expr);
+                for (Parser::ASTNode &field : expr.children)
+                    (void)infer_expression_type(table, field);
+                expr.inferredTypeName = type.name;
+                return type;
+            }
             case Parser::NodeType::PointerType:
                 return Type(TypeKind::Pointer, "*");
             case Parser::NodeType::ReferenceType:
@@ -593,6 +1061,101 @@ namespace Checker
             }
             case Parser::NodeType::SizeofExpr:
                 return Type(TypeKind::U64);
+            case Parser::NodeType::TypeIfExpr:
+            {
+                if (expr.children.size() != 4)
+                {
+                    error("@comptime iftype requires a subject, target type, selected expression, and fallback "
+                          "expression.",
+                          expr);
+                    return Type(TypeKind::Error);
+                }
+                const Type subject = infer_expression_type(table, expr.children[0]);
+                normalize_typeof_type(table, expr.children[1]);
+                const Type target = infer_type_from_node(expr.children[1]);
+                const bool matches = is_assignable(target, subject) && is_assignable(subject, target);
+                expr.value = matches;
+                expr.hasInferredType = true;
+                const Type result = infer_expression_type(table, expr.children[matches ? 2 : 3]);
+                expr.inferredTypeName = type_to_string(result);
+                return result;
+            }
+            case Parser::NodeType::DoExpr:
+            {
+                if (expr.children.empty())
+                {
+                    error("A do expression requires a final yield value.", expr);
+                    return Type(TypeKind::Error);
+                }
+                if (!expr.hasInferredType)
+                {
+                    table.push_scope();
+                    for (size_t index = 0; index + 1 < expr.children.size(); ++index)
+                        check_node(table, expr.children[index]);
+                    const Type result = infer_expression_type(table, expr.children.back());
+                    table.pop_scope();
+                    expr.hasInferredType = true;
+                    expr.inferredTypeName = type_to_string(result);
+                    return result;
+                }
+                const std::string &name = expr.inferredTypeName;
+                if (name == "bool")
+                    return Type(TypeKind::Bool);
+                if (name == "char")
+                    return Type(TypeKind::Char);
+                if (name == "i8")
+                    return Type(TypeKind::I8);
+                if (name == "i16")
+                    return Type(TypeKind::I16);
+                if (name == "i32")
+                    return Type(TypeKind::I32);
+                if (name == "i64")
+                    return Type(TypeKind::I64);
+                if (name == "u8")
+                    return Type(TypeKind::U8);
+                if (name == "u16")
+                    return Type(TypeKind::U16);
+                if (name == "u32")
+                    return Type(TypeKind::U32);
+                if (name == "u64")
+                    return Type(TypeKind::U64);
+                if (name == "usize")
+                    return Type(TypeKind::USIZE);
+                if (name == "f32")
+                    return Type(TypeKind::F32);
+                if (name == "f64")
+                    return Type(TypeKind::F64);
+                return Type(TypeKind::Struct, name);
+            }
+            case Parser::NodeType::CompileExpr:
+                if (expr.children.size() != 1)
+                {
+                    error("@comptime expression requires exactly one expression.", expr);
+                    return Type(TypeKind::Error);
+                }
+                return infer_expression_type(table, expr.children.front());
+            case Parser::NodeType::CastExpr:
+            {
+                if (expr.children.size() != 2)
+                {
+                    error("A cast requires a value and target type.", expr);
+                }
+                const Type source = infer_expression_type(table, expr.children.front());
+                Parser::ASTNode &targetNode = expr.children[1];
+                normalize_typeof_type(table, targetNode);
+                const Type target = infer_type_from_node(targetNode);
+                const bool sourceNumeric = is_numeric(source.kind) || source.kind == TypeKind::Enum;
+                const bool targetNumeric = is_numeric(target.kind);
+                const bool booleanCast =
+                    target.kind == TypeKind::Bool && (sourceNumeric || source.kind == TypeKind::Bool);
+                if ((!sourceNumeric || !targetNumeric) && !booleanCast)
+                {
+                    error("Casts require numeric values or a numeric value cast to bool.", expr);
+                }
+                expr.hasInferredType = true;
+                expr.inferredTypeName = type_to_string(target);
+                return target;
+            }
             case Parser::NodeType::CallExpr:
             {
                 if (expr.children.empty())
@@ -600,17 +1163,41 @@ namespace Checker
                     error("Cannot infer type from call expression with no callee.", expr);
                     return {TypeKind::Error, {}};
                 }
+                Type unionConstructor;
+                if (infer_union_constructor_type(table, expr, unionConstructor))
+                    return unionConstructor;
                 const Parser::ASTNode &callee = expr.children.front();
                 std::string name;
                 if (callee.type == Parser::NodeType::Identifier)
                     name = std::string(std::get<std::string_view>(callee.value));
                 else if (callee.type == Parser::NodeType::ScopeAccessExpr)
                     name = scope_access_name(callee);
-                if (name == "printf" && stdlibEnabled)
-                    return Type(TypeKind::I64);
+                if ((name == "__shaft_format" || name == "__shaft_println") && stdlibEnabled)
+                    return Type(TypeKind::Void);
                 if (const Symbol *function = table.lookup(name);
                     function && function->isFunction && function->hasResultType)
+                {
                     return function->resultType;
+                }
+
+                for (const std::string &usingName : Parser::using_namespace_declarations)
+                {
+                    const size_t separator = usingName.rfind("::");
+
+                    if (separator == std::string::npos)
+                        continue;
+
+                    const std::string importedName = usingName.substr(separator + 2);
+
+                    if (importedName != name)
+                        continue;
+
+                    if (const Symbol *function = table.lookup(usingName);
+                        function && function->isFunction && function->hasResultType)
+                    {
+                        return function->resultType;
+                    }
+                }
                 return {TypeKind::Error, {}};
             }
             case Parser::NodeType::UnaryExpr:
@@ -671,7 +1258,7 @@ namespace Checker
                     const std::string elementName =
                         std::string(std::get<std::string_view>(backingNode.children.front().value));
                     if (registeredTypes.find(elementName) == registeredTypes.end())
-                        return Type(TypeKind::Generic, elementName);
+                        return substitute_aggregate_generics(*backing.innerType, definition->second, receiver);
                 }
                 return *backing.innerType;
             }
@@ -687,29 +1274,23 @@ namespace Checker
                     (receiver.kind == TypeKind::Pointer || receiver.kind == TypeKind::Reference) && receiver.innerType
                         ? *receiver.innerType
                         : receiver;
+                const std::string memberName = std::string(std::get<std::string_view>(expr.value));
+                if (receiver.kind == TypeKind::Array && memberName == "length")
+                    return Type(TypeKind::U64);
                 const auto definition = registeredTypes.find(aggregateReceiver.name);
                 if (definition == registeredTypes.end())
                 {
                     error("Member access on unknown type '" + aggregateReceiver.name + "'.", expr);
                     return {TypeKind::Error, {}};
                 }
-                const std::string memberName = std::string(std::get<std::string_view>(expr.value));
                 const auto field = definition->second.members.find(memberName);
                 if (field == definition->second.members.end())
                 {
                     error("Member '" + memberName + "' not found in type '" + aggregateReceiver.name + "'.", expr);
                     return {TypeKind::Error, {}};
                 }
-                const Type fieldType = infer_type_from_node(field->second.typeNode);
-                const auto generic = std::find(definition->second.genericParameters.begin(),
-                                               definition->second.genericParameters.end(), fieldType.name);
-                if (generic != definition->second.genericParameters.end())
-                {
-                    const size_t index = static_cast<size_t>(generic - definition->second.genericParameters.begin());
-                    if (index < aggregateReceiver.genericArgs.size())
-                        return aggregateReceiver.genericArgs[index];
-                }
-                return fieldType;
+                return substitute_aggregate_generics(infer_type_from_node(field->second.typeNode), definition->second,
+                                                     aggregateReceiver);
             }
             case Parser::NodeType::ScopeAccessExpr:
             {
@@ -757,7 +1338,7 @@ namespace Checker
                     resultType = (leftType.kind == TypeKind::F32 || leftType.kind == TypeKind::F64 ||
                                   rightType.kind == TypeKind::F32 || rightType.kind == TypeKind::F64)
                                      ? Type{TypeKind::F64, {}}
-                                     : Type{TypeKind::U64, {}};
+                                     : (leftType.kind == rightType.kind ? leftType : Type{TypeKind::U64, {}});
                 else if (leftType.kind == rightType.kind)
                     resultType = leftType;
 
@@ -782,6 +1363,75 @@ namespace Checker
             }
         }
 
+        static Lexer::Keyword primitive_keyword(TypeKind kind)
+        {
+            switch (kind)
+            {
+            case TypeKind::U8:
+                return Lexer::Keyword::U8;
+            case TypeKind::U16:
+                return Lexer::Keyword::U16;
+            case TypeKind::U32:
+                return Lexer::Keyword::U32;
+            case TypeKind::U64:
+                return Lexer::Keyword::U64;
+            case TypeKind::USIZE:
+                return Lexer::Keyword::USIZE;
+            case TypeKind::I8:
+                return Lexer::Keyword::I8;
+            case TypeKind::I16:
+                return Lexer::Keyword::I16;
+            case TypeKind::I32:
+                return Lexer::Keyword::I32;
+            case TypeKind::I64:
+                return Lexer::Keyword::I64;
+            case TypeKind::F32:
+                return Lexer::Keyword::F32;
+            case TypeKind::F64:
+                return Lexer::Keyword::F64;
+            case TypeKind::Bool:
+                return Lexer::Keyword::BOOL;
+            case TypeKind::Char:
+                return Lexer::Keyword::CHAR;
+            case TypeKind::State:
+                return Lexer::Keyword::STATE;
+            case TypeKind::Thread:
+                return Lexer::Keyword::THREAD;
+            default:
+                return Lexer::Keyword::AS;
+            }
+        }
+
+        static bool normalize_typeof_type(SymbolTable &table, Parser::ASTNode &typeNode)
+        {
+            if (typeNode.type != Parser::NodeType::TypeofType)
+                return true;
+            if (typeNode.children.size() != 1)
+            {
+                error("typeof requires exactly one expression.", typeNode);
+            }
+
+            Parser::ASTNode &expression = typeNode.children.front();
+            if (expression.type == Parser::NodeType::Identifier)
+            {
+                if (const Symbol *symbol = table.lookup(std::string(std::get<std::string_view>(expression.value))))
+                {
+                    typeNode = symbol->typeNode;
+                    return normalize_typeof_type(table, typeNode);
+                }
+            }
+
+            const Type inferred = infer_expression_type(table, expression);
+            const Lexer::Keyword keyword = primitive_keyword(inferred.kind);
+            if (keyword == Lexer::Keyword::AS)
+            {
+                error("typeof can infer only primitive expression types or declared bindings.", expression);
+            }
+            typeNode = Parser::ASTNode{
+                Parser::NodeType::PrimitiveType, expression.start, expression.mod_path, expression.source, keyword, {}};
+            return true;
+        }
+
         bool is_pointer_to_byte(const Type &type)
         {
             if (type.kind != TypeKind::Pointer || !type.innerType)
@@ -798,6 +1448,9 @@ namespace Checker
                 return true;
             if (declaredType.kind == TypeKind::String &&
                 (declaredType.name == "str" || declaredType.name == "std::str"))
+                return true;
+            if ((declaredType.kind == TypeKind::Struct || declaredType.kind == TypeKind::Class) &&
+                declaredType.name == "std::string::view::View")
                 return true;
             return false;
         }
@@ -817,7 +1470,6 @@ namespace Checker
                 return is_assignable(declaredType.innerType ? *declaredType.innerType : Type{},
                                      valueType.innerType ? *valueType.innerType : Type{});
             }
-
             if ((declaredType.kind == TypeKind::Array && valueType.kind == TypeKind::Pointer) ||
                 (declaredType.kind == TypeKind::Pointer && valueType.kind == TypeKind::Array))
                 return true;
@@ -852,19 +1504,43 @@ namespace Checker
                 (declaredType.kind == TypeKind::Enum && is_numeric(valueType.kind)))
                 return true;
             if (declaredType.kind == TypeKind::Struct || declaredType.kind == TypeKind::Class ||
-                declaredType.kind == TypeKind::Enum)
+                declaredType.kind == TypeKind::Enum || declaredType.kind == TypeKind::Union)
             {
-                return valueType.kind == declaredType.kind && declaredType.name == valueType.name;
+                return valueType.kind == declaredType.kind && declaredType.name == valueType.name &&
+                       declaredType.genericArgs.size() == valueType.genericArgs.size() &&
+                       std::equal(declaredType.genericArgs.begin(), declaredType.genericArgs.end(),
+                                  valueType.genericArgs.begin(), [](const Type &left, const Type &right)
+                                  { return types_structurally_equal(left, right); });
             }
             if (declaredType.kind == valueType.kind)
                 return true;
             if (declaredType.kind == TypeKind::Struct || declaredType.kind == TypeKind::Class ||
-                declaredType.kind == TypeKind::Enum)
+                declaredType.kind == TypeKind::Enum || declaredType.kind == TypeKind::Union)
                 return valueType.kind == declaredType.kind && declaredType.name == valueType.name;
-            if (is_numeric(declaredType.kind) && is_numeric(valueType.kind))
-                return true;
+            if (is_integer(declaredType.kind) && is_integer(valueType.kind))
+                return can_widen_integer(declaredType.kind, valueType.kind);
+            if ((declaredType.kind == TypeKind::F32 || declaredType.kind == TypeKind::F64) &&
+                (valueType.kind == TypeKind::F32 || valueType.kind == TypeKind::F64))
+                return declaredType.kind == TypeKind::F64 || valueType.kind == TypeKind::F32;
 
             return false;
+        }
+
+        Type substitute_generic_type(const Type &type, const std::unordered_map<std::string, Type> &bindings)
+        {
+            if (type.kind == TypeKind::Generic)
+            {
+                const auto binding = bindings.find(type.name);
+                if (binding != bindings.end())
+                    return binding->second;
+            }
+
+            Type result = type;
+            if (type.innerType)
+                result.innerType = std::make_shared<Type>(substitute_generic_type(*type.innerType, bindings));
+            for (Type &argument : result.genericArgs)
+                argument = substitute_generic_type(argument, bindings);
+            return result;
         }
 
         bool implicitly_borrows_for_reference_parameter(const Type &parameterType, const Type &argumentType,
@@ -884,6 +1560,13 @@ namespace Checker
                    is_assignable(*parameterType.innerType, argumentType);
         }
 
+        bool implicitly_passes_reference_as_pointer(const Type &parameterType, const Type &argumentType)
+        {
+            return parameterType.kind == TypeKind::Pointer && argumentType.kind == TypeKind::Reference &&
+                   parameterType.innerType && argumentType.innerType &&
+                   is_assignable(*parameterType.innerType, *argumentType.innerType);
+        }
+
         bool implicitly_dereferences_for_value_parameter(const Type &parameterType, const Type &argumentType)
         {
             return parameterType.kind != TypeKind::Reference && argumentType.kind == TypeKind::Reference &&
@@ -894,15 +1577,24 @@ namespace Checker
         {
             if (left.kind == TypeKind::Error || right.kind == TypeKind::Error)
                 return true;
+            // A generic body is checked before specialization
             if (left.kind == TypeKind::Generic || right.kind == TypeKind::Generic)
-                return true;
+                return op != Lexer::Operator::MODULO && op != Lexer::Operator::AMPERSAND &&
+                       op != Lexer::Operator::PIPE && op != Lexer::Operator::CARET &&
+                       op != Lexer::Operator::LEFT_SHIFT && op != Lexer::Operator::RIGHT_SHIFT;
             if (op == Lexer::Operator::AND || op == Lexer::Operator::OR)
                 return left.kind == TypeKind::Bool && right.kind == TypeKind::Bool;
             if (op == Lexer::Operator::ASSIGN)
                 return (left.kind == TypeKind::String && right.kind == TypeKind::String) ||
                        (left.kind == right.kind && left.name == right.name && left.kind != TypeKind::Pointer);
-            if (left.kind == TypeKind::Struct || left.kind == TypeKind::Class || left.kind == TypeKind::Enum)
-                return left.kind == right.kind && left.name == right.name;
+            if (left.kind == TypeKind::Enum || right.kind == TypeKind::Enum)
+                return left.kind == TypeKind::Enum && right.kind == TypeKind::Enum && left.name == right.name &&
+                       (op == Lexer::Operator::EQUAL || op == Lexer::Operator::NOT_EQUAL);
+            if (left.kind == TypeKind::Struct || right.kind == TypeKind::Struct)
+                return false;
+            if (left.kind == TypeKind::Class || left.kind == TypeKind::Union || left.kind == TypeKind::Array ||
+                right.kind == TypeKind::Class || right.kind == TypeKind::Union || right.kind == TypeKind::Array)
+                return false;
             if (op == Lexer::Operator::LESS_THAN || op == Lexer::Operator::GREATER_THAN ||
                 op == Lexer::Operator::LESS_EQUAL || op == Lexer::Operator::GREATER_EQUAL)
                 return (is_numeric(left.kind) && is_numeric(right.kind)) ||
@@ -944,7 +1636,8 @@ namespace Checker
 
     void register_type_definition(const Parser::ASTNode &node)
     {
-        if (node.type != Parser::NodeType::StructDecl && node.type != Parser::NodeType::EnumDecl)
+        if (node.type != Parser::NodeType::StructDecl && node.type != Parser::NodeType::EnumDecl &&
+            node.type != Parser::NodeType::UnionDecl)
             return;
 
         TypeDefinition def;
@@ -959,20 +1652,7 @@ namespace Checker
             return;
 
         def.isEnum = node.type == Parser::NodeType::EnumDecl;
-        def.isClass = node.isClass;
-        def.baseClassName = node.baseClassName;
-        if (!def.baseClassName.empty())
-        {
-            const auto base = registeredTypes.find(def.baseClassName);
-            if (base == registeredTypes.end() || !base->second.isClass)
-            {
-                error("Base class '" + def.baseClassName + "' must be declared before its derived class.", node);
-            }
-            def.members = base->second.members;
-            def.methods = base->second.methods;
-            def.indexedField = base->second.indexedField;
-            def.initializedField = base->second.initializedField;
-        }
+        def.isUnion = node.type == Parser::NodeType::UnionDecl;
         for (const auto &child : node.children)
         {
             if (child.type == Parser::NodeType::GenericParam)
@@ -980,6 +1660,29 @@ namespace Checker
         }
 
         registeredTypes[def.name] = def;
+        if (predeclaringTypeShells)
+            return;
+
+        if (def.isUnion)
+        {
+            size_t tag = 0;
+            for (const auto &child : node.children)
+            {
+                if (child.type != Parser::NodeType::UnionVariant || child.children.empty())
+                    continue;
+                const std::string variantName = std::string(std::get<std::string_view>(child.children.front().value));
+                if (def.unionVariants.find(variantName) != def.unionVariants.end())
+                    error("Duplicate union variant '" + variantName + "'.", child);
+                TypeDefinition::UnionVariant variant;
+                variant.tag = tag++;
+                variant.payloadTypes.assign(child.children.begin() + 1, child.children.end());
+                def.unionVariants.emplace(variantName, std::move(variant));
+            }
+            if (def.unionVariants.empty())
+                error("A union must declare at least one variant.", node);
+            registeredTypes[def.name] = std::move(def);
+            return;
+        }
 
         uint64_t enumMaximum = UINT64_MAX;
         if (def.isEnum && node.children.size() > 1 && node.children[1].type == Parser::NodeType::PrimitiveType)
@@ -1079,7 +1782,7 @@ namespace Checker
                 };
                 if (!child.children.empty() && has_named_runtime_array(has_named_runtime_array, child.children.front()))
                 {
-                    error("runtime array length bindings are local and cannot appear in struct or class fields.", node);
+                    error("runtime array length bindings are local and cannot appear in struct fields.", node);
                 }
                 if (!child.children.empty() && child.children.front().type == Parser::NodeType::CustomType &&
                     std::get<std::string_view>(child.children.front().value) ==
@@ -1098,7 +1801,7 @@ namespace Checker
             {
                 if (!def.indexedField.empty())
                 {
-                    error("A class can declare only one indexed backing field.", node);
+                    error("A struct can declare only one indexed backing field.", node);
                 }
                 def.indexedField = std::string(std::get<std::string_view>(child.value));
             }
@@ -1106,7 +1809,7 @@ namespace Checker
             {
                 if (!def.initializedField.empty())
                 {
-                    error("A class can declare only one initializer backing field.", node);
+                    error("A struct can declare only one initializer backing field.", node);
                 }
                 def.initializedField = std::string(std::get<std::string_view>(child.value));
             }
@@ -1122,6 +1825,12 @@ namespace Checker
                 bool hasReceiver = false;
                 for (const auto &parameter : child.children)
                 {
+                    if (parameter.type == Parser::NodeType::TunnelSlot && !parameter.children.empty())
+                    {
+                        method.tunnelSlotTypes.push_back(infer_type_from_node(parameter.children.front()));
+                        method.tunnelSlotOptional.push_back(parameter.isOptional);
+                        method.tunnelSlotNames.push_back(std::string(std::get<std::string_view>(parameter.value)));
+                    }
                     if (parameter.type != Parser::NodeType::Param || parameter.children.empty())
                         continue;
                     if (!hasReceiver)
@@ -1154,9 +1863,17 @@ namespace Checker
                       node);
             }
         }
-        if (!def.initializedField.empty() && def.initializedField != def.indexedField)
+        if (!def.initializedField.empty())
         {
-            error("Init declaration must name the indexed backing field.", node);
+            const auto initialized = def.members.find(def.initializedField);
+            if (initialized == def.members.end())
+            {
+                error("Init declaration names unknown field '" + def.initializedField + "'.", node);
+            }
+            if (initialized->second.typeNode.type != Parser::NodeType::PointerType)
+            {
+                error("Init backing field '" + def.initializedField + "' must be a pointer.", node);
+            }
         }
 
         registeredTypes[def.name] = def;
@@ -1169,51 +1886,115 @@ namespace Checker
 
         std::vector<Type> argTypes;
         std::vector<const Parser::ASTNode *> argNodes;
-        bool hasExplicitGenericArguments = false;
+        std::vector<Type> explicitGenericArguments;
         for (size_t i = 1; i < expr.children.size(); ++i)
         {
             if (expr.children[i].type == Parser::NodeType::GenericArg)
             {
-                hasExplicitGenericArguments = true;
+                if (expr.children[i].children.empty())
+                    error("Malformed explicit generic argument.", expr.children[i]);
+                explicitGenericArguments.push_back(infer_type_from_node(expr.children[i].children.front()));
                 continue;
             }
             argTypes.push_back(infer_expression_type(table, expr.children[i]));
             argNodes.push_back(&expr.children[i]);
         }
 
+        Type unionConstructor;
+        if (infer_union_constructor_type(table, expr, unionConstructor))
+            return;
+
         const auto &callee = expr.children.front();
-        if (callee.type == Parser::NodeType::Identifier)
+        if (callee.type == Parser::NodeType::Identifier || callee.type == Parser::NodeType::ScopeAccessExpr)
         {
-            const std::string calleeName = std::string(std::get<std::string_view>(callee.value));
-            if (calleeName == "printf" && stdlibEnabled)
+            const std::string calleeName = callee.type == Parser::NodeType::Identifier
+                                               ? std::string(std::get<std::string_view>(callee.value))
+                                               : scope_access_name(callee);
+            if ((calleeName == "__shaft_format" || calleeName == "__shaft_println") && stdlibEnabled)
             {
                 if (argTypes.empty() || expr.children[1].type != Parser::NodeType::StringLiteral)
                 {
-                    error("printf requires a string-literal format argument.", callee);
+                    error(calleeName == "__shaft_format" ? "format! requires a string-literal format argument."
+                                                         : "println! requires a string-literal format argument.",
+                          callee);
                 }
+                if (calleeName == "__shaft_format" || calleeName == "__shaft_println")
+                    validate_brace_format_call(callee, expr.children[1],
+                                               std::vector<Type>(argTypes.begin() + 1, argTypes.end()));
                 return;
             }
             Symbol *symbol = table.lookup(calleeName);
+
+            for (std::string enclosing = current_namespace_name(); !symbol && !enclosing.empty();)
+            {
+                symbol = table.lookup(enclosing + "::" + calleeName);
+
+                const size_t separator = enclosing.rfind("::");
+
+                if (separator == std::string::npos)
+                    enclosing.clear();
+                else
+                    enclosing.resize(separator);
+            }
+
+            for (const std::string &usingName : Parser::using_namespace_declarations)
+            {
+                if (symbol)
+                    break;
+
+                const size_t separator = usingName.rfind("::");
+
+                if (separator == std::string::npos)
+                    continue;
+
+                const std::string importedName = usingName.substr(separator + 2);
+
+                if (importedName != calleeName)
+                    continue;
+
+                symbol = table.lookup(usingName);
+            }
             if (!symbol || !symbol->isFunction)
             {
-                if (expr.children.size() == 1)
-                    return;
                 error("Unknown function '" + calleeName + "'.", callee);
             }
+            const bool exposesRawPointer =
+                std::any_of(symbol->paramTypes.begin(), symbol->paramTypes.end(), type_contains_raw_pointer) ||
+                (symbol->hasResultType && type_contains_raw_pointer(symbol->resultType)) ||
+                std::any_of(symbol->tunnelSlotTypes.begin(), symbol->tunnelSlotTypes.end(), type_contains_raw_pointer);
+            const bool safeProcessExit = calleeName == "exit" || calleeName == "std::exit";
+            if ((symbol->isCFunction || exposesRawPointer) && !safeProcessExit && unsafeDepth == 0 &&
+                !is_trusted_stdlib_implementation(expr))
+                error(symbol->isCFunction
+                          ? "C-ABI calls require an enclosing @unsafe ... @end block."
+                          : "calls that expose raw pointers require an enclosing @unsafe ... @end block.",
+                      callee);
             if (symbol->paramTypes.size() != argTypes.size())
             {
                 error("Function argument count mismatch.", callee);
             }
-            for (size_t i = 0; i < argTypes.size(); ++i)
+            if (!explicitGenericArguments.empty() &&
+                symbol->genericParameters.size() != explicitGenericArguments.size())
             {
+                error("Generic function argument count does not match its declaration.", callee);
+            }
+            std::unordered_map<std::string, Type> genericBindings;
+            for (size_t index = 0; index < explicitGenericArguments.size(); ++index)
+                genericBindings.emplace(symbol->genericParameters[index], explicitGenericArguments[index]);
+            const bool validateArgumentTypes =
+                callee.type != Parser::NodeType::ScopeAccessExpr || explicitGenericArguments.empty();
+            for (size_t i = 0; i < argTypes.size() && validateArgumentTypes; ++i)
+            {
+                const Type parameterType = substitute_generic_type(symbol->paramTypes[i], genericBindings);
                 const bool cAbiWordConversion =
-                    symbol->isCFunction &&
-                    ((symbol->paramTypes[i].kind == TypeKind::Pointer && is_numeric(argTypes[i].kind)) ||
-                     (is_numeric(symbol->paramTypes[i].kind) && argTypes[i].kind == TypeKind::Pointer));
-                if (!hasExplicitGenericArguments && !is_assignable(symbol->paramTypes[i], argTypes[i]) &&
-                    !implicitly_borrows_for_reference_parameter(symbol->paramTypes[i], argTypes[i], *argNodes[i]) &&
-                    !implicitly_dereferences_for_value_parameter(symbol->paramTypes[i], argTypes[i]) &&
-                    !string_literal_decays_to_pointer(symbol->paramTypes[i], *argNodes[i]) && !cAbiWordConversion)
+                    symbol->isCFunction && ((is_numeric(parameterType.kind) && is_numeric(argTypes[i].kind)) ||
+                                            (parameterType.kind == TypeKind::Pointer && is_numeric(argTypes[i].kind)) ||
+                                            (is_numeric(parameterType.kind) && argTypes[i].kind == TypeKind::Pointer));
+                if (!is_assignable(parameterType, argTypes[i]) &&
+                    !implicitly_borrows_for_reference_parameter(parameterType, argTypes[i], *argNodes[i]) &&
+                    !implicitly_passes_reference_as_pointer(parameterType, argTypes[i]) &&
+                    !implicitly_dereferences_for_value_parameter(parameterType, argTypes[i]) &&
+                    !string_literal_decays_to_pointer(parameterType, *argNodes[i]) && !cAbiWordConversion)
                 {
                     error("Function argument type mismatch.", callee);
                 }
@@ -1424,6 +2205,43 @@ namespace Checker
             }
         }
 
+        if (node.type == Parser::NodeType::AssignmentExpr && hasDeclaredType)
+        {
+            const Lexer::Operator assignment = std::get<Lexer::Operator>(node.value);
+            Lexer::Operator binary = Lexer::Operator::ASSIGN;
+            switch (assignment)
+            {
+            case Lexer::Operator::ADD_ASSIGN:
+                binary = Lexer::Operator::PLUS;
+                break;
+            case Lexer::Operator::SUBTRACT_ASSIGN:
+                binary = Lexer::Operator::MINUS;
+                break;
+            case Lexer::Operator::MULTIPLY_ASSIGN:
+                binary = Lexer::Operator::MULTIPLY;
+                break;
+            case Lexer::Operator::DIVIDE_ASSIGN:
+                binary = Lexer::Operator::DIVIDE;
+                break;
+            case Lexer::Operator::MODULO_ASSIGN:
+                binary = Lexer::Operator::MODULO;
+                break;
+            case Lexer::Operator::LEFT_SHIFT_ASSIGN:
+                binary = Lexer::Operator::LEFT_SHIFT;
+                break;
+            case Lexer::Operator::RIGHT_SHIFT_ASSIGN:
+                binary = Lexer::Operator::RIGHT_SHIFT;
+                break;
+            default:
+                break;
+            }
+            if (binary != Lexer::Operator::ASSIGN &&
+                !is_valid_binary_op(declaredType, infer_expression_type(table, node.children[1]), binary))
+            {
+                error("Invalid compound assignment for the given operand types.", node);
+            }
+        }
+
         for (size_t i = (node.type == Parser::NodeType::VariableDecl ? 1u : 1u); i < node.children.size(); ++i)
         {
             const auto &child = node.children[i];
@@ -1528,16 +2346,32 @@ namespace Checker
                      child.type != Parser::NodeType::ReferenceType && child.type != Parser::NodeType::StructInitExpr &&
                      child.type != Parser::NodeType::MoveExpr && child.type != Parser::NodeType::RefExpr)
             {
-                Type valueType = infer_expression_type(table, const_cast<Parser::ASTNode &>(child));
+                const bool contextualUnionConstructor =
+                    declaredType.kind == TypeKind::Union && child.type == Parser::NodeType::CallExpr &&
+                    check_union_constructor_for_target(table, const_cast<Parser::ASTNode &>(child), declaredType);
+                Type valueType = contextualUnionConstructor
+                                     ? declaredType
+                                     : infer_expression_type(table, const_cast<Parser::ASTNode &>(child));
                 if ((child.type == Parser::NodeType::Identifier || child.type == Parser::NodeType::MemberAccessExpr ||
                      child.type == Parser::NodeType::IndexExpr) &&
                     type_requires_cleanup(valueType))
                 {
                     error("Cannot implicitly copy a cleanup-owning value; use move or ref.", node);
                 }
-                if (!is_assignable(declaredType, valueType) && !string_literal_decays_to_pointer(declaredType, child))
+                const bool negativeIntegerLiteral = child.type == Parser::NodeType::UnaryExpr &&
+                                                    std::get<Lexer::Operator>(child.value) == Lexer::Operator::MINUS &&
+                                                    child.children.size() == 1 &&
+                                                    child.children.front().type == Parser::NodeType::IntegerLiteral;
+                const bool contextualNumericLiteral =
+                    ((child.type == Parser::NodeType::IntegerLiteral || child.type == Parser::NodeType::FloatLiteral) &&
+                     is_numeric(declaredType.kind)) ||
+                    (negativeIntegerLiteral && is_signed_integer(declaredType.kind));
+                if (!is_assignable(declaredType, valueType) && !contextualNumericLiteral &&
+                    !string_literal_decays_to_pointer(declaredType, child))
                 {
-                    error("Type mismatch in assignment or initialization.", node);
+                    error("Cannot assign type '" + type_to_string(valueType) + "' to '" + type_to_string(declaredType) +
+                              "'.",
+                          node, explicit_cast_help(declaredType));
                 }
             }
         }
@@ -1777,13 +2611,7 @@ namespace Checker
 
         if (op == Lexer::Operator::TRIPPLE_DOT)
         {
-            if (!is_numeric(leftType.kind) || !is_numeric(rightType.kind))
-            {
-                error("Range endpoints must be numeric.", exprNode);
-            }
-            exprNode.hasInferredType = true;
-            exprNode.inferredTypeName = type_to_string(leftType);
-            return;
+            error("Range expressions are only valid as foreach iterables.", exprNode);
         }
 
         if (!is_valid_binary_op(leftType, rightType, op))
@@ -1805,7 +2633,7 @@ namespace Checker
             resultType = (leftType.kind == TypeKind::F32 || leftType.kind == TypeKind::F64 ||
                           rightType.kind == TypeKind::F32 || rightType.kind == TypeKind::F64)
                              ? Type(TypeKind::F64)
-                             : Type(TypeKind::U64);
+                             : (leftType.kind == rightType.kind ? leftType : Type(TypeKind::U64));
         else if (leftType.kind == rightType.kind)
             resultType = leftType;
 
@@ -1825,6 +2653,25 @@ namespace Checker
                 declare_function_symbols(table, child, nested);
             return;
         }
+        if (node.type == Parser::NodeType::ImplDecl)
+        {
+            if (node.children.empty() || node.children.front().type != Parser::NodeType::CustomType)
+                return;
+            std::string targetName = custom_type_name(node.children.front());
+            if (targetName.find("::") == std::string::npos && !namespaceName.empty())
+                targetName = namespaceName + "::" + targetName;
+            structNameStack.push_back(targetName);
+            for (auto &child : node.children)
+            {
+                if (child.type == Parser::NodeType::FunctionDecl || child.type == Parser::NodeType::FunctionDef ||
+                    child.type == Parser::NodeType::CFunctionDecl || child.type == Parser::NodeType::CFunctionDef)
+                    declare_function_symbols(table, child, targetName);
+            }
+            structNameStack.pop_back();
+            return;
+        }
+        if (node.type == Parser::NodeType::TraitDecl)
+            return;
         if (node.type == Parser::NodeType::StructDecl)
         {
             if (node.children.empty() || node.children.front().type != Parser::NodeType::Identifier)
@@ -1868,6 +2715,7 @@ namespace Checker
                     genericParameters.push_back(std::string(std::get<std::string_view>(child.value)));
                     activeGenericNames.push_back(genericParameters.back());
                 }
+            symbol.genericParameters = genericParameters;
             for (const auto &child : node.children)
             {
                 if (child.type == Parser::NodeType::Param && !child.children.empty())
@@ -1913,8 +2761,6 @@ namespace Checker
                 }
                 return;
             }
-            if (!namespaceName.empty() && !table.lookup(unqualifiedName))
-                table.declare(unqualifiedName, symbol);
             table.declare(name, std::move(symbol));
             return;
         }
@@ -1927,6 +2773,23 @@ namespace Checker
     {
         switch (node.type)
         {
+        case Parser::NodeType::UnsafeBlock:
+            ++unsafeDepth;
+            table.push_scope();
+            for (auto &child : node.children)
+                check_node(table, child);
+            table.pop_scope();
+            --unsafeDepth;
+            break;
+
+        case Parser::NodeType::NoCheckBlock:
+        case Parser::NodeType::NoCleanupBlock:
+            table.push_scope();
+            for (auto &child : node.children)
+                check_node(table, child);
+            table.pop_scope();
+            break;
+
         case Parser::NodeType::BlockStmt:
             table.push_scope();
             for (auto &child : node.children)
@@ -1949,6 +2812,8 @@ namespace Checker
             break;
 
         case Parser::NodeType::VariableDecl:
+            if (!node.children.empty())
+                normalize_typeof_type(table, node.children.front());
             check_assignment_and_ownership(table, node);
             {
                 const auto validate_runtime_array_lengths = [&](const auto &self,
@@ -1991,13 +2856,34 @@ namespace Checker
             {
                 error("Multi-result reserve requires a function call initializer.", node);
             }
-            const Parser::ASTNode &call = node.children.back();
-            if (call.children.empty() || call.children.front().type != Parser::NodeType::Identifier)
+            Parser::ASTNode &call = node.children.back();
+            if (call.children.empty())
             {
                 error("Multi-result reserve requires a named tunnel function.", node);
             }
-            const std::string calleeName = std::string(std::get<std::string_view>(call.children.front().value));
-            const Symbol *callee = table.lookup(calleeName);
+            const Parser::ASTNode &calleeExpression = call.children.front();
+            const Symbol *callee = nullptr;
+            if (calleeExpression.type == Parser::NodeType::Identifier)
+            {
+                const std::string calleeName = std::string(std::get<std::string_view>(calleeExpression.value));
+                callee = table.lookup(calleeName);
+            }
+            else if (calleeExpression.type == Parser::NodeType::MemberAccessExpr && !calleeExpression.children.empty())
+            {
+                const Type receiverType =
+                    infer_expression_type(table, const_cast<Parser::ASTNode &>(calleeExpression.children.front()));
+                const auto definition = registeredTypes.find(receiverType.name);
+                if (definition != registeredTypes.end())
+                {
+                    const std::string methodName = std::string(std::get<std::string_view>(calleeExpression.value));
+                    const auto method = definition->second.methods.find(methodName);
+                    if (method != definition->second.methods.end())
+                        callee = &method->second;
+                    if (!callee)
+                        callee = table.lookup(receiverType.name + "::" + methodName);
+                }
+                check_call_expr(table, call);
+            }
             const size_t bindingCount = (node.children.size() - 1) / 2;
             if (!callee || !callee->isFunction || callee->tunnelSlotTypes.size() != bindingCount)
             {
@@ -2081,6 +2967,17 @@ namespace Checker
             check_assignment_and_ownership(table, node);
             break;
 
+        case Parser::NodeType::DoExpr:
+            (void)infer_expression_type(table, node);
+            break;
+
+        case Parser::NodeType::ExprStmt:
+            if (node.children.size() != 1)
+                error("Expression statement must contain exactly one expression.", node);
+            validate_string_literal_escapes_in_tree(node.children.front());
+            check_node(table, node.children.front());
+            break;
+
         case Parser::NodeType::IfStmt:
         {
             if (node.children.empty() || infer_expression_type(table, node.children.front()).kind != TypeKind::Bool)
@@ -2102,6 +2999,56 @@ namespace Checker
             }
             for (auto &child : node.children)
                 check_node(table, child);
+            break;
+        }
+
+        case Parser::NodeType::UnionMatchStmt:
+        {
+            const size_t armChildren = node.children.size() - 1 - (node.hasElse ? 1 : 0);
+            if (node.children.size() < 3 || armChildren % 2 != 0 ||
+                node.children[0].type != Parser::NodeType::Identifier)
+                error("Malformed union pattern match.", node);
+            const std::string subjectName = std::string(std::get<std::string_view>(node.children[0].value));
+            Symbol *subject = table.lookup(subjectName);
+            if (!subject)
+                error("Union pattern subject is not declared.", node.children[0]);
+            const Type subjectType = infer_type_from_node(subject->typeNode);
+            if (subjectType.kind != TypeKind::Union)
+                error("Union pattern requires a union value.", node.children[0]);
+            const auto definition = registeredTypes.find(subjectType.name);
+            if (definition == registeredTypes.end() || !definition->second.isUnion)
+                error("Union pattern references an unknown union type.", node);
+            for (size_t armIndex = 1; armIndex <= armChildren; armIndex += 2)
+            {
+                const Parser::ASTNode &pattern = node.children[armIndex];
+                if (pattern.type != Parser::NodeType::UnionPattern)
+                    error("Malformed union pattern arm.", pattern);
+                if (pattern.inferredTypeName != subjectType.name)
+                    error("Union pattern does not name the subject's union type.", pattern);
+                const std::string variantName = std::string(std::get<std::string_view>(pattern.value));
+                const auto variant = definition->second.unionVariants.find(variantName);
+                if (variant == definition->second.unionVariants.end())
+                    error("Unknown union pattern variant.", pattern);
+                if (pattern.children.size() != variant->second.payloadTypes.size())
+                    error("Union pattern binding count does not match variant payload.", pattern);
+
+                table.push_scope();
+                for (size_t index = 0; index < variant->second.payloadTypes.size(); ++index)
+                {
+                    Symbol binding;
+                    const std::string bindingName =
+                        std::string(std::get<std::string_view>(pattern.children[index].value));
+                    binding.name = bindingName;
+                    binding.typeNode = substitute_union_payload_node(definition->second, subject->typeNode,
+                                                                     variant->second.payloadTypes[index]);
+                    if (!table.declare(bindingName, std::move(binding)))
+                        error("Duplicate union pattern binding.", pattern.children[index]);
+                }
+                check_node(table, node.children[armIndex + 1]);
+                table.pop_scope();
+            }
+            if (node.hasElse)
+                check_node(table, node.children.back());
             break;
         }
 
@@ -2171,7 +3118,8 @@ namespace Checker
             if (!node.children.empty())
             {
                 Type value = infer_expression_type(table, node.children.front());
-                if (found->second.hasExpectedType && !is_assignable(found->second.expectedType, value))
+                if (found->second.hasExpectedType && !is_assignable(found->second.expectedType, value) &&
+                    !(is_numeric(found->second.expectedType.kind) && is_numeric(value.kind)))
                 {
                     error("Tunnel value type mismatch for slot '" + slot + "'.", node);
                 }
@@ -2243,6 +3191,30 @@ namespace Checker
             structNameStack.pop_back();
             break;
         }
+        case Parser::NodeType::TraitDecl:
+            break;
+        case Parser::NodeType::ImplDecl:
+        {
+            if (node.children.empty() || node.children.front().type != Parser::NodeType::CustomType)
+                error("An impl must name its target type.", node);
+            std::string targetName = custom_type_name(node.children.front());
+            if (targetName.find("::") == std::string::npos && !current_namespace_name().empty())
+                targetName = current_namespace_name() + "::" + targetName;
+            if (registeredTypes.find(targetName) == registeredTypes.end())
+                error("An impl target must be a declared struct, enum, or union.", node.children.front());
+            structNameStack.push_back(targetName);
+            const size_t genericsPushed = push_generic_params(node.children);
+            table.push_scope();
+            for (auto &child : node.children)
+            {
+                if (child.type == Parser::NodeType::FunctionDef || child.type == Parser::NodeType::FunctionDecl)
+                    check_node(table, child);
+            }
+            table.pop_scope();
+            pop_generic_params(genericsPushed);
+            structNameStack.pop_back();
+            break;
+        }
         case Parser::NodeType::EnumDecl:
             register_type_definition(node);
             break;
@@ -2252,6 +3224,8 @@ namespace Checker
                     error("generic function declarations require a definition.", child);
             break;
         case Parser::NodeType::CFunctionDecl:
+            if (unsafeDepth == 0 && !is_trusted_stdlib_implementation(node))
+                error("C-ABI declarations require an enclosing @unsafe ... @end block.", node);
             for (const auto &child : node.children)
                 if (child.type == Parser::NodeType::OptionalType || child.type == Parser::NodeType::ArrayType)
                 {
@@ -2259,6 +3233,12 @@ namespace Checker
                 }
             break;
         case Parser::NodeType::UsingMacroDecl:
+            break;
+
+        case Parser::NodeType::UsingNamespaceDecl:
+            if (node.children.size() != 1)
+                error("Using namespace declaration is missing its namespace.", node);
+            table.import_namespace(scope_access_name(node.children.front()));
             break;
 
         case Parser::NodeType::InlineAsmStmt:
@@ -2329,7 +3309,8 @@ namespace Checker
                 const std::string_view callee =
                     std::get<std::string_view>(node.children.front().children.front().value);
             }
-            if (!is_assignable(activeCFunctionReturnType, returnedType))
+            if (!is_assignable(activeCFunctionReturnType, returnedType) &&
+                !(is_numeric(activeCFunctionReturnType.kind) && is_numeric(returnedType.kind)))
             {
                 error("Return type does not match function signature.", node);
             }
@@ -2376,6 +3357,8 @@ namespace Checker
 
         case Parser::NodeType::CFunctionDef:
         {
+            if (unsafeDepth == 0 && !is_trusted_stdlib_implementation(node))
+                error("C-ABI definitions require an enclosing @unsafe ... @end block.", node);
             for (const auto &child : node.children)
                 if (child.type == Parser::NodeType::OptionalType || child.type == Parser::NodeType::ArrayType)
                 {
@@ -2476,14 +3459,18 @@ namespace Checker
             {
                 error("Malformed foreach-loop.", node);
             }
-            const Type iterableType = infer_expression_type(table, node.children[1]);
+            Parser::ASTNode &iterable = node.children[1];
+            const bool isRange = iterable.type == Parser::NodeType::BinaryExpr && iterable.children.size() == 2 &&
+                                 iterable.value.index() == 5 &&
+                                 std::get<Lexer::Operator>(iterable.value) == Lexer::Operator::TRIPPLE_DOT;
+            const Type iterableType = isRange ? Type(TypeKind::Error) : infer_expression_type(table, iterable);
             const bool isVector = (iterableType.kind == TypeKind::Struct || iterableType.kind == TypeKind::Class) &&
                                   (iterableType.name == "Vector" ||
                                    (iterableType.name.size() > 8 &&
                                     iterableType.name.compare(iterableType.name.size() - 8, 8, "::Vector") == 0));
-            if (iterableType.kind != TypeKind::Array && !isVector)
+            if (!isRange && iterableType.kind != TypeKind::Array && !isVector)
             {
-                error("foreach requires a fixed-size array, T[length] runtime array, or Vector<T>.", node.children[1]);
+                error("foreach requires a fixed-size array, T[length] runtime array, or Vector<T>.", iterable);
             }
             table.push_scope();
             Symbol item;
@@ -2493,8 +3480,21 @@ namespace Checker
             {
                 error("Redeclaration of foreach-variable.", node);
             }
+            if (isRange)
+            {
+                const Type startType = infer_expression_type(table, iterable.children[0]);
+                const Type endType = infer_expression_type(table, iterable.children[1]);
+                const Type itemType = infer_type_from_node(node.children[0]);
+                if (!is_integer(startType.kind) || !is_integer(endType.kind) || !is_integer(itemType.kind))
+                    error("foreach range endpoints and item type must be integral.", iterable);
+                check_node(table, iterable.children[0]);
+                check_node(table, iterable.children[1]);
+            }
+            else
+            {
+                check_node(table, iterable);
+            }
             loopDepth++;
-            check_node(table, node.children[1]);
             check_node(table, node.children[2]);
             loopDepth--;
             table.pop_scope();
@@ -2540,7 +3540,8 @@ namespace Checker
                 activeNamespaces.pop_back();
                 return;
             }
-            if (node.type == Parser::NodeType::StructDecl || node.type == Parser::NodeType::EnumDecl)
+            if (node.type == Parser::NodeType::StructDecl || node.type == Parser::NodeType::EnumDecl ||
+                node.type == Parser::NodeType::UnionDecl)
                 register_type_definition(node);
             if (node.type == Parser::NodeType::EnumDecl && !node.children.empty())
             {
@@ -2563,14 +3564,83 @@ namespace Checker
             for (auto &child : node.children)
                 self(self, child);
         };
+        try
+        {
+            for (auto &root_node : Parser::ast)
+            {
+                predeclaringTypeShells = true;
+                predeclare_types(predeclare_types, root_node);
+            }
+            predeclaringTypeShells = false;
+            for (auto &root_node : Parser::ast)
+                predeclare_types(predeclare_types, root_node);
+        }
+        catch (const CheckerRecovery &)
+        {
+            predeclaringTypeShells = false;
+            flush_diagnostics();
+            throw CompilationError("", true);
+        }
+        try
+        {
+            for (auto &root_node : Parser::ast)
+                declare_function_symbols(table, root_node);
+        }
+        catch (const CheckerRecovery &)
+        {
+            flush_diagnostics();
+            throw CompilationError("", true);
+        }
+        bool hadCheckerErrors = false;
+        const auto check_top_level = [&](Parser::ASTNode &node)
+        {
+            SymbolTable tableSnapshot = table;
+            auto registeredTypesSnapshot = registeredTypes;
+            auto namespacesSnapshot = activeNamespaces;
+            auto genericNamesSnapshot = activeGenericNames;
+            auto structNamesSnapshot = structNameStack;
+            const bool cFunctionSnapshot = inCFunctionBody;
+            const size_t functionDepthSnapshot = functionBodyDepth;
+            const Type cFunctionReturnSnapshot = activeCFunctionReturnType;
+            const bool cFunctionReturnsValueSnapshot = activeCFunctionReturnsValue;
+            const size_t loopDepthSnapshot = loopDepth;
+            auto tunnelSlotsSnapshot = activeTunnelSlots;
+            try
+            {
+                validate_unsafe_constructs(node);
+                check_node(table, node);
+            }
+            catch (const CheckerRecovery &)
+            {
+                table = std::move(tableSnapshot);
+                registeredTypes = std::move(registeredTypesSnapshot);
+                activeNamespaces = std::move(namespacesSnapshot);
+                activeGenericNames = std::move(genericNamesSnapshot);
+                structNameStack = std::move(structNamesSnapshot);
+                inCFunctionBody = cFunctionSnapshot;
+                functionBodyDepth = functionDepthSnapshot;
+                activeCFunctionReturnType = cFunctionReturnSnapshot;
+                activeCFunctionReturnsValue = cFunctionReturnsValueSnapshot;
+                loopDepth = loopDepthSnapshot;
+                activeTunnelSlots = std::move(tunnelSlotsSnapshot);
+                hadCheckerErrors = true;
+            }
+        };
         for (auto &root_node : Parser::ast)
         {
-            predeclare_types(predeclare_types, root_node);
+            if (root_node.type == Parser::NodeType::Module)
+            {
+                for (auto &child : root_node.children)
+                    check_top_level(child);
+            }
+            else
+                check_top_level(root_node);
         }
-        for (auto &root_node : Parser::ast)
-            declare_function_symbols(table, root_node);
-        for (auto &root_node : Parser::ast)
-            check_node(table, root_node);
         table.pop_scope();
+        if (hadCheckerErrors)
+        {
+            flush_diagnostics();
+            throw CompilationError("", true);
+        }
     }
 } // namespace Checker

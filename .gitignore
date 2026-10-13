@@ -2,6 +2,7 @@
 build*/
 .llvm-cache/
 .llvm-cache/**/
+.cache/
 
 # Prerequisites
 __pycache__/

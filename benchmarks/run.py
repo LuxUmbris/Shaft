@@ -78,7 +78,7 @@ def write_mandelbrot_sources(directory, size, max_iterations):
     c = directory / "mandelbrot.c"
     rust = directory / "mandelbrot.rs"
     shaft.write_text(
-        "def main(String[] args)\n"
+        "def main(std::string::String[] args)\n"
         "{\n"
         "    mut i32 checksum = 0;\n"
         "    mut i32 y = 0;\n"
@@ -97,14 +97,14 @@ def write_mandelbrot_sources(directory, size, max_iterations):
         "                f64 next = zr * zr - zi * zi + cr;\n"
         "                zi = 2.0 * zr * zi + ci;\n"
         "                zr = next;\n"
-        "                iteration = iteration + 1;\n"
+        "                iteration = iteration + (1 as i32);\n"
         "            }\n"
         "            checksum = checksum + iteration;\n"
-        "            x = x + 1;\n"
+        "            x = x + (1 as i32);\n"
         "        }\n"
-        "        y = y + 1;\n"
+        "        y = y + (1 as i32);\n"
         "    }\n"
-        "    exit(checksum & 255);\n"
+        "    std::exit(checksum & (255 as i32));\n"
         "}\n",
         encoding="utf-8",
     )

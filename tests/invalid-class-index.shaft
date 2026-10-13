@@ -1,5 +1,0 @@
-class Broken
-{
-    i64 data;
-    index data;
-}

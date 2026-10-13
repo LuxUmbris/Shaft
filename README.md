@@ -23,18 +23,31 @@ python3 install.py
 python3 install.py --vscode --vim --neovim
 ```
 
-### `Shaft.build` project builds
+### `Shaft.toml` project builds
 
-`shaftc --build` reads `Shaft.build` from the current directory. Pass a different file with `shaftc --build path/to/Project.build` (or `--build=path/to/Project.build`). `entry` selects the root Shaft script. The compiler follows relative `import "path.shaft";` directives from that root, resolves each module once, rejects dependency cycles, and compiles the complete dependency graph as separate source modules. Build-file paths are resolved relative to the build file, not the current directory, and missing output directories are created automatically.
+`shaftc --build` reads `Shaft.toml` from the current directory. Pass a different file with `shaftc --build path/to/Project.build` (or `--build=path/to/Project.build`). `entry` selects the root Shaft script. The compiler follows relative `import "path.shaft";` directives from that root, resolves each module once, rejects dependency cycles, and compiles the complete dependency graph as separate source modules. Build-file paths are resolved relative to the build file, not the current directory, and missing output directories are created automatically.
 
-The repository includes a usable `Shaft.build` for the descriptor-driven quiz:
+The repository includes a usable `Shaft.toml` for the descriptor-driven quiz:
 
 ```sh
 shaftc --build
 printf '4\nP\n' | ./build/interactive-quiz examples/interactive-quiz.descriptor
 ```
 
-`Shaft.build` is a deliberately small TOML-like format. It supports quoted strings, arrays of quoted strings, `true`/`false`, `#` comments, and the `[package]` and `[build]` tables. Unknown tables and keys are errors so configuration typos do not silently change a build.
+`Shaft.toml` is a deliberately small TOML-like format. It supports quoted strings, arrays of quoted strings, positive integer values, `true`/`false`, `#` comments, and the `[package]`, `[build]`, and `[format]` tables. Unknown tables and keys are errors so configuration typos do not silently change a build.
+
+```toml
+[format]
+# Canonical style name is "allman"; "almann" is retained as an accepted alias.
+brace_style = "allman" # or "kr"
+namespace_indent = true
+match_case_indent = true
+indent_width = 4
+use_tabs = false
+final_newline = true
+```
+
+`brace_style` selects Allman or K&R validation values. The remaining fields are accepted and validated by `shaftc`; ShaftLS consumption is documented when its formatting handler is available.
 
 ```toml
 [package]
@@ -113,7 +126,7 @@ Source can select target- or package-specific text before it reaches the parser:
 @end
 ```
 
-`@config.<build|package>.<field> = value ... @end` is a lexer macro: matching blocks remain and nonmatching blocks are deleted before import discovery and parsing. `build.target` reflects `--target` (or the host triple); `package.name` and `package.version` come from `Shaft.build`. `@asm ... @end` is a function-body, side-effecting raw LLVM inline-assembly statement. `@asm(value)` passes a binding as a read-only register operand; `@asm(mut value)` writes its final register value back to a mutable binding; and `$value` names that operand in the assembly body. `cdef naked` emits no compiler prologue/epilogue and must return from its own assembly. See `syntax.md` for the complete supported configuration fields and nesting rules.
+`@config.<build|package>.<field> = value ... @end` is a lexer macro: matching blocks remain and nonmatching blocks are deleted before import discovery and parsing. `build.target` reflects `--target` (or the host triple); `package.name` and `package.version` come from `Shaft.toml`. `@asm ... @end` is a function-body, side-effecting raw LLVM inline-assembly statement. `@asm(value)` passes a binding as a read-only register operand; `@asm(mut value)` writes its final register value back to a mutable binding; and `$value` names that operand in the assembly body. `cdef naked` emits no compiler prologue/epilogue and must return from its own assembly. See `syntax.md` for the complete supported configuration fields and nesting rules.
 
 ## Reproducible performance benchmarks
 
@@ -134,8 +147,6 @@ python3 build_installer.py
 ```
 
 The archive contains `bin/shaftc`, `bin/shaftls`, `share/shaft/std/std.shaft`, and Linux, Darwin, and Windows runtime sources. Linux is exercised end-to-end by the test suite; Darwin and Windows runtimes are compiled for their native targets during cross-target verification.
-
-Run `ctest --test-dir build --output-on-failure` to verify every emit mode and the Linux exit-42 smoke binary.
 
 ## Install a local build
 

@@ -1,9 +1,10 @@
-// Windows freestanding runtime, implemented in Shaft.
-// Win32 and Winsock functions are imported directly; all other runtime APIs
-// are ordinary Shaft code in this module.
-// HANDLE and SOCKET are raw u64 values on the supported 64-bit targets.
+// Windows rt
 
 cdec ExitProcess(u32 code);
+cdec CreateThread(*u8 security_attributes, u64 stack_size, *u8 entry_address, *u8 parameter, u32 creation_flags, *u32 thread_id) -> u64;
+cdec VirtualAlloc(*u8 address, u64 size, u32 allocation_type, u32 protection) -> *u8;
+cdec VirtualFree(*u8 address, u64 size, u32 free_type) -> i32;
+cdec InterlockedExchange(*i32 target, i32 value) -> i32;
 cdec GetStdHandle(u32 standard_handle) -> u64;
 cdec CreateFileA(*i8 path, u32 desired_access, u32 share_mode, *u8 security_attributes, u32 creation_disposition, u32 flags_and_attributes, u64 template_file) -> u64;
 cdec ReadFile(u64 file, *i8 buffer, u32 count, *u32 read, *u8 overlapped) -> i32;
@@ -35,22 +36,28 @@ cdec ioctlsocket(u64 descriptor, u32 command, *u32 value) -> i32;
 cdec WSAGetLastError() -> i32;
 cdec __shaft_entry(i32 argc, **i8 argv) -> i32;
 
-class RuntimeAllocation
-{
+struct RuntimeAllocation{
     mut u64 offset;
     mut u64 size;
-    mut u64 references;
     mut bool free;
 }
 
-class RuntimeTimeSpec
-{
+struct HeapChunk{
+    mut *u8 memory_pool;
+    mut u64 length;
+    mut u64 capacity;
+    mut u64 aligned_size;
+    mut RuntimeAllocation[1024] runtime_allocations;
+    mut u64 allocation_count;
+    mut u64 next_address;
+}
+
+struct RuntimeTimeSpec{
     mut i64 seconds;
     mut i64 nanoseconds;
 }
 
-class RuntimeInputRecord
-{
+struct RuntimeInputRecord{
     mut u16 event_type;
     mut u16 padding;
     mut i32 key_down;
@@ -61,23 +68,20 @@ class RuntimeInputRecord
     mut u32 control_state;
 }
 
-class RuntimeSockaddrIn
-{
+struct RuntimeSockaddrIn{
     mut u16 family;
     mut u16 port;
     mut u32 address;
     mut u8[8] padding;
 }
 
-class RuntimeSecurityAttributes
-{
+struct RuntimeSecurityAttributes{
     mut u32 length;
     mut *u8 descriptor;
     mut i32 inherit;
 }
 
-class RuntimeStartupInfo
-{
+struct RuntimeStartupInfo{
     mut u32 size;
     mut *i8 reserved;
     mut *i8 desktop;
@@ -98,8 +102,7 @@ class RuntimeStartupInfo
     mut u64 stderr_handle;
 }
 
-class RuntimeProcessInformation
-{
+struct RuntimeProcessInformation{
     mut u64 process;
     mut u64 thread;
     mut u32 process_id;
@@ -113,21 +116,33 @@ cdec WaitForSingleObject(u64 object, u32 milliseconds) -> u32;
 cdec GetExitCodeProcess(u64 process, *u32 exit_code) -> i32;
 cdec PeekNamedPipe(u64 pipe, *i8 buffer, u32 count, *u32 bytes_read, *u32 bytes_available, *u32 bytes_left) -> i32;
 
-mut u8[1048576] runtime_heap;
-mut RuntimeAllocation[1024] runtime_allocations;
-mut u64 runtime_allocation_count = 0;
-mut u64 runtime_heap_used = 0;
-mut u8[4096] runtime_stdin_buffer;
-mut u64 runtime_stdin_offset = 0;
-mut u64 runtime_stdin_length = 0;
+mut u8[1048576] initial_runtime_memory_pool;
+mut RuntimeAllocation[1024] initial_runtime_allocations;
 mut *u8 runtime_null;
+mut HeapChunk initial_chunk;
+mut i32 runtime_lock;
+mut u64 runtime_heap_head;
+mut bool runtime_heap_initialized;
+mut u8[4096] runtime_stdin_buffer;
+mut u64 runtime_stdin_offset;
+mut u64 runtime_stdin_length;
 mut *u32 runtime_null_u32;
 mut *i64 runtime_null_i64;
 mut **i8 runtime_null_argv;
-mut bool runtime_network_initialized = false;
+mut bool runtime_network_initialized;
 mut u64 runtime_console_input;
 mut u32 runtime_console_mode;
-mut bool runtime_terminal_active = false;
+mut bool runtime_terminal_active;
+
+cdef __shaft_runtime_lock()
+{
+    while (InterlockedExchange(&runtime_lock, 1) != 0) {}
+}
+
+cdef __shaft_runtime_unlock()
+{
+    InterlockedExchange(&runtime_lock, 0);
+}
 
 cdef memcpy(*u8 destination, *u8 source, u64 count) -> *u8
 {
@@ -160,7 +175,7 @@ cdef memset(*u8 destination, i32 value, u64 count) -> *u8
     mut u64 runtime_index = 0;
     while (runtime_index < count)
     {
-        destination[runtime_index] = value;
+        destination[runtime_index] = value as u8;
         runtime_index = runtime_index + 1;
     }
     return destination;
@@ -180,70 +195,265 @@ cdef memcmp(*u8 left, *u8 right, u64 count) -> i32
     return 0;
 }
 
-cdef __shaft_alloc(u64 count) -> *u8
+cdef __shaft_create_heap_chunk(u64 capacity) -> *HeapChunk
 {
-    if (count > 18446744073709551608)
-    {
-        return runtime_null;
-    }
-    mut u64 aligned = (count + 7) & 18446744073709551608;
-    mut u64 runtime_index = 0;
-    while (runtime_index < runtime_allocation_count)
-    {
-        if (runtime_allocations[runtime_index].free && runtime_allocations[runtime_index].size >= aligned)
-        {
-            runtime_allocations[runtime_index].free = false;
-            runtime_allocations[runtime_index].references = 1;
-            return &runtime_heap[runtime_allocations[runtime_index].offset];
-        }
-        runtime_index = runtime_index + 1;
-    }
-    if (runtime_allocation_count >= 1024 || aligned > 1048576 - runtime_heap_used)
-    {
-        return runtime_null;
-    }
-    runtime_allocations[runtime_allocation_count].offset = runtime_heap_used;
-    runtime_allocations[runtime_allocation_count].size = aligned;
-    runtime_allocations[runtime_allocation_count].references = 1;
-    runtime_allocations[runtime_allocation_count].free = false;
-    runtime_heap_used = runtime_heap_used + aligned;
-    runtime_allocation_count = runtime_allocation_count + 1;
-    return &runtime_heap[runtime_allocations[runtime_allocation_count - 1].offset];
+    mut u64 total_size = sizeof(HeapChunk) + capacity;
+    mut u64 aligned_size = (total_size + 4095) & 0xFFFFFFFFFFFFF000;
+    mut *u8 mapping = VirtualAlloc(runtime_null, aligned_size, 12288, 4);
+    if (mapping == runtime_null) { return runtime_null; }
+    mut *HeapChunk chunk = mapping as *HeapChunk;
+    chunk.memory_pool = &mapping[sizeof(HeapChunk)];
+    chunk.length = 0;
+    chunk.capacity = aligned_size - sizeof(HeapChunk);
+    chunk.aligned_size = aligned_size;
+    chunk.allocation_count = 0;
+    chunk.next_address = 0;
+    return chunk;
 }
 
-cdef __shaft_retain(*u8 pointer)
+cdef __shaft_initialize_heap()
 {
-    mut u64 runtime_index = 0;
-    while (runtime_index < runtime_allocation_count)
+    if (!runtime_heap_initialized)
     {
-        if (!runtime_allocations[runtime_index].free && pointer == &runtime_heap[runtime_allocations[runtime_index].offset])
-        {
-            runtime_allocations[runtime_index].references = runtime_allocations[runtime_index].references + 1;
-            return;
-        }
-        runtime_index = runtime_index + 1;
+        initial_chunk.memory_pool = &initial_runtime_memory_pool[0];
+        initial_chunk.length = 0;
+        initial_chunk.capacity = 1048576;
+        initial_chunk.aligned_size = 0;
+        initial_chunk.allocation_count = 0;
+        initial_chunk.next_address = 0;
+        runtime_heap_head = (&initial_chunk) as u64;
+        runtime_heap_initialized = true;
     }
+}
+
+cdef __shaft_alloc(u64 count) -> *u8
+{
+    mut *u8 result = runtime_null;
+    if (count <= 0xFFFFFFFFFFFFFFF8)
+    {
+        mut u64 aligned = (count + 7) & 0xFFFFFFFFFFFFFFF8;
+        __shaft_runtime_lock();
+        __shaft_initialize_heap();
+        mut *HeapChunk current = runtime_heap_head as *HeapChunk;
+        while (current != runtime_null)
+        {
+            mut u64 index = 0;
+            while (index < current.allocation_count)
+            {
+                if (current.runtime_allocations[index].free && current.runtime_allocations[index].size >= aligned)
+                {
+                    mut u64 remaining = current.runtime_allocations[index].size - aligned;
+                    if (remaining > 0 && current.allocation_count < 1024)
+                    {
+                        current.runtime_allocations[current.allocation_count].offset = current.runtime_allocations[index].offset + aligned;
+                        current.runtime_allocations[current.allocation_count].size = remaining;
+                        current.runtime_allocations[current.allocation_count].free = true;
+                        current.allocation_count = current.allocation_count + 1;
+                        current.runtime_allocations[index].size = aligned;
+                    }
+                    current.runtime_allocations[index].free = false;
+                    result = &current.memory_pool[current.runtime_allocations[index].offset];
+                    break;
+                }
+                index = index + 1;
+            }
+            if (result != runtime_null) { break; }
+            if (current.allocation_count < 1024 && aligned > current.capacity - current.length &&
+            current != &initial_chunk && current.length <= current.capacity)
+            {
+                mut u64 committed_size = sizeof(HeapChunk) + current.capacity;
+                mut u64 needed_size = (sizeof(HeapChunk) + current.length + aligned + 4095) & 0xFFFFFFFFFFFFF000;
+                if (needed_size <= current.aligned_size && needed_size > committed_size)
+                {
+                    mut *u8 commit_address = &((current as *u8)[committed_size]);
+                    if (VirtualAlloc(commit_address, needed_size - committed_size, 4096, 4) != runtime_null)
+                    {
+                        current.capacity = needed_size - sizeof(HeapChunk);
+                    }
+                }
+            }
+            if (current.allocation_count < 1024 && aligned <= current.capacity - current.length)
+            {
+                current.runtime_allocations[current.allocation_count].offset = current.length;
+                current.runtime_allocations[current.allocation_count].size = aligned;
+                current.runtime_allocations[current.allocation_count].free = false;
+                current.length = current.length + aligned;
+                current.allocation_count = current.allocation_count + 1;
+                result = &current.memory_pool[current.runtime_allocations[current.allocation_count - 1].offset];
+                break;
+            }
+            current = current.next_address as *HeapChunk;
+        }
+        if (result == runtime_null)
+        {
+            mut u64 capacity = 1048576;
+            if (aligned > capacity) { capacity = aligned; }
+            mut *HeapChunk chunk = __shaft_create_heap_chunk(capacity);
+            if (chunk != runtime_null)
+            {
+                chunk.runtime_allocations[0].offset = 0;
+                chunk.runtime_allocations[0].size = aligned;
+                chunk.runtime_allocations[0].free = false;
+                chunk.length = aligned;
+                chunk.allocation_count = 1;
+                chunk.next_address = runtime_heap_head;
+                runtime_heap_head = chunk as u64;
+                result = &chunk.memory_pool[0];
+            }
+        }
+        __shaft_runtime_unlock();
+    }
+    return result;
 }
 
 cdef __shaft_free(*u8 pointer)
 {
-    mut u64 runtime_index = 0;
-    while (runtime_index < runtime_allocation_count)
+    if (pointer == runtime_null) { return; }
+    __shaft_runtime_lock();
+    __shaft_initialize_heap();
+    mut *HeapChunk current = runtime_heap_head as *HeapChunk;
+    mut *HeapChunk previous = runtime_null;
+    mut bool found = false;
+    while (current != runtime_null)
     {
-        if (!runtime_allocations[runtime_index].free && pointer == &runtime_heap[runtime_allocations[runtime_index].offset])
+        mut u64 freed_index = 0;
+        mut u64 index = 0;
+        while (index < current.allocation_count)
         {
-            if (runtime_allocations[runtime_index].references > 1)
+            if (!current.runtime_allocations[index].free && pointer == &current.memory_pool[current.runtime_allocations[index].offset])
             {
-                runtime_allocations[runtime_index].references = runtime_allocations[runtime_index].references - 1;
+                current.runtime_allocations[index].free = true;
+                freed_index = index;
+                found = true;
+                break;
             }
-            else
-            {
-                runtime_allocations[runtime_index].free = true;
-            }
-            return;
+            index = index + 1;
         }
-        runtime_index = runtime_index + 1;
+        if (found)
+        {
+            mut bool merge_before = false;
+            mut bool merge_after = false;
+            mut u64 before_index = 0;
+            mut u64 after_index = 0;
+            mut u64 scan = 0;
+            while (scan < current.allocation_count)
+            {
+                if (scan != freed_index && current.runtime_allocations[scan].free)
+                {
+                    if (current.runtime_allocations[scan].offset + current.runtime_allocations[scan].size == current.runtime_allocations[freed_index].offset)
+                    {
+                        merge_before = true;
+                        before_index = scan;
+                    }
+                    else if (current.runtime_allocations[freed_index].offset + current.runtime_allocations[freed_index].size == current.runtime_allocations[scan].offset)
+                    {
+                        merge_after = true;
+                        after_index = scan;
+                    }
+                }
+                scan = scan + 1;
+            }
+            mut u64 new_offset = current.runtime_allocations[freed_index].offset;
+            mut u64 new_size = current.runtime_allocations[freed_index].size;
+            if (merge_before)
+            {
+                new_offset = current.runtime_allocations[before_index].offset;
+                new_size = new_size + current.runtime_allocations[before_index].size;
+            }
+            if (merge_after) { new_size = new_size + current.runtime_allocations[after_index].size; }
+            current.runtime_allocations[freed_index].offset = new_offset;
+            current.runtime_allocations[freed_index].size = new_size;
+            mut u64 remove_first = 0;
+            mut u64 remove_second = 0;
+            mut u64 removals = 0;
+            if (merge_before) { remove_first = before_index; removals = removals + 1; }
+            if (merge_after)
+            {
+                if (removals == 0) { remove_first = after_index; }
+                else
+                {
+                    remove_second = after_index;
+                    if (remove_first < remove_second)
+                    {
+                        mut u64 temporary = remove_first;
+                        remove_first = remove_second;
+                        remove_second = temporary;
+                    }
+                }
+                removals = removals + 1;
+            }
+            if (removals >= 1)
+            {
+                current.runtime_allocations[remove_first] = current.runtime_allocations[current.allocation_count - 1];
+                current.allocation_count = current.allocation_count - 1;
+            }
+            if (removals == 2)
+            {
+                current.runtime_allocations[remove_second] = current.runtime_allocations[current.allocation_count - 1];
+                current.allocation_count = current.allocation_count - 1;
+            }
+            mut bool has_live_allocation = false;
+            mut u64 live_index = 0;
+            while (live_index < current.allocation_count)
+            {
+                if (!current.runtime_allocations[live_index].free)
+                {
+                    has_live_allocation = true;
+                    break;
+                }
+                live_index = live_index + 1;
+            }
+            if (!has_live_allocation)
+            {
+                if (current == &initial_chunk)
+                {
+                    current.allocation_count = 0;
+                    current.length = 0;
+                }
+                else
+                {
+                    if (previous == runtime_null) { runtime_heap_head = current.next_address; }
+                    else { previous.next_address = current.next_address; }
+                    VirtualFree(current, 0, 32768);
+                }
+                break;
+            }
+            mut bool trimmed_tail = true;
+            while (trimmed_tail)
+            {
+                trimmed_tail = false;
+                mut u64 tail_index = 0;
+                while (tail_index < current.allocation_count)
+                {
+                    if (current.runtime_allocations[tail_index].free &&
+                    current.runtime_allocations[tail_index].offset + current.runtime_allocations[tail_index].size == current.length)
+                    {
+                        current.length = current.runtime_allocations[tail_index].offset;
+                        current.runtime_allocations[tail_index] = current.runtime_allocations[current.allocation_count - 1];
+                        current.allocation_count = current.allocation_count - 1;
+                        trimmed_tail = true;
+                        break;
+                    }
+                    tail_index = tail_index + 1;
+                }
+            }
+            if (current != &initial_chunk)
+            {
+                mut u64 keep_size = (sizeof(HeapChunk) + current.length + 4095) & 0xFFFFFFFFFFFFF000;
+                mut u64 committed_size = sizeof(HeapChunk) + current.capacity;
+                if (keep_size < committed_size)
+                {
+                    mut *u8 decommit_address = &((current as *u8)[keep_size]);
+                    VirtualFree(decommit_address, committed_size - keep_size, 16384);
+                    current.capacity = keep_size - sizeof(HeapChunk);
+                }
+            }
+            break;
+        }
+        previous = current;
+        current = current.next_address as *HeapChunk;
     }
+    __shaft_runtime_unlock();
 }
 
 cdef __sys_exit(i32 status)
@@ -279,8 +489,8 @@ cdef __runtime_standard_handle(i64 descriptor) -> u64
 cdef __sys_write(i64 descriptor, *i8 buffer, u64 count) -> i64
 {
     mut u32 written = 0;
-    mut u32 size = count;
-    if (count > 4294967295) { size = 4294967295; }
+    mut u32 size = count as u32;
+    if (count > 4294967295) { size = 4294967295 as u32; }
     if (WriteFile(__runtime_standard_handle(descriptor), buffer, size, &written, runtime_null) == 0) { return -1; }
     return written;
 }
@@ -288,8 +498,8 @@ cdef __sys_write(i64 descriptor, *i8 buffer, u64 count) -> i64
 cdef __sys_read(i64 descriptor, *i8 buffer, u64 count) -> i64
 {
     mut u32 read = 0;
-    mut u32 size = count;
-    if (count > 4294967295) { size = 4294967295; }
+    mut u32 size = count as u32;
+    if (count > 4294967295) { size = 4294967295 as u32; }
     if (ReadFile(__runtime_standard_handle(descriptor), buffer, size, &read, runtime_null) == 0) { return -1; }
     return read;
 }
@@ -340,8 +550,8 @@ cdef __sys_process_spawn(*i8 command, **i8 arguments, i64 stdout_descriptor, i64
     {
         startup.flags = 256;
         startup.stdin_handle = GetStdHandle(4294967286);
-        startup.stdout_handle = stdout_descriptor;
-        startup.stderr_handle = stderr_descriptor;
+        startup.stdout_handle = stdout_descriptor as u64;
+        startup.stderr_handle = stderr_descriptor as u64;
     }
     mut RuntimeProcessInformation process;
     mut *i8 command_line = __runtime_process_command_line(arguments);
@@ -388,8 +598,8 @@ cdef __sys_process_pipe(*i64 descriptors) -> i64
         CloseHandle(write_pipe);
         return -1;
     }
-    descriptors[0] = read_pipe;
-    descriptors[1] = write_pipe;
+    descriptors[0] = read_pipe as i64;
+    descriptors[1] = write_pipe as i64;
     return 0;
 }
 
@@ -412,7 +622,7 @@ cdef __sys_process_read(i64 descriptor, *i8 buffer, u64 count) -> i64
     mut u32 size = available;
     if (count < size)
     {
-        size = count;
+        size = count as u32;
     }
     mut u32 read = 0;
     if (ReadFile(descriptor, buffer, size, &read, runtime_null) == 0)
@@ -485,11 +695,11 @@ cdef __runtime_key_from_virtual(i32 virtual_key, i32 control_state) -> i32
     else if (virtual_key == 34) { key = 264; }
     else if (virtual_key == 45) { key = 265; }
     else if (virtual_key == 46) { key = 266; }
-    else if (virtual_key >= 112 && virtual_key <= 123) { key = 272 + virtual_key - 112; }
+    else if (virtual_key >= 112 && virtual_key <= 123) { key = (272 as i32) + virtual_key - (112 as i32); }
     mut i32 modifier = 0;
-    if ((control_state & 16) != 0) { modifier = modifier + 1; }
-    if ((control_state & 3) != 0) { modifier = modifier + 2; }
-    if ((control_state & 12) != 0) { modifier = modifier + 4; }
+    if ((control_state & 16) != 0) { modifier = modifier + (1 as i32); }
+    if ((control_state & 3) != 0) { modifier = modifier + (2 as i32); }
+    if ((control_state & 12) != 0) { modifier = modifier + (4 as i32); }
     if (key == 0) { return 0; }
     return key + modifier * 4096;
 }
@@ -536,7 +746,7 @@ cdef __sys_readline(*u8 buffer, u64 capacity) -> i64
                 return received;
             }
             runtime_stdin_offset = 0;
-            runtime_stdin_length = received;
+            runtime_stdin_length = received as u64;
         }
         mut u8 byte = runtime_stdin_buffer[runtime_stdin_offset];
         runtime_stdin_offset = runtime_stdin_offset + 1;
@@ -611,7 +821,7 @@ cdef __cstr_strlen(*i8 text) -> u64
     while (text[length] != 0)
     {
         @asm
-            nop
+        nop
         @end
         length = length + 1;
     }
@@ -630,7 +840,7 @@ cdef __runtime_decimal_u64(u64 value, *u8 output) -> u64
     mut u64 length = 0;
     while (true)
     {
-        reversed[length] = 48 + (remaining % 10);
+        reversed[length] = (48 + (remaining % 10)) as u8;
         remaining = remaining / 10;
         length = length + 1;
         if (remaining == 0)
@@ -649,7 +859,7 @@ cdef __runtime_decimal_u64(u64 value, *u8 output) -> u64
 
 cdef __sys_int_to_string(i64 value, *u8 output, u64 capacity) -> u64
 {
-    mut u64 magnitude = value;
+    mut u64 magnitude = value as u64;
     if (value < 0)
     {
         magnitude = 0 - (value + 1) + 1;
@@ -715,8 +925,8 @@ cdef __sys_float_to_string(f64 value, *u8 output, u64 capacity) -> u64
     {
         return 0;
     }
-    mut u64 whole = magnitude;
-    mut u64 fraction = (magnitude - whole) * 1000000.0 + 0.5;
+    mut u64 whole = magnitude as u64;
+    mut u64 fraction = ((magnitude - whole) * 1000000.0 + 0.5) as u64;
     if (fraction == 1000000)
     {
         whole = whole + 1;
@@ -746,7 +956,7 @@ cdef __sys_float_to_string(f64 value, *u8 output, u64 capacity) -> u64
     mut u64 divisor = 100000;
     while (divisor != 0)
     {
-        output[offset] = 48 + ((fraction / divisor) % 10);
+        output[offset] = (48 + ((fraction / divisor) % 10)) as u8;
         offset = offset + 1;
         divisor = divisor / 10;
     }
@@ -807,28 +1017,28 @@ cdef __sys_accept(i64 descriptor, *u8 address, *u32 length) -> i64
 
 cdef __sys_send(i64 descriptor, *u8 buffer, u64 length, i32 flags) -> i64
 {
-    mut i32 size = length;
+    mut i32 size = length as i32;
     if (length > 2147483647) { size = 2147483647; }
     return send(descriptor, buffer, size, flags);
 }
 
 cdef __sys_recv(i64 descriptor, *u8 buffer, u64 length, i32 flags) -> i64
 {
-    mut i32 size = length;
+    mut i32 size = length as i32;
     if (length > 2147483647) { size = 2147483647; }
     return recv(descriptor, buffer, size, flags);
 }
 
 cdef __sys_sendto(i64 descriptor, *u8 buffer, u64 length, i32 flags, *u8 destination, u32 destination_length) -> i64
 {
-    mut i32 size = length;
+    mut i32 size = length as i32;
     if (length > 2147483647) { size = 2147483647; }
     return sendto(descriptor, buffer, size, flags, destination, destination_length);
 }
 
 cdef __sys_recvfrom(i64 descriptor, *u8 buffer, u64 length, i32 flags, *u8 source, *u32 source_length) -> i64
 {
-    mut i32 size = length;
+    mut i32 size = length as i32;
     if (length > 2147483647) { size = 2147483647; }
     return recvfrom(descriptor, buffer, size, flags, source, source_length);
 }
@@ -925,30 +1135,82 @@ cdef __sys_socket_try_recv(i64 descriptor, *u8 buffer, u64 length) -> i64
     return __runtime_normalize_would_block(__sys_recv(descriptor, buffer, length, 0));
 }
 
+cdef __shaft_thread_create(*u8 stack, *u8 entry, *u8 context, *u64 handle) -> i32
+{
+    *handle = CreateThread(runtime_null, 0, entry, context, 0, runtime_null_u32);
+    if (*handle == 0) { return -1; }
+    return 0;
+}
+
+cdef __sys_thread_join(*u64 handle) -> i32
+{
+    if (*handle == 0) { return 0; }
+    if (WaitForSingleObject(*handle, 4294967295) != 0) { return -1; }
+    CloseHandle(*handle);
+    *handle = 0;
+    return 0;
+}
+
 @config.build.target = "x86_64-w64-windows-gnu"
 @asm
 .text
+.globl ___chkstk_ms
+___chkstk_ms:
+push %rcx
+push %rax
+cmp $4096, %rax
+lea 24(%rsp), %rcx
+jb 1f
+2:
+sub $4096, %rcx
+orq $0, (%rcx)
+sub $4096, %rax
+cmp $4096, %rax
+ja 2b
+1:
+sub %rax, %rcx
+orq $0, (%rcx)
+pop %rax
+pop %rcx
+ret
 .globl mainCRTStartup
 mainCRTStartup:
-    subq $32, %rsp
-    xorl %ecx, %ecx
-    xorl %edx, %edx
-    callq __shaft_entry
-    movl %eax, %ecx
-    callq ExitProcess
-    int3
+subq $32, %rsp
+xorl %ecx, %ecx
+xorl %edx, %edx
+callq __shaft_entry
+movl %eax, %ecx
+callq ExitProcess
+int3
 @end
 @end
 
 @config.build.target = "aarch64-w64-windows-gnu"
 @asm
 .text
+.globl __chkstk
+__chkstk:
+cbz x15, 3f
+lsl x17, x15, #4
+sub x17, sp, x17
+mov x16, sp
+1:
+sub x16, x16, #4096
+cmp x16, x17
+b.lo 2f
+str xzr, [x16]
+b.eq 3f
+b 1b
+2:
+str xzr, [x17]
+3:
+ret
 .globl mainCRTStartup
 mainCRTStartup:
-    mov w0, #0
-    mov x1, #0
-    bl __shaft_entry
-    bl ExitProcess
-    brk #0
+mov w0, #0
+mov x1, #0
+bl __shaft_entry
+bl ExitProcess
+brk #0
 @end
 @end

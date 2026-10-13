@@ -1,84 +1,96 @@
-// Linux freestanding runtime, implemented in Shaft.
-// The target-specific assembly supplies the kernel ABI; every runtime API is
-// otherwise ordinary Shaft code in this module.
+// Linux rt
 
-@config.build.target matches "x86_64-*linux-gnu"
+@config.build.target matches "x86_64-*linux*"
 @config.build.hosted = false
 @asm
 .text
 .globl _start
 _start:
-    mov (%rsp), %edi
-    lea 8(%rsp), %rsi
-    and $-16, %rsp
-    call __shaft_entry
-    mov %eax, %edi
-    mov $60, %eax
-    syscall
-    ud2
+mov (%rsp), %edi
+lea 8(%rsp), %rsi
+and $-16, %rsp
+call __shaft_entry
+mov %eax, %edi
+mov $60, %eax
+syscall
+ud2
 @end
 @end
 @asm
 .globl __shaft_syscall6
 __shaft_syscall6:
-    mov %rdi, %rax
-    mov %rsi, %rdi
-    mov %rdx, %rsi
-    mov %rcx, %rdx
-    mov %r8, %r10
-    mov %r9, %r8
-    mov 8(%rsp), %r9
-    syscall
-    ret
+mov %rdi, %rax
+mov %rsi, %rdi
+mov %rdx, %rsi
+mov %rcx, %rdx
+mov %r8, %r10
+mov %r9, %r8
+mov 8(%rsp), %r9
+syscall
+ret
 @end
 @asm
-.globl __shaft_thread_clone
-__shaft_thread_clone:
-    push %r12
-    push %r13
-    mov %rsi, %r12
-    mov 16(%rsp), %r13
-    lea 65536(%rdi), %rsi
-    and $-16, %rsi
-    sub $8, %rsi
-    mov %r13, (%rsi)
-    mov (%rsp), %rax
-    mov %rax, 8(%rsi)
-    mov 8(%rsp), %rax
-    mov %rax, 16(%rsi)
-    mov $0x1350f00, %rdi
-    mov %r12, %rdx
-    mov %r12, %r10
-    xor %r8, %r8
-    mov $56, %rax
-    syscall
-    test %rax, %rax
-    jnz 1f
-    mov 8(%rsp), %r13
-    mov 16(%rsp), %r12
-    ret
+.globl __shaft_thread_create
+__shaft_thread_create:
+push %r12
+push %r13
+push %r14
+push %r15
+mov %rsi, %r12
+mov %rdx, %r13
+mov %rcx, %r14
+lea 65536(%rdi), %rsi
+and $-16, %rsi
+sub $16, %rsi
+mov %r12, (%rsi)
+mov %r13, 8(%rsi)
+mov $0x1350f00, %rdi
+mov %r14, %rdx
+mov %r14, %r10
+xor %r8, %r8
+mov $56, %rax
+syscall
+test %rax, %rax
+jz 3f
+test %rax, %rax
+jg 2f
+mov $-1, %eax
+jmp 1f
+2:
+xor %eax, %eax
+jmp 1f
+3:
+mov (%rsp), %rax
+mov 8(%rsp), %rdi
+call *%rax
+xor %rdi, %rdi
+mov $60, %rax
+syscall
+ud2
 1:
-    pop %r13
-    pop %r12
-    ret
+pop %r15
+pop %r14
+pop %r13
+pop %r12
+ret
 @end
 @asm
 .globl __shaft_runtime_lock
 __shaft_runtime_lock:
-    mov $1, %rax
+mov $1, %rax
 1:
-    xchg %rax, runtime_lock(%rip)
-    test %rax, %rax
-    jz 2f
-    pause
-    mov $1, %rax
-    jmp 1b
+xchg %rax, runtime_lock(%rip)
+test %rax, %rax
+jz 2f
+pause
+mov $1, %rax
+jmp 1b
 2:
-    ret
+ret
 .globl __shaft_runtime_unlock
 __shaft_runtime_unlock:
-    movq $0, runtime_lock(%rip)
-    ret
+movq $0, runtime_lock(%rip)
+ret
 @end
 mut u64 runtime_sys_read = 0;
 mut u64 runtime_sys_write = 1;
@@ -108,51 +120,90 @@ mut u64 runtime_sys_pipe2 = 293;
 mut u64 runtime_sys_dup3 = 292;
 @end
 
-@config.build.target matches "aarch64-*linux-gnu"
+@config.build.target matches "aarch64-*linux*"
 @config.build.hosted = false
 @asm
 .text
 .globl _start
 _start:
-    ldr w0, [sp]
-    add x1, sp, #8
-    bl __shaft_entry
-    mov x8, #93
-    svc #0
-    brk #0
+ldr w0, [sp]
+add x1, sp, #8
+bl __shaft_entry
+mov x8, #93
+svc #0
+brk #0
 @end
 @end
 @asm
 .globl __shaft_syscall6
 __shaft_syscall6:
-    mov x8, x0
-    mov x0, x1
-    mov x1, x2
-    mov x2, x3
-    mov x3, x4
-    mov x4, x5
-    mov x5, x6
-    svc #0
-    ret
+mov x8, x0
+mov x0, x1
+mov x1, x2
+mov x2, x3
+mov x3, x4
+mov x4, x5
+mov x5, x6
+svc #0
+ret
+@end
+@asm
+.globl __shaft_thread_create
+__shaft_thread_create:
+stp x19, x20, [sp, #-16]!
+stp x21, x30, [sp, #-16]!
+mov x19, x1
+mov x20, x2
+mov x21, x3
+add x1, x0, #65536
+and x1, x1, #-16
+sub x1, x1, #16
+stp x19, x20, [x1]
+movz x0, #0x0f00
+movk x0, #0x0135, lsl #16
+mov x2, x21
+mov x3, xzr
+mov x4, x21
+mov x8, #220
+svc #0
+cbz x0, 3f
+cmp x0, #0
+b.gt 2f
+mov x0, #-1
+b 1f
+2:
+mov x0, #0
+b 1f
+3:
+ldp x16, x0, [sp]
+blr x16
+mov x0, #0
+mov x8, #93
+svc #0
+brk #0
+1:
+ldp x21, x30, [sp], #16
+ldp x19, x20, [sp], #16
+ret
 @end
 @asm
 .globl __shaft_runtime_lock
 __shaft_runtime_lock:
-    adrp x1, runtime_lock
-    add x1, x1, :lo12:runtime_lock
+adrp x1, runtime_lock
+add x1, x1, :lo12:runtime_lock
 1:
-    ldaxr x2, [x1]
-    cbnz x2, 1b
-    mov x2, #1
-    stxr w3, x2, [x1]
-    cbnz w3, 1b
-    ret
+ldaxr x2, [x1]
+cbnz x2, 1b
+mov x2, #1
+stxr w3, x2, [x1]
+cbnz w3, 1b
+ret
 .globl __shaft_runtime_unlock
 __shaft_runtime_unlock:
-    adrp x1, runtime_lock
-    add x1, x1, :lo12:runtime_lock
-    stlr xzr, [x1]
-    ret
+adrp x1, runtime_lock
+add x1, x1, :lo12:runtime_lock
+stlr xzr, [x1]
+ret
 @end
 mut u64 runtime_sys_read = 63;
 mut u64 runtime_sys_write = 64;
@@ -182,48 +233,93 @@ mut u64 runtime_sys_pipe2 = 59;
 mut u64 runtime_sys_dup3 = 24;
 @end
 
-@config.build.target matches "riscv64-*linux-gnu"
+@config.build.target matches "riscv64-*linux*"
 @config.build.hosted = false
 @asm
 .text
 .globl _start
 _start:
-    ld a0, 0(sp)
-    addi a1, sp, 8
-    call __shaft_entry
-    li a7, 93
-    ecall
-    ebreak
+ld a0, 0(sp)
+addi a1, sp, 8
+call __shaft_entry
+li a7, 93
+ecall
+ebreak
 @end
 @end
 @asm
 .globl __shaft_syscall6
 __shaft_syscall6:
-    mv a7, a0
-    mv a0, a1
-    mv a1, a2
-    mv a2, a3
-    mv a3, a4
-    mv a4, a5
-    mv a5, a6
-    ecall
-    ret
+mv a7, a0
+mv a0, a1
+mv a1, a2
+mv a2, a3
+mv a3, a4
+mv a4, a5
+mv a5, a6
+ecall
+ret
+@end
+@asm
+.globl __shaft_thread_create
+__shaft_thread_create:
+addi sp, sp, -32
+sd s0, 0(sp)
+sd s1, 8(sp)
+sd s2, 16(sp)
+mv s0, a1
+mv s1, a2
+mv s2, a3
+li t1, 65536
+add t0, a0, t1
+andi t0, t0, -16
+addi t0, t0, -16
+sd s0, 0(t0)
+sd s1, 8(t0)
+li a0, 0x1350f00
+mv a1, t0
+mv a2, s2
+li a3, 0
+mv a4, s2
+li a7, 220
+ecall
+beqz a0, 3f
+bgtz a0, 2f
+li a0, -1
+j 1f
+2:
+li a0, 0
+j 1f
+3:
+ld t0, 0(sp)
+ld a0, 8(sp)
+jalr t0
+li a0, 0
+li a7, 93
+ecall
+ebreak
+1:
+ld s0, 0(sp)
+ld s1, 8(sp)
+ld s2, 16(sp)
+addi sp, sp, 32
+ret
 @end
 @asm
 .globl __shaft_runtime_lock
 __shaft_runtime_lock:
-    la t0, runtime_lock
+la t0, runtime_lock
 1:
-    li t1, 1
-    amoswap.d.aq t2, t1, (t0)
-    bnez t2, 1b
-    ret
+li t1, 1
+amoswap.d.aq t2, t1, (t0)
+bnez t2, 1b
+ret
 .globl __shaft_runtime_unlock
 __shaft_runtime_unlock:
-    la t0, runtime_lock
-    fence rw, w
-    sd zero, 0(t0)
-    ret
+la t0, runtime_lock
+fence rw, w
+sd zero, 0(t0)
+ret
 @end
 mut u64 runtime_sys_read = 63;
 mut u64 runtime_sys_write = 64;
@@ -257,21 +353,20 @@ cdec __shaft_syscall6(i64 number, i64 first, i64 second, i64 third, i64 fourth, 
 cdec __shaft_runtime_lock();
 cdec __shaft_runtime_unlock();
 
-class RuntimeAllocation
+struct RuntimeAllocation
 {
     mut u64 offset;
     mut u64 size;
-    mut u64 references;
     mut bool free;
 }
 
-class RuntimeTimeSpec
+struct RuntimeTimeSpec
 {
     mut i64 seconds;
     mut i64 nanoseconds;
 }
 
-class RuntimeTermios
+struct RuntimeTermios
 {
     mut u32 input_flags;
     mut u32 output_flags;
@@ -281,7 +376,7 @@ class RuntimeTermios
     mut u8[19] control_characters;
 }
 
-class RuntimeSockaddrIn
+struct RuntimeSockaddrIn
 {
     mut u16 family;
     mut u16 port;
@@ -289,16 +384,28 @@ class RuntimeSockaddrIn
     mut u8[8] padding;
 }
 
-mut u8[1048576] runtime_heap;
-mut RuntimeAllocation[1024] runtime_allocations;
-mut u64 runtime_allocation_count = 0;
-mut u64 runtime_heap_used = 0;
+struct HeapChunk
+{
+    mut *u8 memory_pool;
+    mut u64 length;
+    mut u64 capacity;
+    mut u64 aligned_size;
+    mut RuntimeAllocation[1024] runtime_allocations;
+    mut u64 allocation_count;
+    mut u64 next_address;
+}
+
+mut u8 [1048576] initial_runtime_memory_pool;
+mut RuntimeAllocation[1024] initial_runtime_allocations;
+mut *u8 runtime_null;
+mut HeapChunk initial_chunk;
 mut u64 runtime_lock = 0;
 mut u8[4096] runtime_stdin_buffer;
 mut u64 runtime_stdin_offset = 0;
 mut u64 runtime_stdin_length = 0;
-mut *u8 runtime_null;
 mut *u32 runtime_null_u32;
+mut u64 runtime_heap_head;
+mut bool runtime_heap_initialized = false;
 mut RuntimeTermios runtime_saved_terminal;
 mut bool runtime_terminal_active = false;
 
@@ -333,7 +440,7 @@ cdef memset(*u8 destination, i32 value, u64 count) -> *u8
     mut u64 runtime_index = 0;
     while (runtime_index < count)
     {
-        destination[runtime_index] = value;
+        destination[runtime_index] = value as u8;
         runtime_index = runtime_index + 1;
     }
     return destination;
@@ -353,76 +460,308 @@ cdef memcmp(*u8 left, *u8 right, u64 count) -> i32
     return 0;
 }
 
+cdef __shaft_create_heap_chunk(u64 capacity) -> *HeapChunk
+{
+    u64 total_size = sizeof(HeapChunk) + capacity;
+    u64 aligned_size = (total_size + 4095) & 0xFFFFFFFFFFFFF000;
+
+    i64 mmap_result = __shaft_syscall6(runtime_sys_mmap, 0, aligned_size, 3, 34, -1, 0);
+
+    if (mmap_result <= 0 || mmap_result == -1)
+    {
+        return runtime_null;
+    }
+
+    *HeapChunk chunk = mmap_result as *HeapChunk;
+    *u8 pool = (mmap_result + sizeof(HeapChunk)) as *u8;
+
+    chunk.memory_pool = pool;
+    chunk.length = 0;
+    chunk.capacity = aligned_size - sizeof(HeapChunk);
+    chunk.allocation_count = 0;
+    chunk.next_address = 0;
+    chunk.aligned_size = aligned_size;
+
+    return chunk;
+}
+
+cdef __shaft_initialize_heap()
+{
+    if (!runtime_heap_initialized)
+    {
+        initial_chunk.memory_pool = &initial_runtime_memory_pool[0];
+        initial_chunk.length = 0;
+        initial_chunk.capacity = 1048576;
+        initial_chunk.aligned_size = 0;
+        initial_chunk.allocation_count = 0;
+        initial_chunk.next_address = 0;
+        runtime_heap_head = (&initial_chunk) as u64;
+        runtime_heap_initialized = true;
+    }
+}
+
 cdef __shaft_alloc(u64 count) -> *u8
 {
     mut *u8 result = runtime_null;
-    if (count <= 18446744073709551608)
+    if (count <= 0xFFFFFFFFFFFFFFF8)
     {
-        mut u64 aligned = (count + 7) & 18446744073709551608;
+        mut u64 aligned = (count + 7) & 0xFFFFFFFFFFFFFFF8;
         __shaft_runtime_lock();
-        mut u64 runtime_index = 0;
-        while (runtime_index < runtime_allocation_count)
+        __shaft_initialize_heap();
+
+        mut *HeapChunk current = runtime_heap_head as *HeapChunk;
+
+        while (current != runtime_null)
         {
-            if (runtime_allocations[runtime_index].free && runtime_allocations[runtime_index].size >= aligned)
+            mut u64 i = 0;
+            while (i < current.allocation_count)
             {
-                runtime_allocations[runtime_index].free = false;
-                runtime_allocations[runtime_index].references = 1;
-                result = &runtime_heap[runtime_allocations[runtime_index].offset];
+                if (current.runtime_allocations[i].free && current.runtime_allocations[i].size >= aligned)
+                {
+                    mut u64 remaining = current.runtime_allocations[i].size - aligned;
+
+                    if (remaining > 0 && current.allocation_count < 1024)
+                    {
+                        current.runtime_allocations[current.allocation_count].offset = current.runtime_allocations[i].offset + aligned;
+                        current.runtime_allocations[current.allocation_count].size = remaining;
+                        current.runtime_allocations[current.allocation_count].free = true;
+                        current.allocation_count = current.allocation_count + 1;
+
+                        current.runtime_allocations[i].size = aligned;
+                    }
+
+                    current.runtime_allocations[i].free = false;
+                    result = &current.memory_pool[current.runtime_allocations[i].offset];
+                    break;
+                }
+                i = i + 1;
+            }
+
+            if (result != runtime_null) { break; }
+
+            if (current.allocation_count < 1024 && aligned <= current.capacity - current.length)
+            {
+                current.runtime_allocations[current.allocation_count].offset = current.length;
+                current.runtime_allocations[current.allocation_count].size = aligned;
+                current.runtime_allocations[current.allocation_count].free = false;
+
+                current.length = current.length + aligned;
+                current.allocation_count = current.allocation_count + 1;
+
+                result = &current.memory_pool[current.runtime_allocations[current.allocation_count - 1].offset];
                 break;
             }
-            runtime_index = runtime_index + 1;
+
+            current = current.next_address as *HeapChunk;
         }
-        if (result == runtime_null && runtime_allocation_count < 1024 && aligned <= 1048576 - runtime_heap_used)
+
+        if (result == runtime_null)
         {
-            runtime_allocations[runtime_allocation_count].offset = runtime_heap_used;
-            runtime_allocations[runtime_allocation_count].size = aligned;
-            runtime_allocations[runtime_allocation_count].references = 1;
-            runtime_allocations[runtime_allocation_count].free = false;
-            runtime_heap_used = runtime_heap_used + aligned;
-            runtime_allocation_count = runtime_allocation_count + 1;
-            result = &runtime_heap[runtime_allocations[runtime_allocation_count - 1].offset];
+            mut u64 needed_capacity = 1048576;
+            if (aligned > needed_capacity)
+            {
+                needed_capacity = aligned;
+            }
+
+            *HeapChunk new_chunk = __shaft_create_heap_chunk(needed_capacity);
+            if (new_chunk != runtime_null)
+            {
+                new_chunk.runtime_allocations[0].offset = 0;
+                new_chunk.runtime_allocations[0].size = aligned;
+                new_chunk.runtime_allocations[0].free = false;
+
+                new_chunk.length = aligned;
+                new_chunk.allocation_count = 1;
+
+                new_chunk.next_address = runtime_heap_head;
+                runtime_heap_head = new_chunk as u64;
+
+                result = &new_chunk.memory_pool[0];
+            }
         }
+
         __shaft_runtime_unlock();
     }
     return result;
 }
 
-cdef __shaft_retain(*u8 pointer)
-{
-    __shaft_runtime_lock();
-    mut u64 runtime_index = 0;
-    while (runtime_index < runtime_allocation_count)
-    {
-        if (!runtime_allocations[runtime_index].free && pointer == &runtime_heap[runtime_allocations[runtime_index].offset])
-        {
-            runtime_allocations[runtime_index].references = runtime_allocations[runtime_index].references + 1;
-            break;
-        }
-        runtime_index = runtime_index + 1;
-    }
-    __shaft_runtime_unlock();
-}
-
 cdef __shaft_free(*u8 pointer)
 {
+    if (pointer == runtime_null) { return; }
+
     __shaft_runtime_lock();
-    mut u64 runtime_index = 0;
-    while (runtime_index < runtime_allocation_count)
+    __shaft_initialize_heap();
+
+    mut *HeapChunk current = runtime_heap_head as *HeapChunk;
+    mut *HeapChunk prev = runtime_null;
+    mut bool found = false;
+
+    while (current != runtime_null)
     {
-        if (!runtime_allocations[runtime_index].free && pointer == &runtime_heap[runtime_allocations[runtime_index].offset])
+        mut u64 i = 0;
+        mut u64 freed_index = 0;
+
+        while (i < current.allocation_count)
         {
-            if (runtime_allocations[runtime_index].references > 1)
+            if (!current.runtime_allocations[i].free && pointer == &current.memory_pool[current.runtime_allocations[i].offset])
             {
-                runtime_allocations[runtime_index].references = runtime_allocations[runtime_index].references - 1;
+                current.runtime_allocations[i].free = true;
+                freed_index = i;
+                found = true;
+                break;
             }
-            else
+            i = i + 1;
+        }
+
+        if (found)
+        {
+            mut bool merge_before = false;
+            mut u64 index_before = 0;
+
+            mut bool merge_after = false;
+            mut u64 index_after = 0;
+
+            mut u64 j = 0;
+            while (j < current.allocation_count)
             {
-                runtime_allocations[runtime_index].free = true;
+                if (j != freed_index && current.runtime_allocations[j].free)
+                {
+                    if (current.runtime_allocations[j].offset + current.runtime_allocations[j].size == current.runtime_allocations[freed_index].offset)
+                    {
+                        merge_before = true;
+                        index_before = j;
+                    }
+                    else if (current.runtime_allocations[freed_index].offset + current.runtime_allocations[freed_index].size == current.runtime_allocations[j].offset)
+                    {
+                        merge_after = true;
+                        index_after = j;
+                    }
+                }
+                j = j + 1;
             }
+
+            mut u64 new_offset = current.runtime_allocations[freed_index].offset;
+            mut u64 new_size = current.runtime_allocations[freed_index].size;
+
+            if (merge_before)
+            {
+                new_offset = current.runtime_allocations[index_before].offset;
+                new_size = new_size + current.runtime_allocations[index_before].size;
+            }
+
+            if (merge_after)
+            {
+                new_size = new_size + current.runtime_allocations[index_after].size;
+            }
+
+            current.runtime_allocations[freed_index].offset = new_offset;
+            current.runtime_allocations[freed_index].size = new_size;
+
+            mut u64 remove_1 = 0;
+            mut u64 remove_2 = 0;
+            mut u64 removals = 0;
+
+            if (merge_before)
+            {
+                remove_1 = index_before;
+                removals = removals + 1;
+            }
+            if (merge_after)
+            {
+                if (removals == 0)
+                {
+                    remove_1 = index_after;
+                }
+                else
+                {
+                    remove_2 = index_after;
+                    if (remove_1 < remove_2)
+                    {
+                        mut u64 temp = remove_1;
+                        remove_1 = remove_2;
+                        remove_2 = temp;
+                    }
+                }
+                removals = removals + 1;
+            }
+
+            if (removals >= 1)
+            {
+                current.runtime_allocations[remove_1] = current.runtime_allocations[current.allocation_count - 1];
+                current.allocation_count = current.allocation_count - 1;
+            }
+            if (removals == 2)
+            {
+                current.runtime_allocations[remove_2] = current.runtime_allocations[current.allocation_count - 1];
+                current.allocation_count = current.allocation_count - 1;
+            }
+
+            mut bool has_live_allocation = false;
+            mut u64 live_index = 0;
+            while (live_index < current.allocation_count)
+            {
+                if (!current.runtime_allocations[live_index].free)
+                {
+                    has_live_allocation = true;
+                    break;
+                }
+                live_index = live_index + 1;
+            }
+
+            if (!has_live_allocation)
+            {
+                if (current == &initial_chunk)
+                {
+                    current.allocation_count = 0;
+                    current.length = 0;
+                }
+                else
+                {
+                    if (prev == runtime_null) { runtime_heap_head = current.next_address; }
+                    else { prev.next_address = current.next_address; }
+                    __shaft_syscall6(runtime_sys_munmap, current, current.aligned_size, 0, 0, 0, 0);
+                }
+                break;
+            }
+
+            mut bool trimmed_tail = true;
+            while (trimmed_tail)
+            {
+                trimmed_tail = false;
+                mut u64 tail_index = 0;
+                while (tail_index < current.allocation_count)
+                {
+                    if (current.runtime_allocations[tail_index].free &&
+                    current.runtime_allocations[tail_index].offset + current.runtime_allocations[tail_index].size == current.length)
+                    {
+                        current.length = current.runtime_allocations[tail_index].offset;
+                        current.runtime_allocations[tail_index] = current.runtime_allocations[current.allocation_count - 1];
+                        current.allocation_count = current.allocation_count - 1;
+                        trimmed_tail = true;
+                        break;
+                    }
+                    tail_index = tail_index + 1;
+                }
+            }
+
+            if (current != &initial_chunk)
+            {
+                mut u64 keep_size = (sizeof(HeapChunk) + current.length + 4095) & 0xFFFFFFFFFFFFF000;
+                if (keep_size < current.aligned_size)
+                {
+                    __shaft_syscall6(runtime_sys_munmap, &((current as *u8)[keep_size]), current.aligned_size - keep_size, 0, 0, 0, 0);
+                    current.aligned_size = keep_size;
+                    current.capacity = keep_size - sizeof(HeapChunk);
+                }
+            }
+
             break;
         }
-        runtime_index = runtime_index + 1;
+
+        prev = current;
+        current = current.next_address as *HeapChunk;
     }
+
     __shaft_runtime_unlock();
 }
 
@@ -553,10 +892,10 @@ cdef __runtime_enable_key_input()
         return;
     }
     runtime_saved_terminal = terminal;
-    terminal.input_flags = terminal.input_flags & 4294965965;
-    terminal.output_flags = terminal.output_flags & 4294967294;
-    terminal.control_flags = (terminal.control_flags & 4294967247) | 48;
-    terminal.local_flags = terminal.local_flags & 4294934516;
+    terminal.input_flags = terminal.input_flags & (4294965965 as u32);
+    terminal.output_flags = terminal.output_flags & (4294967294 as u32);
+    terminal.control_flags = (terminal.control_flags & (4294967247 as u32)) | (48 as u32);
+    terminal.local_flags = terminal.local_flags & (4294934516 as u32);
     terminal.control_characters[5] = 0;
     terminal.control_characters[6] = 1;
     if (__shaft_syscall6(runtime_sys_ioctl, 0, 21506, &terminal, 0, 0, 0) == 0)
@@ -580,7 +919,7 @@ cdef __runtime_read_key_byte() -> i32
     mut i32 value = byte;
     if (value < 0)
     {
-        value = value + 256;
+        value = value + (256 as i32);
     }
     return value;
 }
@@ -654,7 +993,7 @@ cdef __runtime_read_csi_key() -> i32
     mut i32 number = 0;
     while (current >= 48 && current <= 57)
     {
-        number = number * 10 + current - 48;
+        number = number * 10 as i32 + current - 48 as i32;
         current = __runtime_read_key_byte();
         if (current < 0)
         {
@@ -667,7 +1006,7 @@ cdef __runtime_read_csi_key() -> i32
         current = __runtime_read_key_byte();
         while (current >= 48 && current <= 57)
         {
-            modifier = modifier * 10 + current - 48;
+            modifier = modifier * 10 as i32 + current - 48 as i32;
             current = __runtime_read_key_byte();
         }
         if (current < 0)
@@ -676,7 +1015,7 @@ cdef __runtime_read_csi_key() -> i32
         }
         if (modifier > 0)
         {
-            modifier = modifier - 1;
+            modifier = modifier - 1 as i32;
         }
     }
     mut i32 key = __runtime_key_from_final(current);
@@ -730,7 +1069,7 @@ cdef __sys_readline(*u8 buffer, u64 capacity) -> i64
             {
                 if (length != 0)
                 {
-                    result = length;
+                    result = length as i64;
                 }
                 else
                 {
@@ -741,7 +1080,7 @@ cdef __sys_readline(*u8 buffer, u64 capacity) -> i64
             else
             {
                 runtime_stdin_offset = 0;
-                runtime_stdin_length = received;
+                runtime_stdin_length = received as u64;
             }
         }
         if (!done)
@@ -750,7 +1089,7 @@ cdef __sys_readline(*u8 buffer, u64 capacity) -> i64
             runtime_stdin_offset = runtime_stdin_offset + 1;
             if (byte == 10)
             {
-                result = length;
+                result = length as i64;
                 done = true;
             }
             else
@@ -762,7 +1101,7 @@ cdef __sys_readline(*u8 buffer, u64 capacity) -> i64
     }
     if (!done)
     {
-        result = length;
+        result = length as i64;
     }
     __shaft_runtime_unlock();
     return result;
@@ -773,15 +1112,15 @@ cdef __sys_open(*i8 pathname, i32 mode) -> i64
     mut i32 flags = 0;
     if (mode == 1)
     {
-        flags = 577;
+        flags = 577 as i32;
     }
     else if (mode == 2)
     {
-        flags = 2;
+        flags = 2 as i32;
     }
     else if (mode == 3)
     {
-        flags = 1089;
+        flags = 1089 as i32;
     }
     else if (mode != 0)
     {
@@ -826,8 +1165,8 @@ cdef __sys_sleep_ms(u64 milliseconds) -> i32
 {
     mut RuntimeTimeSpec duration;
     mut RuntimeTimeSpec remaining;
-    duration.seconds = milliseconds / 1000;
-    duration.nanoseconds = (milliseconds % 1000) * 1000000;
+    duration.seconds = (milliseconds / (1000 as u64)) as i64;
+    duration.nanoseconds = ((milliseconds % (1000 as u64)) * (1000000 as u64)) as i64;
     while (true)
     {
         mut i64 result = __shaft_syscall6(runtime_sys_nanosleep, &duration, &remaining, 0, 0, 0, 0);
@@ -840,12 +1179,18 @@ cdef __sys_sleep_ms(u64 milliseconds) -> i32
     }
 }
 
-cdef __sys_thread_join(*i32 tid) -> i32
+cdef __sys_thread_join(*u64 handle) -> i32
 {
+    mut *i32 tid = handle as *i32;
     while (*tid != 0)
     {
         mut i32 observed = *tid;
         __shaft_syscall6(runtime_sys_futex, tid, 0, observed, 0, 0, 0);
+    }
+    if (handle[1] != 0)
+    {
+        __shaft_free(handle[1] as *u8);
+        handle[1] = 0;
     }
     return 0;
 }
@@ -856,7 +1201,7 @@ cdef __cstr_strlen(*i8 text) -> u64
     while (text[length] != 0)
     {
         @asm
-            nop
+        nop
         @end
         length = length + 1;
     }
@@ -875,7 +1220,7 @@ cdef __runtime_decimal_u64(u64 value, *u8 output) -> u64
     mut u64 length = 0;
     while (true)
     {
-        reversed[length] = 48 + (remaining % 10);
+        reversed[length] = (48 + (remaining % 10)) as u8;
         remaining = remaining / 10;
         length = length + 1;
         if (remaining == 0)
@@ -894,7 +1239,7 @@ cdef __runtime_decimal_u64(u64 value, *u8 output) -> u64
 
 cdef __sys_int_to_string(i64 value, *u8 output, u64 capacity) -> u64
 {
-    mut u64 magnitude = value;
+    mut u64 magnitude = value as u64;
     if (value < 0)
     {
         magnitude = 0 - (value + 1) + 1;
@@ -960,8 +1305,8 @@ cdef __sys_float_to_string(f64 value, *u8 output, u64 capacity) -> u64
     {
         return 0;
     }
-    mut u64 whole = magnitude;
-    mut u64 fraction = (magnitude - whole) * 1000000.0 + 0.5;
+    mut u64 whole = magnitude as u64;
+    mut u64 fraction = ((magnitude - whole) * 1000000.0 + 0.5) as u64;
     if (fraction == 1000000)
     {
         whole = whole + 1;
@@ -991,7 +1336,7 @@ cdef __sys_float_to_string(f64 value, *u8 output, u64 capacity) -> u64
     mut u64 divisor = 100000;
     while (divisor != 0)
     {
-        output[offset] = 48 + ((fraction / divisor) % 10);
+        output[offset] = (48 + ((fraction / divisor) % 10)) as u8;
         offset = offset + 1;
         divisor = divisor / 10;
     }
